@@ -188,7 +188,7 @@ jobs:
 
       - name: Keep the installer as a workflow artifact too
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: anywhere-work-dmg
           path: tools/anywhere-agent/build/*.dmg
@@ -398,7 +398,7 @@ jobs:
 
       - name: Keep the installer as a workflow artifact too
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: anywhere-work-windows
           path: tools/anywhere-agent/build/*.exe
