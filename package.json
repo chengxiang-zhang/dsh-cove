@@ -7,7 +7,6 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "community:check": "node scripts/community-index --check",
     "runtime-deps:check": "node scripts/runtime-deps-check.mjs",
     "dsh-local:audit": "node scripts/dsh-local-ops-audit.mjs",
     "dsh-local:migrate": "node scripts/dsh-local-profile-migrate.mjs",
