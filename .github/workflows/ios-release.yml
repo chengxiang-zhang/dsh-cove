@@ -91,7 +91,7 @@ jobs:
       # from, bound for iOS instead. Caching the staged NetBird tree and the Go build cache
       # keeps this step to minutes instead of a from-scratch compile.
       - name: Cache the engine build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/netbird-client-xcframework
