@@ -66,6 +66,8 @@ git push origin vX.Y.Z
 
 The tag triggers `.github/workflows/release.yml`, which installs with the frozen lockfile, runs the gates, verifies versions, generates release notes from Git history, and always creates the GitHub Release with the gated tarballs. The npm path (publish `candidate`, verify the registry bytes, promote `latest`) runs only when the repository variable `NPM_PUBLISH` is `true` and a publisher (trusted publisher or `NPM_TOKEN`) is configured.
 
+When npm refuses the promotion (the trusted publisher lacks the dist-tag permission), the run stays green and its job summary names the one follow-up: `pnpm release:promote vX.Y.Z`, which runs `npm dist-tag add` with the maintainer's own npm login and reads the tag back.
+
 Do not run local `npm publish` or publish package identities outside the current family package inventory.
 
 ## Post-release verification

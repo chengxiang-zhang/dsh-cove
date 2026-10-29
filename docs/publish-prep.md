@@ -36,7 +36,7 @@ pnpm build
 
 发布顺序为：完整门禁与本地 pack 的真实挂载验证，通过后仅以 `candidate` dist-tag 发布同一 tarball；再下载精确版本的 registry tarball，核验 SHA512 完全一致并运行消费者挂载与浏览器 smoke，通过后才推进 `latest`。已存在版本不可覆盖：重跑时必须核验不可变 registry 字节与已门禁 tarball 一致，否则停止。发布工作流共用一个跨 tag 并发组，且推广前检查 registry 当前 `latest`；相同或更旧版本重跑不得使 `latest` 倒退。此约束不是 npm 的 compare-and-swap，仓库外的人工推广仍需协调；此流程只控制推广，不提供对 npm 发布的事务回滚。
 
-npm 发布是按需开启的：`release.yml` 的 registry 路径（`candidate`、`verify-release`）只在仓库变量 `NPM_PUBLISH` 为 `true` 时运行，开启前必须先配好 npm Trusted Publisher 或 `NPM_TOKEN` secret，否则该路径只会停在认证失败。Trusted Publisher 必须同时具备 `npm publish` 与 `npm dist-tag` 两项权限：`npm trust github --allow-publish` 只授予前者，`npm dist-tag` 只能在 npmjs.com 的 Trusted Publisher 设置里勾选，缺这项时 candidate 能发布成功，但推进 `latest` 会被 403 拒绝。无论是否发布到 npm，每个 tag 都由 `github-release` job 产出 GitHub Release，挂上已门禁的 tarball 与生成的发布说明；桌面端、Android 与 iOS 安装包由各自工作流挂到同一个 tag，因此 tag 的交付物不依赖 npm 账号。
+npm 发布是按需开启的：`release.yml` 的 registry 路径（`candidate`、`verify-release`）只在仓库变量 `NPM_PUBLISH` 为 `true` 时运行，开启前必须先配好 npm Trusted Publisher 或 `NPM_TOKEN` secret，否则该路径只会停在认证失败。Trusted Publisher 需要同时具备 `npm publish` 与 `npm dist-tag` 两项权限：`npm trust github --allow-publish` 只授予前者，`npm dist-tag` 只能在 npmjs.com 的 Trusted Publisher 设置里勾选。缺这项时 candidate 仍然发布成功、registry 字节校验也照样跑，只有推进 `latest` 会被 403 拒绝；工作流不把这次拒绝判成发布失败，而是在 job summary 里给出唯一需要的后续动作 `pnpm release:promote vX.Y.Z`，由维护者用自己的 npm 登录执行一次 `npm dist-tag add` 并回读核对。无论是否发布到 npm，每个 tag 都由 `github-release` job 产出 GitHub Release，挂上已门禁的 tarball 与生成的发布说明；桌面端、Android 与 iOS 安装包由各自工作流挂到同一个 tag，因此 tag 的交付物不依赖 npm 账号。
 
 ## 发布检查
 
@@ -46,6 +46,7 @@ npm 发布是按需开启的：`release.yml` 的 registry 路径（`candidate`�
 - package tarball 包含 `lib/index.js`、`lib/client.js` 和类型声明；
 - 每个已发布 manifest 带 `repository`、`homepage`、`bugs`、`license` 与英文 `description`，npm 页面能指向本仓库；
 - `pnpm-lock.yaml` 与 manifest 一致；
+- 发布后 `npm view @dsh-cove/dsh-web-all dist-tags` 的 `latest` 与本次 tag 一致（CI 未能推进时用 `pnpm release:promote vX.Y.Z`）；
 - README 中英配对 sidecar hash 当前有效，根 `README` 与 `CONTRIBUTING` 配对同样通过 `pnpm docs:check`；
 - `SECURITY.md`、`NOTICE` 与各目录的第三方声明覆盖本次发布的全部资产；
 - 未提交 token、私钥、测试 profile 或隔离运行目录。

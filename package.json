@@ -20,6 +20,7 @@
     "test:scripts": "node --test --test-concurrency=1 scripts/*.test.mjs",
     "test:mount": "bash scripts/e2e-mount.sh",
     "pr:review": "node scripts/pr-review.mjs",
+    "release:promote": "node scripts/promote-latest.mjs",
     "docs:check": "node scripts/verify-docs.mjs",
     "docs:list": "node scripts/verify-docs.mjs --list",
     "docs:write-pair": "node scripts/verify-docs.mjs --write",

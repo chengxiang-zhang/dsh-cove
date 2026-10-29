@@ -216,11 +216,29 @@ jobs:
           echo "WEB_ALL_TARBALL=$WEB_ALL_TARBALL" >> "$GITHUB_ENV"
       - name: Registry mount + headless-render smoke
         run: bash scripts/e2e-mount.sh
+      # npm only lets the trusted publisher move a dist-tag when that publisher carries the
+      # dist-tag permission. Without it the release is still published and verified, so a
+      # refused promotion is reported as the one remaining manual step instead of failing
+      # the whole release run.
       - name: Promote the verified artifact to latest
+        id: promote
+        continue-on-error: true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           node scripts/release-candidate.mjs promote "$WEB_ALL_TARBALL"
+      - name: Report a promotion npm did not allow
+        if: steps.promote.outcome == 'failure'
+        run: |
+          {
+            echo '### npm latest was not promoted'
+            echo
+            echo 'The trusted publisher is missing the dist-tag permission, so npm refused the promotion (403). The release is published and verified; run this once with a maintainer npm login:'
+            echo
+            echo '```sh'
+            echo "pnpm release:promote $GITHUB_REF_NAME"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4
