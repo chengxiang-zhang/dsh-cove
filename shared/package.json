@@ -1,6 +1,6 @@
 {
   "name": "dsh-web-shared",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "private": true,
   "type": "module",
   "description": "Shared runtime modules for the dsh-cove plugin family (inlined into each consumer bundle; never published).",
