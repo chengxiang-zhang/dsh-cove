@@ -188,7 +188,7 @@ Profile 运行时挂载 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app` 与
 
 ## 版本与发布
 
-`vX.Y.Z` tag 是唯一的版本号来源。`dev` 集成并通过测试后合入 `main`，再从 `main` 切 tag；一个 tag 把运行时实体与数据源包发布到 npm，并把桌面端与 Android 安装包挂到 GitHub Release。发布历史与说明保留在 [GitHub Releases](https://github.com/chengxiang-zhang/dsh-cove/releases)，仓库不维护提交式 changelog。流程由 [.github/workflows/release.yml](.github/workflows/release.yml) 与 [docs/publish-prep.md](docs/publish-prep.md) 定义。
+`vX.Y.Z` tag 是唯一的版本号来源。`dev` 集成并通过测试后合入 `main`，再从 `main` 切 tag。每个 tag 都会产出 GitHub Release（挂两个已门禁的包 tarball 与桌面端、Android、iOS 安装包）；只有当仓库开启 `NPM_PUBLISH` 变量并配置了发布者时，才把运行时实体与数据源包发布到 npm。发布历史与说明保留在 [GitHub Releases](https://github.com/chengxiang-zhang/dsh-cove/releases)，仓库不维护提交式 changelog。流程由 [.github/workflows/release.yml](.github/workflows/release.yml) 与 [docs/publish-prep.md](docs/publish-prep.md) 定义。
 
 ## 许可证与第三方声明
 

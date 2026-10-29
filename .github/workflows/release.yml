@@ -129,6 +129,10 @@ jobs:
   candidate:
     name: Publish candidate (or verify existing immutable version)
     needs: prepublish-smoke
+    # npm publishing is opt-in. Without a configured publisher (trusted publisher or
+    # NPM_TOKEN) this job can only fail on authentication, and a tag must still produce a
+    # release, so the whole registry path is skipped unless the repository sets NPM_PUBLISH.
+    if: ${{ vars.NPM_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # `id-token: write` is what lets npm Trusted Publishing authenticate this job by its
@@ -163,12 +167,13 @@ jobs:
           node scripts/release-candidate.mjs publish "$RUNNER_TEMP/gated-release/community.tgz"
 
   verify-release:
-    name: Exact registry smoke, promote latest and GitHub Release
+    name: Exact registry smoke and promote latest
     needs: candidate
+    if: ${{ vars.NPM_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Promoting `latest` is a registry write and the GitHub Release is a repository write:
-    # the first needs the OIDC identity, the second needs contents.
+    # Promoting `latest` is a registry write: it needs the OIDC identity handed out to this
+    # job, and the read the checkout needs is named beside it.
     permissions:
       contents: write
       id-token: write
@@ -224,16 +229,6 @@ jobs:
         run: |
           node scripts/release-candidate.mjs promote "$WEB_ALL_TARBALL"
           node scripts/release-candidate.mjs promote "$COMMUNITY_TARBALL"
-      - name: Create or reconcile GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release-assets/*.tgz --clobber
-            gh release edit "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/gated-release/release-notes.md" --title "dsh-cove $GITHUB_REF_NAME"
-          else
-            gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release-assets/*.tgz --notes-file "$RUNNER_TEMP/gated-release/release-notes.md" --title "dsh-cove $GITHUB_REF_NAME"
-          fi
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -246,12 +241,48 @@ jobs:
       - name: Record gated tarball checksums
         run: sha512sum "$RUNNER_TEMP/gated-release/runtime.tgz" "$RUNNER_TEMP/gated-release/community.tgz"
 
+  # A tag always produces a release, whether or not a registry publisher exists: the gated
+  # tarballs and the generated notes are attached here, and the client workflows attach
+  # their installers to the same tag. The registry path above only adds npm.
+  github-release:
+    name: GitHub Release with the gated tarballs
+    needs: prepublish-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Download gated release inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: gated-release
+          path: ${{ runner.temp }}/gated-release
+      - name: Name the tarballs after the packages they carry
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mv "$RUNNER_TEMP/gated-release/runtime.tgz" "$RUNNER_TEMP/gated-release/dsh-cove-dsh-web-all-$version.tgz"
+          mv "$RUNNER_TEMP/gated-release/community.tgz" "$RUNNER_TEMP/gated-release/dsh-cove-dsh-client-ui-community-plugins-$version.tgz"
+      - name: Create or reconcile the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          notes="$RUNNER_TEMP/gated-release/release-notes.md"
+          assets=("$RUNNER_TEMP"/gated-release/*.tgz)
+          # A client workflow may be creating this release at the same instant; losing that
+          # race is not a failure because the upload below then targets the release it made.
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" --notes-file "$notes" --title "dsh-cove $GITHUB_REF_NAME" || true
+          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+
   # A failed release is otherwise invisible to whoever asked for it: this workflow runs on
   # a private repository, and reading its logs needs repository API access. The outcome and
   # the failing job's own log therefore travel to a branch that a plain `git fetch` reads.
   report:
     name: Report the outcome to the ci-status-release branch
-    needs: [prepublish-smoke, candidate, verify-release]
+    needs: [prepublish-smoke, candidate, verify-release, github-release]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -272,6 +303,7 @@ jobs:
             echo "tag: $GITHUB_REF_NAME"
             echo "commit: $GITHUB_SHA"
             echo "smoke: ${{ needs.prepublish-smoke.result }}"
+            echo "release: ${{ needs.github-release.result }}"
             echo "candidate: ${{ needs.candidate.result }}"
             echo "verify: ${{ needs.verify-release.result }}"
             echo "run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

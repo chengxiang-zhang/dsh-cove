@@ -188,7 +188,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. In short:
 
 ## Versioning and releases
 
-A `vX.Y.Z` tag is the only version source. Tags are cut from `main` after `dev` has been integrated and tested; the tag publishes the runtime entity and the data package to npm and attaches the desktop and Android installers to the GitHub Release. Release history and notes live in [GitHub Releases](https://github.com/chengxiang-zhang/dsh-cove/releases); the repository does not keep a committed changelog. The process is defined by [.github/workflows/release.yml](.github/workflows/release.yml) and [docs/publish-prep.md](docs/publish-prep.md).
+A `vX.Y.Z` tag is the only version source. Tags are cut from `main` after `dev` has been integrated and tested. Every tag produces a GitHub Release carrying the two gated package tarballs and the desktop, Android and iOS installers; the runtime entity and the data package are published to npm only when the repository enables the `NPM_PUBLISH` variable and has a publisher configured. Release history and notes live in [GitHub Releases](https://github.com/chengxiang-zhang/dsh-cove/releases); the repository does not keep a committed changelog. The process is defined by [.github/workflows/release.yml](.github/workflows/release.yml) and [docs/publish-prep.md](docs/publish-prep.md).
 
 ## License and third-party notices
 

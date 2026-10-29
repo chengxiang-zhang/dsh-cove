@@ -64,7 +64,7 @@ git push origin main
 git push origin vX.Y.Z
 ```
 
-The tag triggers `.github/workflows/release.yml`, which installs with the frozen lockfile, runs the gates, verifies versions, generates release notes from Git history, publishes `@dsh-cove/dsh-web-all` to npm, mounts the published `dsh-web-all` package through the consumer path, and creates the GitHub Release.
+The tag triggers `.github/workflows/release.yml`, which installs with the frozen lockfile, runs the gates, verifies versions, generates release notes from Git history, and always creates the GitHub Release with the gated tarballs. The npm path (publish `candidate`, verify the registry bytes, promote `latest`) runs only when the repository variable `NPM_PUBLISH` is `true` and a publisher (trusted publisher or `NPM_TOKEN`) is configured.
 
 Do not run local `npm publish` or publish package identities outside the current family package inventory.
 

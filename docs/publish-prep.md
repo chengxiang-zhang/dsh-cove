@@ -38,7 +38,9 @@ pnpm build
 
 发布工作流必须把 `@dsh-cove/dsh-web-all` 安装进全新的隔离 `DSH_HOME` 和独立 profile，以随机端口启动真实 `dsh web`；验证 host API、浏览器页面、位置入口、console/pageerror 和交互。宿主精确版本由 `scripts/runtime-host-version.mjs` 从运行时包的 `dsh.engines` 最低版本读取，CI、发布与本地 mount 共用该事实源。验证过程不得重启或占用受管的 3080 实例；日常 agent 会话不自行启动替代服务。mount 脚本只接受 `PORT=0`，以同一个显式 `web` profile 安装与启动，并且只清理自己创建、通过 realpath／inode／owner 标记核验的私有临时子目录；`DSH_HOME_BASE` 是现存安全父目录，`DSH_E2E_ROOT` 是必须不存在的绝对路径前缀，均不代表可递归删除的调用方目录。`DSH_CMD` 只能是单个可执行文件路径，有额外参数时应提供 exec wrapper，不能依赖 shell 字符串求值或静默 fallback。
 
-发布顺序为：完整门禁与本地 pack 的真实挂载验证，通过后仅以 `candidate` dist-tag 发布同一 tarball；再下载精确版本的 registry tarball，核验 SHA512 完全一致并运行消费者挂载与浏览器 smoke，通过后才推进 `latest` 并生成 GitHub Release。已存在版本不可覆盖：重跑时必须核验不可变 registry 字节与已门禁 tarball 一致，否则停止。发布工作流共用一个跨 tag 并发组，且推广前检查 registry 当前 `latest`；相同或更旧版本重跑不得使 `latest` 倒退。此约束不是 npm 的 compare-and-swap，仓库外的人工推广仍需协调；此流程只控制推广，不提供对 npm 发布的事务回滚。
+发布顺序为：完整门禁与本地 pack 的真实挂载验证，通过后仅以 `candidate` dist-tag 发布同一 tarball；再下载精确版本的 registry tarball，核验 SHA512 完全一致并运行消费者挂载与浏览器 smoke，通过后才推进 `latest`。已存在版本不可覆盖：重跑时必须核验不可变 registry 字节与已门禁 tarball 一致，否则停止。发布工作流共用一个跨 tag 并发组，且推广前检查 registry 当前 `latest`；相同或更旧版本重跑不得使 `latest` 倒退。此约束不是 npm 的 compare-and-swap，仓库外的人工推广仍需协调；此流程只控制推广，不提供对 npm 发布的事务回滚。
+
+npm 发布是按需开启的：`release.yml` 的 registry 路径（`candidate`、`verify-release`）只在仓库变量 `NPM_PUBLISH` 为 `true` 时运行，开启前必须先配好 npm Trusted Publisher 或 `NPM_TOKEN` secret，否则该路径只会停在认证失败。无论是否发布到 npm，每个 tag 都由 `github-release` job 产出 GitHub Release，挂上已门禁的两个包 tarball 与生成的发布说明；桌面端、Android 与 iOS 安装包由各自工作流挂到同一个 tag，因此 tag 的交付物不依赖 npm 账号。
 
 ## 发布检查
 
