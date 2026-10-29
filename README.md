@@ -115,11 +115,11 @@ dsh plugin --profile web add link:$(pwd)/packages/dsh-web-all
 dsh --profile web --dump-config
 ```
 
-The profile directory is not a pnpm workspace, so `workspace:*` dependencies of `web-all` fall back to the published npm versions; run `node scripts/link-profile.mjs` first so the source package uses the repository build output.
+The profile directory is not a pnpm workspace, so `workspace:*` dependencies of `web-all` fall back to the published npm versions; run `node scripts/link-profile.mjs` first so the profile uses the repository build output.
 
 ### Runtime and published packages
 
-A profile runtime mounts `@deepseek-ai/dsh-base`, `@deepseek-ai/dsh-web-app` and `@dsh-cove/dsh-web-all`. The repository publishes one additional data source package that declares no runtime row:
+A profile runtime mounts `@deepseek-ai/dsh-base`, `@deepseek-ai/dsh-web-app` and `@dsh-cove/dsh-web-all`. The repository publishes one package:
 
 | npm package | Shape |
 | --- | --- |
@@ -186,7 +186,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. In short:
 
 ## Versioning and releases
 
-A `vX.Y.Z` tag is the only version source. Tags are cut from `main` after `dev` has been integrated and tested. Every tag produces a GitHub Release carrying the two gated package tarballs and the desktop, Android and iOS installers; the runtime entity and the data package are published to npm only when the repository enables the `NPM_PUBLISH` variable and has a publisher configured. Release history and notes live in [GitHub Releases](https://github.com/chengxiang-zhang/dsh-cove/releases); the repository does not keep a committed changelog. The process is defined by [.github/workflows/release.yml](.github/workflows/release.yml) and [docs/publish-prep.md](docs/publish-prep.md).
+A `vX.Y.Z` tag is the only version source. Tags are cut from `main` after `dev` has been integrated and tested. Every tag produces a GitHub Release carrying the gated package tarball and the desktop, Android and iOS installers; the runtime entity is published to npm only when the repository enables the `NPM_PUBLISH` variable and has a publisher configured. Release history and notes live in [GitHub Releases](https://github.com/chengxiang-zhang/dsh-cove/releases); the repository does not keep a committed changelog. The process is defined by [.github/workflows/release.yml](.github/workflows/release.yml) and [docs/publish-prep.md](docs/publish-prep.md).
 
 ## License and third-party notices
 

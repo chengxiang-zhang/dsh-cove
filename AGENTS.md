@@ -31,7 +31,7 @@ Before merging, run at least `pnpm typecheck && pnpm test && pnpm docs:check`.
 ## Repository Rules
 
 - Mount first-party runtime behavior only through `packages/dsh-web-all/cordis.patch.yml` and profiles. Source/data packages must not declare functional runtime rows. TypeScript configuration must not reference a DSH checkout; use official `@deepseek-ai/*` SDK packages from `node_modules`.
-- New first-party capabilities go into `dsh-web-all`; there is no second runtime entity and no source/data package beside it.
+- New first-party capabilities go into `dsh-web-all`; it is the only package in the repository and the only runtime entity.
 - Published packages use the `@dsh-cove/dsh-*` scope, with `@dsh-cove/dsh-client-ui-*` reserved for client UI/data packages where applicable.
 - Use `shared/tsdown.client.ts`; do not copy the build preset into a package.
 - Keep `NPM_TOKEN` in the environment. Store token configuration in the user `~/.npmrc`; the project `.npmrc` should contain only scope mappings.
@@ -85,7 +85,7 @@ Releases are cut from `main`: a tag must point at a commit that is on `main`, an
 - This file: repository layout, commands, and cross-repository rules.
 - [docs/README.md](docs/README.md): the documentation index; every long-lived document is listed there.
 - [dsh-web-agent-coding](.agents/skills/dsh-web-agent-coding/SKILL.md): implementation workflow and task-specific skill routing.
-- [packages/AGENTS.md](packages/AGENTS.md): package-level SDK, runtime-entity, source-package, and testing rules.
+- [packages/AGENTS.md](packages/AGENTS.md): package-level SDK, runtime-entity and testing rules.
 - [docs/AGENTS.md](docs/AGENTS.md): documentation structure, writing, and i18n rules.
 - Package-level `AGENTS.md` files: package-specific behavior and constraints.
 

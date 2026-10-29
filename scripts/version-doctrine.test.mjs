@@ -11,8 +11,8 @@
  *
  *   version     = the repository's released version (`packages/dsh-web-all/package.json`,
  *                 which `release.yml` cross-checks against the `vX.Y.Z` tag). Every
- *                 first-party manifest declares that same number - the source/data package
- *                 published beside it, the shared modules, and both clients - so one
+ *                 first-party manifest declares that same number - the shared modules and
+ *                 both clients - so one
  *                 release never carries two answers to "which version is this".
  *   build       = the git commit count (the macOS bundle's CFBundleVersion and Android's
  *                 versionCode), so a rebuilt artifact is never mistaken for its predecessor

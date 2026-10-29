@@ -13,14 +13,14 @@ This skill is guidance, not a replacement for repository instructions. [AGENTS.m
 
 1. Confirm the workspace, repository root, current branch, and worktree status before writing. Preserve unrelated changes from other sessions; do not reset, clean, restore, or stage them.
 2. Read the root instructions, then the nearest applicable `AGENTS.md`. Read [packages/AGENTS.md](../../../packages/AGENTS.md) before changing a package and [docs/AGENTS.md](../../../docs/AGENTS.md) before writing documentation.
-3. Identify the smallest owner of the behavior: a `dsh-web-all` position/service domain, a source/data package, `shared/`, or a generator in `scripts/`. Keep the change in that owner unless an existing shared abstraction is the real source of truth.
+3. Identify the smallest owner of the behavior: a `dsh-web-all` position/service domain, `shared/`, or a generator in `scripts/`. Keep the change in that owner unless an existing shared abstraction is the real source of truth.
 
 ## Implement within repository boundaries
 
 - DSH itself is an external host. Do not modify its checkout or make TypeScript resolve against it. Use the official `@deepseek-ai/*` SDK through installed dependencies.
 - Keep host, client, and shared logic in their respective package areas. Browser bundles must retain the platform-import and type-only SDK constraints in [packages/AGENTS.md](../../../packages/AGENTS.md).
 - Edit a generated shared copy only through its source in `shared/`, then run the documented synchronization command.
-- Add first-party runtime capabilities to `packages/dsh-web-all`; no source/data package may add a functional runtime row. Edit generated output only through its owning source and current generator.
+- Add first-party runtime capabilities to `packages/dsh-web-all`; it is the only package, so nothing else may add a functional runtime row. Edit generated output only through its owning source and current generator.
 - Record durable behavior and operational rules in their owning current document. Put task discussion and validation evidence in the relevant Issue or pull request.
 - Build and exercise the affected behavior before declaring it complete. A commit alone is not delivery.
 

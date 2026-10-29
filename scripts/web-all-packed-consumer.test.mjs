@@ -11,7 +11,7 @@ const packages = {
   '@dsh-cove/dsh-web-all': { dir: 'packages/dsh-web-all', exports: ['.', './client', './invariant'] },
 }
 
-test('runtime and compiled source-package contract exports survive npm packing', async () => {
+test('the runtime package contract exports survive npm packing', async () => {
   const work = await mkdtemp(join(tmpdir(), 'dsh-web-packed-consumer-'))
   try {
     for (const [name, expected] of Object.entries(packages)) {

@@ -144,8 +144,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const file = resolve(input)
     if (mode === 'publish') publishCandidate(file)
     else if (mode === 'download' && output) {
-      // The verified path is the command's output, so a caller that verifies two packages
-      // in one job cannot have the second overwrite the first's identity.
+      // The verified path is the command's output, so a caller that verifies more than one
+      // package cannot have a later download overwrite the earlier identity.
       console.log(downloadVerified(file, resolve(output)))
     } else if (mode === 'promote') promote(file)
     else throw new Error('invalid release-candidate mode')

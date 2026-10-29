@@ -87,7 +87,7 @@ Treat a failed, skipped, or environment-blocked gate as unverified. Report the e
 
 Local compilation is necessary but not sufficient. When a compatibility handoff is active, `dsh-web-sdk-compatibility` owns the affected-workflow GUI evidence and returns it to this rollout; this skill confirms that evidence belongs to the final combined commit and profile. After the isolated worktree passes the static gates:
 
-1. Confirm the intended DSH web profile resolves the built `@dsh-cove/dsh-web-all` artifact as its sole first-party runtime entity, and that source/data packages contribute no functional row. After the accepted change is on the target branch, run `node scripts/link-profile.mjs` when local package links need refreshing. Do not hand-edit profile patch files.
+1. Confirm the intended DSH web profile resolves the built `@dsh-cove/dsh-web-all` artifact as its sole first-party runtime entity, and that no other package contributes a functional row. After the accepted change is on the target branch, run `node scripts/link-profile.mjs` when local package links need refreshing. Do not hand-edit profile patch files.
 2. Do not start a replacement Vite server or an independent dsh web instance. The apps/web entry is not a standalone application.
 3. Integrate only after the worktree is accepted and rebased onto the latest approved main. Rebuild affected artifacts on the target main branch.
 4. If a host restart is necessary to load updated host-side modules, stop and tell the user that they must restart the existing managed DSH service; the agent must not restart it or start a second server. After the user confirms the restart, verify the existing GUI URL after a page refresh.

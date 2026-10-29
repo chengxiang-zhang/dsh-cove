@@ -54,7 +54,7 @@ Inventory every possible first-party consumer, not only packages that currently 
 - browser SDK imports, module augmentations, slot keys, platform modules, and client service calls;
 - routes, API remotes, settings namespaces, schemas, events, serialization, cancellation, persistence, session, workspace, and tool contracts;
 - `shared/` sources and generated consumer copies;
-- the `dsh-web-all` runtime entity, source/data package contracts, profile patches, current generators, committed bundles, and compatibility tests.
+- the `dsh-web-all` runtime entity, its contracts, profile patches, current generators, committed bundles, and compatibility tests.
 
 For imports, record the specifier, imported symbol, type-only versus value use, consumer file, and execution half (host, client, or shared). For services, record the provider package, service name, consumer, optionality, startup order, and failure behavior.
 
@@ -125,7 +125,7 @@ A repair is incomplete if it is protected only by one manual run. Add or extend 
 - host composition tests for required services, route registration, lifecycle, and failure behavior;
 - a client injection contract that compares every workspace `dsh.client.inject` requirement with the approved target Web runtime/module table;
 - browser platform and bundle-purity checks for target platform modules and type-only SDK boundaries;
-- profile checks proving the single `web-all` patch resolves, the entity ID is unique, and source/data packages contribute no functional runtime row;
+- profile checks proving the single `web-all` patch resolves, the entity ID is unique, and no other package contributes a functional runtime row;
 - protocol, schema, event, persistence, cancellation, and error-shape tests for changed cross-half contracts;
 - representative workflow tests only for plugin paths exposed to the changed SDK surface.
 

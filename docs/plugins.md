@@ -60,7 +60,7 @@ pnpm docs:check
 
 - first-party 功能只作为 `dsh-web-all` 内部能力，不创建其他运行时实体；
 - 每个注入位置只有一个 owner，能力文件不自行向其他位置注入；
-- profile 只挂载 `@dsh-cove/dsh-web-all`，源/数据包不提供功能行；
+- profile 只挂载 `@dsh-cove/dsh-web-all`；
 - 不以占位卡、静态假数据或兼容转发代替真实能力实现。
 
 ## 发布清单

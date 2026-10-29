@@ -77,7 +77,7 @@ node scripts/link-profile.mjs
 
 profile 仍停留在旧 `@zcx/*` 身份时，先运行 `pnpm dsh-local:migrate` 查看 dry-run 计划，确认后再加 `--apply`；新安装不需要这一步。审计提示的废弃临时脚本按输出指认的目标改名为 `*.retired`，不要直接删除。
 
-Profile 只挂载 `@dsh-cove/dsh-web-all`，不挂载源/数据包。链接、host bundle 或 patch 变化需要重启时，由用户重启现有托管服务；agent 不得执行重启、`kill`、`pkill` 或启动替代实例。
+Profile 只挂载 `@dsh-cove/dsh-web-all`。链接、host bundle 或 patch 变化需要重启时，由用户重启现有托管服务；agent 不得执行重启、`kill`、`pkill` 或启动替代实例。
 
 自托管部署的 systemd 与 LaunchDaemon 形态、重启顺序见 [tools/dsh-netbird/README.md](../tools/dsh-netbird/README.md)；该目录是参考模板，机器相关值不入库。
 

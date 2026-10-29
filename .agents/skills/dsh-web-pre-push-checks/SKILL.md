@@ -32,7 +32,7 @@ Run the narrowest owning test first for a behavior change. Add an affected-packa
 ## Add checks dictated by the diff
 
 - `shared/` changes: run `pnpm sync-shared` followed by `pnpm sync-shared:check`.
-- Runtime entity or source/data package layout changes: run the affected package build and `pnpm runtime-deps:check`; first-party runtime behavior must remain inside `dsh-web-all`.
+- Runtime entity layout changes: run the package build and `pnpm runtime-deps:check`; first-party runtime behavior must remain inside `dsh-web-all`.
 - Browser runtime imports, dependency manifests, or client bundle changes: run `pnpm runtime-deps:check` and the affected package build.
 - Changed package README files: update the paired language and record the pair through `pnpm docs:write-pair <package-directory>` before `pnpm docs:check`.
 - User-facing client changes: follow [dsh-web-web-qa](../dsh-web-web-qa/SKILL.md) and retain the actual GUI evidence.

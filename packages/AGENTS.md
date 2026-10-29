@@ -1,12 +1,12 @@
 # AGENTS.md — 包级规则（packages/）
 
-本层规则补充根 [AGENTS.md](../AGENTS.md) 的全局约定，适用于 `packages/` 下的运行时实体与源/数据包。修改包前先读本文件；包特有规则写在该包自己的 `AGENTS.md`。
+本层规则补充根 [AGENTS.md](../AGENTS.md) 的全局约定，适用于 `packages/` 下唯一的运行时实体。修改包前先读本文件；包特有规则写在该包自己的 `AGENTS.md`。
 
 ## 包形态
 
 - **唯一运行时实体（dsh-web-all）**：全家桶所有 first-party host/browser 能力共享 `web-all` 这一条 Cordis 生命周期，按 dsh 注入位置组织（见其 AGENTS.md）。独立 preset patch 可以声明 Agent 预设，但不得新增第二个功能实体行。新增能力直接进入本包。
 - **host / client 半区分层**：`dsh-web-all/src/index.ts` 是 host 装配入口，`src/host/services/` 按服务域组织，`src/client/` 按 sidebar / settings / conversation 注入位置组织，`src/core/` 是两侧共享的纯逻辑。新增运行时代码必须落到这些 owner 之一。
-- **exports 约定**：运行时实体的 `exports` 提供 `.`（host）、`./client`（浏览器半区）、必要时 `./invariant`；`./src/*` 用于测试引用。源/数据包只导出其脚本、契约或数据消费者需要的入口，不得把旧 runtime 入口重新暴露为独立插件。
+- **exports 约定**：运行时实体的 `exports` 提供 `.`（host）、`./client`（浏览器半区）、必要时 `./invariant`；`./src/*` 用于测试引用。不得把旧 runtime 入口重新暴露为独立插件，也不得新增第二个包。
 
 ## SDK 与构建约束
 
@@ -27,7 +27,6 @@
 - 每个发布包必须有 `vitest run` 可通过的测试（`pnpm test` 全仓门禁）。行为变化必须带测试；纯 UI 展示层的冒烟测试可放宽为轻量挂载断言。
 - `tests/` 放测试，测试文件不得依赖 DSH 源码 checkout 的 fixture。
 - `dsh-web-all` 的 sidebar / settings / conversation 位置模块是唯一注入者；行为变化必须带测试，位置模块的挂载断言在包内 tests 覆盖。
-- 源/数据包验证资产、manifest、索引与生成产物，不测试或恢复独立 runtime 挂载。
 
 ## 语义属性约定（L2，issue #506）
 

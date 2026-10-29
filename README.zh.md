@@ -115,11 +115,11 @@ dsh plugin --profile web add link:$(pwd)/packages/dsh-web-all
 dsh --profile web --dump-config
 ```
 
-Profile 目录不是 pnpm workspace，`web-all` 的 `workspace:*` 依赖会回退到 npm 已发布版本；先运行 `node scripts/link-profile.mjs`，让源包使用仓库构建产物。
+Profile 目录不是 pnpm workspace，`web-all` 的 `workspace:*` 依赖会回退到 npm 已发布版本；先运行 `node scripts/link-profile.mjs`，让 profile 使用仓库构建产物。
 
 ### 运行时与已发布包
 
-Profile 运行时挂载 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app` 与 `@dsh-cove/dsh-web-all`。仓库另外发布一个不声明运行时行的数据源包：
+Profile 运行时挂载 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app` 与 `@dsh-cove/dsh-web-all`。仓库发布一个包：
 
 | npm 包 | 形态 |
 | --- | --- |
@@ -186,7 +186,7 @@ Profile 运行时挂载 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app` 与
 
 ## 版本与发布
 
-`vX.Y.Z` tag 是唯一的版本号来源。`dev` 集成并通过测试后合入 `main`，再从 `main` 切 tag。每个 tag 都会产出 GitHub Release（挂两个已门禁的包 tarball 与桌面端、Android、iOS 安装包）；只有当仓库开启 `NPM_PUBLISH` 变量并配置了发布者时，才把运行时实体与数据源包发布到 npm。发布历史与说明保留在 [GitHub Releases](https://github.com/chengxiang-zhang/dsh-cove/releases)，仓库不维护提交式 changelog。流程由 [.github/workflows/release.yml](.github/workflows/release.yml) 与 [docs/publish-prep.md](docs/publish-prep.md) 定义。
+`vX.Y.Z` tag 是唯一的版本号来源。`dev` 集成并通过测试后合入 `main`，再从 `main` 切 tag。每个 tag 都会产出 GitHub Release（挂已门禁的包 tarball 与桌面端、Android、iOS 安装包）；只有当仓库开启 `NPM_PUBLISH` 变量并配置了发布者时，才把运行时实体发布到 npm。发布历史与说明保留在 [GitHub Releases](https://github.com/chengxiang-zhang/dsh-cove/releases)，仓库不维护提交式 changelog。流程由 [.github/workflows/release.yml](.github/workflows/release.yml) 与 [docs/publish-prep.md](docs/publish-prep.md) 定义。
 
 ## 许可证与第三方声明
 
