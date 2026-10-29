@@ -84,27 +84,29 @@ jobs:
             const visualFix = hasCheckedLine(prType, '视觉修复（UI / 视觉类问题的修复）');
             const userFacing = hasCheckedLine(prType, '面向用户的功能或行为变更');
 
+            // 模板门禁面向人：机器人依赖升级 PR 的正文由工具生成，不按模板填写。
+            // 仓库所有者自审的 PR 由发布构建与自动化套件把关。
+            const isRepoOwner = pr.user.login === context.repo.owner;
+            const isBot = pr.user.login === 'github-actions[bot]' || pr.user.type === 'Bot';
+
             const errors = [];
-            if (!hasAnyCheckedBox(prType)) {
+            if (!isBot && !hasAnyCheckedBox(prType)) {
               errors.push('请在 `PR 类型（PR Type）` 中至少勾选一项。');
             }
-            if (!hasAnyCheckedBox(prCategory)) {
+            if (!isBot && !hasAnyCheckedBox(prCategory)) {
               errors.push('请在 `PR 类别（PR Category）` 中至少勾选一项。');
             }
-            if (!hasCheckedLine(latest, '我已基于最新 `dev` 分支开发，或在提交前已 rebase / 合并最新 `dev`。')) {
+            if (!isBot && !hasCheckedLine(latest, '我已基于最新 `dev` 分支开发，或在提交前已 rebase / 合并最新 `dev`。')) {
               errors.push('请在 `最新代码确认（Latest Codebase Confirmation）` 中确认本 PR 基于最新 `dev` 分支。');
             }
             const validationCommands = readValidationPart(validation, '执行的命令', '结果摘要');
             const validationSummary = readValidationPart(validation, '结果摘要');
-            if (isBlank(validationCommands) || isBlank(validationSummary)) {
+            if (!isBot && (isBlank(validationCommands) || isBlank(validationSummary))) {
               errors.push('请填写 `本地验证（Local Validation）` 中的执行的命令与结果摘要。');
             }
 
             // 证据门槛面向外部贡献者：自测证据 + 同步上游最新 dev 分支后
-            // 重新测试通过的截图，缺一即拒绝；仓库所有者自审的 PR 由发布
-            // 构建与自动化套件把关。
-            const isRepoOwner = pr.user.login === context.repo.owner;
-            const isBot = pr.user.login === 'github-actions[bot]' || pr.user.type === 'Bot';
+            // 重新测试通过的截图，缺一即拒绝。
             if (!isRepoOwner && !isBot) {
               if (!hasCheckedLine(evidenceRules, '我提供了自己本地测试的证据（执行的命令 / 测试结果 / 运行截图）。')) {
                 errors.push('请在 `测试证据与上游同步（Test Evidence & Upstream Sync）` 中勾选「我提供了自己本地测试的证据」。');
