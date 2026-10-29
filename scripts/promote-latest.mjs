@@ -8,6 +8,9 @@
  * `latest`. The workflow reports that case and stays green; this command is the one manual
  * step a maintainer then runs with their own npm credentials.
  *
+ * Reads go straight to the registry over HTTP so the command never needs the npm CLI's
+ * local state, and a version that already is `latest` needs no credentials at all.
+ *
  * Usage: node scripts/promote-latest.mjs <vX.Y.Z|x.y.z>
  */
 import { execFileSync } from 'node:child_process'
@@ -29,27 +32,43 @@ export function promoteCommands(version, packages = RELEASE_PACKAGE_NAMES) {
   }))
 }
 
+/** The registry's current `latest` for a package, read without the npm CLI. */
+export async function registryLatest(name, fetchImpl = fetch) {
+  const response = await fetchImpl(REGISTRY + encodeURIComponent(name).replace('%40', '@'))
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error(`${name}: registry read failed with ${response.status}`)
+  const body = await response.json()
+  const latest = body?.['dist-tags']?.latest
+  return typeof latest === 'string' ? latest : null
+}
+
 /**
  * Promote every release package and prove the read-back, so a promotion that npm accepted
  * but did not apply cannot be reported as done.
  */
-export function promote(version, run = (file, args, options) => execFileSync(file, args, { encoding: 'utf8', ...options })) {
+export async function promote(version, options = {}) {
+  const run = options.run ?? ((file, args, runOptions) => execFileSync(file, args, { encoding: 'utf8', ...runOptions }))
+  const latestOf = options.registryLatest ?? registryLatest
   const resolved = parseVersion(version)
+  const promoted = []
   for (const { name, args } of promoteCommands(resolved)) {
+    if (await latestOf(name) === resolved) {
+      console.log(`[promote-latest] ${name} already latest=${resolved}`)
+      continue
+    }
     console.log('[promote-latest] npm ' + args.join(' '))
     run('npm', args, { stdio: 'inherit' })
-    const tags = JSON.parse(run('npm', ['view', name, 'dist-tags', '--json', '--registry=' + REGISTRY], { encoding: 'utf8' }))
-    if (tags?.latest !== resolved) throw new Error(`${name}: latest is ${String(tags?.latest)}, expected ${resolved}`)
+    const after = await latestOf(name)
+    if (after !== resolved) throw new Error(`${name}: latest is ${String(after)}, expected ${resolved}`)
     console.log(`[promote-latest] ${name} latest=${resolved}`)
+    promoted.push(name)
   }
-  return { version: resolved }
+  return { version: resolved, promoted }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  try {
-    promote(process.argv[2])
-  } catch (error) {
+  promote(process.argv[2]).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error))
     process.exitCode = 1
-  }
+  })
 }
