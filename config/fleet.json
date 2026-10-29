@@ -1,0 +1,27 @@
+{
+  "management": {
+    "mode": "cloud",
+    "url": "https://api.netbird.io:443",
+    "cloudHostSuffixes": [
+      "netbird.io"
+    ]
+  },
+  "dns": {
+    "cloudDomain": "netbird.cloud"
+  },
+  "bootstrap": {
+    "updateBaseUrl": "https://anywhere.example.com/",
+    "overlayUpdateBaseUrl": "http://tx.vpn/",
+    "mobileConfigUrls": [
+      "https://anywhere.example.com/fleet.json",
+      "http://100.64.0.20/fleet.json"
+    ],
+    "desktopConfigUrls": [
+      "https://anywhere.example.com/fleet.json",
+      "http://tx.vpn/fleet.json"
+    ]
+  },
+  "auth": {
+    "flow": "auto"
+  }
+}

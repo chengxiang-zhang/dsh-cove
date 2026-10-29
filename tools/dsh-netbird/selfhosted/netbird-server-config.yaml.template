@@ -1,0 +1,31 @@
+# NetBird management server configuration fragment (server `config.yaml`).
+#
+# NetBird merges this file over its shipped defaults, so a fragment carrying only
+# the keys below is a complete deployment input: mount it as
+# `/opt/netbird/config.yaml` - the container reads it at startup, so changing it
+# needs a container restart - and replace every __PLACEHOLDER__.
+#
+# Scope: the keys this deployment has verified and changed, not the server's full
+# option space. Everything absent here stays at the shipped default, and the key
+# names come from the server's own config structs (`combined/cmd/config.go`).
+server:
+  auth:
+    # External identity provider only. At startup the server logs "local
+    # authentication disabled - only external identity providers can be used" and
+    # the embedded IdP's local connector disappears (the local accounts are kept,
+    # so flipping the flag back restores them). The server refuses to disable
+    # local auth while no other connector exists, so wire the IdP first:
+    # see idp-dex-connector.yaml.template.
+    localAuthDisabled: true
+
+  # STUN candidates handed to every peer for ICE. More than one matters when a
+  # site maps egress per destination WAN: with candidates from a single STUN the
+  # peers exchange no usable pair and every connection falls back to the relay
+  # (measured on this fleet: all peers Relayed until the office and WiFi paths
+  # could each punch through). Keep the deployment's own STUN first, then public
+  # ones reachable from every site.
+  stuns:
+    - stun:__MANAGEMENT_HOST__:3478
+    - stun:stun.miwifi.com:3478
+    - stun:stun.l.google.com:19302
+    - stun:stun.cloudflare.com:3478

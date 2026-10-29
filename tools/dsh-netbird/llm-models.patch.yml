@@ -1,0 +1,899 @@
+# NetBird DSH 预置模型接入配置（全机器统一事实源，秘钥一律不进本文件）。
+# 来源：laptop-b 的 router 实测目录（工具调用 / 图片输入 / 最大输出 / 推理档位逐项验证）
+# 合并 studio-mac 的 dsh-api-proxy（codex 订阅 auth2api）本机代理。
+#
+# 用法：把下面两个条目合并进每台机器的 $DSH_HOME/profiles/web/cordis.patch.yml：
+#   1. llm-pi-ai 行 —— 把 providers 下的 router / codex-local / hiopen 整块并入该机器
+#      既有的唯一 llm-pi-ai 行（同名 provider 整块替换，机器本地模型目录删除）；
+#   2. agent-default-model 行 —— 直接替换。
+# 外部编辑 profile 需重启 dsh web 生效；运行中的 configEditor 会用内存状态回写 profile 文件，
+# 因此先在 Web 界面停止相关编辑，合并后由机器管理员重启服务。
+#
+# 秘钥契约（fail-closed；禁止写进本文件 / machines.json / 文档 / 服务单元）：
+#   - router: $DSH_HOME/.credentials.yaml 的 refs.KAON_ROUTER_API_KEY
+#   - codex-local: refs.DSH_API_PROXY_KEY，值与本机 dsh-api-proxy config.yaml 的 apiKeys 条目一致
+#   - hiopen: refs.HIOPEN_API_KEY（端点由 config/deployment.local.json 提供）
+#   秘钥文件保持 0600 且仅 owner 可读；未配置秘钥只让对应 provider 请求失败，不影响 dsh web 启动。
+#
+# 2026-10-09 移除的 hiopen 模型（上游把思考混进 content 流而非 reasoning_content 字段，
+# pi-ai 无法剥离，思考文本与 <calls> 工具调用计划会泄漏进正文；实测排查确认，与 DSH 无关）：
+#   - deepseek-v4.1-flash（无前缀 alternate 路由 → 实际路由 agnes-3.0-flash）
+#   - MiniMax-M3 / MiniMax-M2.7-highspeed（thinking-as-text 混 content）
+# 保留 deepseek-ai/deepseek-v4.1-flash（带前缀路由 reasoning 正常）。
+#
+# router 实测事实（laptop-b 迁移 + 2026-10-08 studio-mac 全量复核）：
+# - contextWindow 不能信端点自报（/v1/models 的 context_length 两个方向都会错）：
+#   虚高如 claude-fable-5 自报 10240000（实测 200k 档）、claude-haiku-4-5 上游明确报 200000；
+#   低估如 gpt-5.6 系自报 128000（实测 ≥545619）。以下数值按逐模型探针结果维护，
+#   已验证通过的样本见各模型行内注释；未经长文验证的模型保持保守值。
+#   DSH 用 contextWindow 判断上下文溢出与压缩时机：超声明会在会话中途被打断（400/content_filter），
+#   低声明只会提前压缩（安全但浪费），所以宁可低估。
+# - reasoningEfforts 的 off 会被 pi-ai 转成「不发送 reasoning_effort」，即跟随上游默认；
+#   该路由拒绝 none/minimal（400），glm-5.3 系另拒 medium（上游要求 low/high/max），
+#   且 Claude/Grok 等强制思考，所以「关闭」不等于真正关掉思考。
+# - DeepSeek 官方 OpenAI 格式 reasoning_effort 支持 low/high/max（medium 会被映射成 high，
+#   见 api-docs.deepseek.com/guides/thinking_mode），所以 kaon/deepseek-* 目录补了 max 档；
+#   2026-10-09 按官方文档核入，未经该路由逐档探针复核。
+# - 声明了 reasoningEfforts 后，pi-ai 会把系统提示改成 role: developer；router 上游只接受
+#   system/assistant/user/tool/function，必须保持 supportsDeveloperRole: false。
+# - 输入模态不能信端点自报（49 个模型无一报 image）：2026-10-08 用纯色 PNG/JPEG 双重复核，
+#   deepseek-v3.2/v4-flash/v4-pro、glm-5、glm-5.2、gpt-6-luna、exclusive-marking-dpsk
+#   「收图但失明」（随机报颜色），已降为纯文本；gpt-6.1-sol 实际看得到图，已补 image。
+# - 上游取多模态文件的偶发超时（DashScope 侧 "Download multimodal file timed out"）：
+#   每次请求都会重发历史里的全部图片，整包越大越容易踩到上游取件时限（实测单图 650KB 约 6s、
+#   3.2MB 约 45s）。2026-10-15 复核：会话 a299ca5d 第 14/15 轮各失败一次，失败时历史里 20 张图
+#   （2.15MB 原始、约 2.9MB base64），请求在途 63s 后被上游 400 拒绝；同一份历史随后又能成功，
+#   说明这是卡在时限边缘而非固定拒绝。DSH 只在整包 base64 超过 maxRequestImageBytes 时才会触发
+#   image offload（最旧的图换成文字占位后重试，不消耗 provider 重试预算），所以该上限必须明显低于
+#   上游时限对应的大小，否则这层保护永不触发：按 22s/MB 取值 1MiB（约 22s，约 2.7 倍余量）。
+#   用 DSH 的 requiredImageOffload 复核该会话的 20 张图：8MiB 下卸载 0 张、整包 2.87MiB（≈63s，
+#   正是实测在途时长）；1MiB 下卸载最旧 14 张、只剩 6 张 0.92MiB（≈20s）。
+#   单图上限保持 512KiB（若扫描件小字变糊，把 requestImageMaxBytes 调回 1048576）。
+#
+# codex-local：每台机器自跑一份 dsh-api-proxy（本仓库 tools/dsh-api-proxy），监听
+# 127.0.0.1:8317，用各自 ChatGPT 订阅执行 --login --provider=codex 登录（仅本机个人使用）。
+# 没有代理的机器保留本 provider 块也不会阻塞启动，只是该 provider 不可用。
+# 2026-10-09：上游按 CLI 版本门控模型可见性 —— 0.147.0 只见 gpt-5.6 系，>= 0.162.0
+# （最新 @openai/codex）额外解锁 gpt-6.1-sol / gpt-6-astra / gpt-6-sol / gpt-6-luna。
+# 因此代理默认 cli-version 已升到 0.162.0，目录补入上述 4 个 gpt-6 模型（保守窗口值，
+# 未做逐模型长文探针；codex 上游 /codex/models 不返回窗口，沿用 400000/32768 档）。
+
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      router:
+        displayName: Kaon Router
+        apiKeyEnv: KAON_ROUTER_API_KEY
+        api: openai-completions
+        baseURL: https://router.example.com/v1
+        # 声明了 reasoningEfforts 后，pi-ai 会把系统提示改成 role: developer。
+        # router 上游只接受 system/assistant/user/tool/function，必须关掉。
+        compat:
+          supportsDeveloperRole: false
+        # 上游取多模态文件的偶发超时（DashScope 侧 "Download multimodal file timed out"）：
+        # 每次请求都会重发历史里的全部图片，整包越大越容易踩到超时线
+        # （实测该路由上单图 650KB 约 6s、3.2MB 要约 45s，20 张/2.15MB 实测在途 63s 后 400）。
+        # 整包上限同时是 image offload 的触发线：只有超限才会把最旧的图换成文字占位并重试，
+        # 所以它必须明显低于上游时限对应的大小，否则保护永不触发。单图上限保持 512KiB。
+        # 若扫描件小字变糊，把 requestImageMaxBytes 调回 1048576。
+        requestImageMaxBytes: 524288
+        maxRequestImageBytes: 1048576
+        models:
+          - id: kaon/claude-fable-5
+            name: kaon/claude-fable-5
+            # 2026-10-08 实测：~187k 通过，~291k content_filter（真实窗口 200k 档，端点自报 10240000 虚高）
+            contextWindow: 180000
+            maxTokens: 61929
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/claude-haiku-4-5-20251001
+            name: kaon/claude-haiku-4-5-20251001
+            # 2026-10-08 实测：546k 请求被上游明确拒绝「maximum context length is 200000 tokens」
+            contextWindow: 200000
+            maxTokens: 64800
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/claude-opus-4-6
+            name: kaon/claude-opus-4-6
+            contextWindow: 1000000
+            maxTokens: 64800
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/claude-opus-4-7
+            name: kaon/claude-opus-4-7
+            contextWindow: 1000000
+            maxTokens: 64800
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/claude-opus-4-8
+            name: kaon/claude-opus-4-8
+            contextWindow: 1000000
+            maxTokens: 128000
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/claude-opus-5
+            name: kaon/claude-opus-5
+            contextWindow: 1000000
+            maxTokens: 35000
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/claude-opus-5.5
+            name: kaon/claude-opus-5.5
+            contextWindow: 1000000
+            maxTokens: 36345
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/claude-sonnet-4-5
+            name: kaon/claude-sonnet-4-5
+            # 2026-10-08 实测：109452 通过，123743 content_filter（上限约 110k 档，端点自报 1024000 虚高）
+            contextWindow: 100000
+            maxTokens: 64800
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/claude-sonnet-4-6
+            name: kaon/claude-sonnet-4-6
+            contextWindow: 1000000
+            maxTokens: 64800
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/claude-sonnet-5
+            name: kaon/claude-sonnet-5
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/deepseek-flash
+            name: kaon/deepseek-flash
+            contextWindow: 1000000
+            maxTokens: 36384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+              max: "max"
+          - id: kaon/deepseek-v3.2
+            name: kaon/deepseek-v3.2
+            contextWindow: 128000
+            maxTokens: 16384
+            # 2026-10-08 实测：接受图片请求但识别不了内容（PNG/JPEG 均盲），降为纯文本
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+              max: "max"
+          - id: kaon/deepseek-v4-flash
+            name: kaon/deepseek-v4-flash
+            contextWindow: 1000000
+            maxTokens: 64800
+            # 2026-10-08 实测：接受图片请求但识别不了内容（PNG/JPEG 均盲），降为纯文本
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+              max: "max"
+          - id: kaon/deepseek-v4-pro
+            name: kaon/deepseek-v4-pro
+            contextWindow: 1000000
+            maxTokens: 64800
+            # 2026-10-08 实测：接受图片请求但识别不了内容（PNG/JPEG 均盲），降为纯文本
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+              max: "max"
+          - id: kaon/deepseek-v4.1-flash
+            name: kaon/deepseek-v4.1-flash
+            contextWindow: 1000000
+            maxTokens: 36384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+              max: "max"
+          - id: kaon/deepseek-v4.1-flash-1017
+            name: kaon/deepseek-v4.1-flash-1017
+            # 2026-10-23 逐项探针（studio-mac）：977787 tokens 通过，端点自报 context_length
+            # 1000000 属实；max_tokens 400000 被上游拒「valid range is [1, 393216]」，
+            # 393216 通过，与 /v1/models 的 max_output_tokens 一致。
+            contextWindow: 1000000
+            maxTokens: 393216
+            # 实测看到图：纯色 PNG 红/绿两轮均答对（端点自报 text+image->text 属实；
+            # 注意本路由只认 {type: image_url, image_url: {url}}，扁平字符串与
+            # type: image 都会被 422 拒掉）。
+            input:
+              - text
+              - image
+            # none/minimal/low/medium/high/xhigh/max 七档均返回 reasoning_content；
+            # off 必须写 null —— 该路由对 reasoning_effort: "off" 返回 422。
+            reasoningEfforts:
+              off: null
+              minimal: "minimal"
+              low: "low"
+              medium: "medium"
+              high: "high"
+              xhigh: "xhigh"
+              max: "max"
+          - id: kaon/gemini-2.5-flash
+            name: kaon/gemini-2.5-flash
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gemini-2.5-pro
+            name: kaon/gemini-2.5-pro
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gemini-3-flash-preview
+            name: kaon/gemini-3-flash-preview
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gemini-3.1-flash-lite
+            name: kaon/gemini-3.1-flash-lite
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gemini-3.1-pro-preview
+            name: kaon/gemini-3.1-pro-preview
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gemini-3.1-pro-preview-HQ
+            name: kaon/gemini-3.1-pro-preview-HQ
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gemini-3.5-flash
+            name: kaon/gemini-3.5-flash
+            contextWindow: 1000000
+            maxTokens: 32000
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gemini-3.5-flash-lite
+            name: kaon/gemini-3.5-flash-lite
+            contextWindow: 1000000
+            maxTokens: 36384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gemini-3.7-flash
+            name: kaon/gemini-3.7-flash
+            contextWindow: 1000000
+            maxTokens: 36384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gemini-3.8-flash
+            name: kaon/gemini-3.8-flash
+            contextWindow: 1000000
+            maxTokens: 36384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/glm-4.6
+            name: kaon/glm-4.6
+            # 2026-10-08 实测：184750 通过，312k 上游硬拒「Prompt 超长」（端点自报 128000 低估）
+            contextWindow: 180000
+            maxTokens: 16384
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/glm-5
+            name: kaon/glm-5
+            contextWindow: 128000
+            maxTokens: 16384
+            # 2026-10-08 实测：接受图片请求但识别不了内容（PNG/JPEG 均盲），降为纯文本
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/glm-5-turbo
+            name: kaon/glm-5-turbo
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/glm-5.1
+            name: kaon/glm-5.1
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/glm-5.2
+            name: kaon/glm-5.2
+            contextWindow: 1000000
+            maxTokens: 64800
+            # 2026-10-08 实测：接受图片请求但识别不了内容（PNG/JPEG 均盲），降为纯文本
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/glm-5.3
+            name: kaon/glm-5.3
+            contextWindow: 1000000
+            maxTokens: 36384
+            input:
+              - text
+            # 2026-10-08 实测：medium 400（上游要求 low/high/max）；max 补入
+            reasoningEfforts:
+              off: null
+              low: "low"
+              high: "high"
+              max: "max"
+          - id: kaon/glm-5.3-flash
+            name: kaon/glm-5.3-flash
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            # 2026-10-08 实测：medium 400（上游提示「please use low, high, or max」）；max 补入
+            reasoningEfforts:
+              off: null
+              low: "low"
+              high: "high"
+              max: "max"
+          - id: kaon/gpt-5.5
+            name: kaon/gpt-5.5
+            contextWindow: 1000000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gpt-5.6-luna
+            name: kaon/gpt-5.6-luna
+            # 同 gpt-5.6-sol（同系实测归一）
+            contextWindow: 500000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gpt-5.6-sol
+            name: kaon/gpt-5.6-sol
+            # 2026-10-08 实测：545619 tokens 通过（端点自报 128000 明显低估）；terra/luna 同系一并归一
+            contextWindow: 500000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gpt-5.6-terra
+            name: kaon/gpt-5.6-terra
+            # 同 gpt-5.6-sol（同系实测归一）
+            contextWindow: 500000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gpt-6-luna
+            name: kaon/gpt-6-luna
+            contextWindow: 1000000
+            maxTokens: 36384
+            # 2026-10-08 实测：接受图片请求但识别不了内容（PNG/JPEG 均盲），降为纯文本
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gpt-6-sol
+            name: kaon/gpt-6-sol
+            contextWindow: 1000000
+            maxTokens: 36384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/gpt-6.1-sol
+            name: kaon/gpt-6.1-sol
+            contextWindow: 1000000
+            maxTokens: 128000
+            # 2026-10-08 实测：正确识别图片内容（原声明漏了 image）
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/grok-4.20
+            name: kaon/grok-4.20
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/grok-4.3
+            name: kaon/grok-4.3
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/grok-4.6
+            name: kaon/grok-4.6
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/grok-4.7
+            name: kaon/grok-4.7
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/kimi-k3
+            name: kaon/kimi-k3
+            contextWindow: 1000000
+            maxTokens: 32000
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/qwen3.7-max
+            name: kaon/qwen3.7-max
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/qwen3.7-plus
+            name: kaon/qwen3.7-plus
+            contextWindow: 1000000
+            maxTokens: 36307
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/qwen3.8-flash
+            name: kaon/qwen3.8-flash
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/exclusive-marking
+            name: kaon/exclusive-marking
+            contextWindow: 128000
+            maxTokens: 16384
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: kaon/exclusive-marking-dpsk
+            name: kaon/exclusive-marking-dpsk
+            contextWindow: 128000
+            maxTokens: 16384
+            # 2026-10-08 实测：接受图片请求但识别不了内容（PNG/JPEG 均盲），降为纯文本
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+      codex-local:
+        displayName: Codex (local proxy)
+        apiKeyEnv: DSH_API_PROXY_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:8317/v1
+        reasoning: high
+        defaultContextWindow: 400000
+        defaultMaxTokens: 32768
+        models:
+          - id: gpt-6.1-sol
+            name: gpt-6.1-sol
+            contextWindow: 400000
+            maxTokens: 32768
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: gpt-6-astra
+            name: gpt-6-astra
+            contextWindow: 400000
+            maxTokens: 32768
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: gpt-6-sol
+            name: gpt-6-sol
+            contextWindow: 400000
+            maxTokens: 32768
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: gpt-6-luna
+            name: gpt-6-luna
+            contextWindow: 400000
+            maxTokens: 32768
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: gpt-5.6-sol
+            name: gpt-5.6-sol
+            contextWindow: 400000
+            maxTokens: 32768
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: gpt-5.6-terra
+            name: gpt-5.6-terra
+            contextWindow: 400000
+            maxTokens: 32768
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: gpt-5.6-luna
+            name: gpt-5.6-luna
+            contextWindow: 400000
+            maxTokens: 32768
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+          - id: gpt-5.5
+            name: gpt-5.5
+            contextWindow: 400000
+            maxTokens: 32768
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: "low"
+              medium: "medium"
+              high: "high"
+      hiopen:
+        displayName: HiOpen
+        apiKeyEnv: HIOPEN_API_KEY
+        api: openai-completions
+        baseURL: https://llm.example.com/v1
+        streamIdleTimeoutMs: 1800000
+        reasoning: high
+        defaultContextWindow: 262144
+        defaultMaxTokens: 32768
+        defaultInput:
+          - text
+        compat:
+          supportsDeveloperRole: false
+          supportsReasoningEffort: true
+          supportsUsageInStreaming: true
+          maxTokensField: max_tokens
+        models:
+          - id: deepseek-ai/deepseek-v4.1-flash
+            name: DeepSeek V4.1 Flash
+            contextWindow: 1048576
+            maxTokens: 262144
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              low: low
+              medium: medium
+              high: high
+              max: max
+            compat:
+              thinkingFormat: deepseek
+              requiresReasoningContentOnAssistantMessages: true
+          - id: deepseek-v4-flash-0731
+            name: DeepSeek V4 Flash 0731
+            contextWindow: 1000000
+            maxTokens: 128000
+            input:
+              - text
+            reasoningEfforts:
+              low: low
+              medium: medium
+              high: high
+              max: max
+            compat:
+              thinkingFormat: deepseek
+              requiresReasoningContentOnAssistantMessages: true
+          - id: z-ai/glm-5.3
+            name: GLM 5.3
+            contextWindow: 1048576
+            maxTokens: 131072
+            input:
+              - text
+            reasoningEfforts:
+              low: low
+              high: high
+              max: max
+            compat:
+              thinkingFormat: zai
+              requiresReasoningContentOnAssistantMessages: true
+          - id: z-ai/glm-5.3-flash
+            name: GLM 5.3 Flash
+            contextWindow: 1048576
+            maxTokens: 131072
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              low: low
+              high: high
+              max: max
+            compat:
+              thinkingFormat: zai
+              requiresReasoningContentOnAssistantMessages: true
+          - id: openai/gpt-oss-20b
+            name: GPT OSS 20B
+            contextWindow: 131072
+            maxTokens: 32768
+            input:
+              - text
+            reasoningEfforts:
+              low: low
+              medium: medium
+              high: high
+          - id: meta/llama-3.2-90b-vision-instruct
+            name: Llama 3.2 90B Vision Instruct
+            contextWindow: 131072
+            maxTokens: 8192
+            input:
+              - text
+              - image
+            reasoningEfforts: false
+
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    # laptop-b 实测默认档；偏好 glm 系的机器可改为 kaon/glm-5.3（同在上方目录）。
+    provider: router
+    model: kaon/deepseek-v4.1-flash
+    reasoningEffort: high

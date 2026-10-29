@@ -1,0 +1,62 @@
+{
+  "name": "dsh-cove",
+  "version": "0.1.1",
+  "private": true,
+  "description": "DeepSeek Harness Web GUI extension suite: one runtime entity plugin for the web profile",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "community:check": "node scripts/community-index --check",
+    "runtime-deps:check": "node scripts/runtime-deps-check.mjs",
+    "dsh-local:audit": "node scripts/dsh-local-ops-audit.mjs",
+    "dsh-local:migrate": "node scripts/dsh-local-profile-migrate.mjs",
+    "dsh-netbird:audit": "node scripts/dsh-netbird-audit.mjs",
+    "dsh-netbird:tls": "node scripts/dsh-netbird-tls.mjs",
+    "dsh-netbird:mobile-registry": "node scripts/dsh-netbird-mobile-registry.mjs",
+    "dsh-netbird:namespaces": "node scripts/dsh-netbird-user-namespace.mjs",
+    "dsh-netbird:client-publish": "node scripts/dsh-netbird-client-publish.mjs",
+    "dsh-netbird:brand": "node scripts/dsh-netbird-brand.mjs --check",
+    "dsh-netbird:qr-verify": "node scripts/dsh-netbird-qr-verify.mjs",
+    "test:scripts": "node --test --test-concurrency=1 scripts/*.test.mjs",
+    "test:mount": "bash scripts/e2e-mount.sh",
+    "pr:review": "node scripts/pr-review.mjs",
+    "docs:check": "node scripts/verify-docs.mjs",
+    "docs:list": "node scripts/verify-docs.mjs --list",
+    "docs:write-pair": "node scripts/verify-docs.mjs --write",
+    "sync-shared": "node scripts/sync-shared.mjs",
+    "sync-shared:check": "node scripts/sync-shared.mjs --check",
+    "config:render": "node scripts/config-render.mjs",
+    "dsh-netbird:llm-apply": "node scripts/dsh-netbird-llm-apply.mjs",
+    "fleet-config:render": "node scripts/render-fleet-config.mjs",
+    "fleet-config:check": "node scripts/render-fleet-config.mjs --check"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "lightningcss": "^1.32.0",
+    "playwright": "^1.62.1",
+    "tsdown": "^0.22.2",
+    "@deepseek-ai/dsh-util-time": "^0.1.5-rc.2"
+  },
+  "license": "Apache-2.0",
+  "author": "dsh-cove contributors",
+  "homepage": "https://github.com/chengxiang-zhang/dsh-cove#readme",
+  "bugs": {
+    "url": "https://github.com/chengxiang-zhang/dsh-cove/issues"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "packageManager": "pnpm@11.7.0",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "plugin-suite"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chengxiang-zhang/dsh-cove.git"
+  }
+}

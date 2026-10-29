@@ -1,0 +1,29 @@
+<resources>
+
+    <!--
+      Theme layering. Android resource qualifiers replace a style, they do not
+      merge it, so anything repeated between values/ and values-v31/ has to be
+      repeated by hand - which is how the status bar appearance was silently
+      dropped on every Android 12+ device (values-v31 redefined AppTheme without
+      it). The invariant items live in AppTheme.Common and are named exactly once.
+    -->
+    <style name="AppTheme.Common" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
+        <!-- Branded launch background; React Native covers it once mounted. -->
+        <item name="android:windowBackground">@drawable/splash_screen</item>
+    </style>
+
+    <!--
+      The app draws edge to edge, so the system bars sit directly on the app's own
+      background. Left at the platform default the status bar icons stay
+      light-on-dark and disappear against the light theme's near-white surface.
+      values-night/styles.xml flips them for the dark theme.
+    -->
+    <style name="AppTheme.Base" parent="AppTheme.Common">
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+
+    <style name="AppTheme" parent="AppTheme.Base" />
+
+</resources>

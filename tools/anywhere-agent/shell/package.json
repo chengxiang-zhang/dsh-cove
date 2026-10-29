@@ -1,0 +1,8 @@
+{
+  "name": "anywhere-shell",
+  "private": true,
+  "description": "Desktop shell for the anywhere intranet browser",
+  "type": "module",
+  "main": "main.mjs",
+  "license": "Apache-2.0"
+}

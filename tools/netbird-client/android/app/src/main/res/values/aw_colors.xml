@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  GENERATED FILE, do not edit. Source: tools/dsh-netbird/brand/tokens.json
+  Regenerate it by running the brand generator in scripts with its write flag.
+  Scheme: light (values-night/aw_colors.xml carries the dark one)
+-->
+<resources>
+    <color name="aw_bg">#F6F8FC</color>
+    <color name="aw_surface">#FFFFFF</color>
+    <color name="aw_surface_alt">#EEF2F7</color>
+    <color name="aw_surface_hover">#EEF2F7</color>
+    <color name="aw_border">#DCE3EC</color>
+    <color name="aw_border_strong">#C3CEDD</color>
+    <color name="aw_control_border">#8494A8</color>
+    <color name="aw_text">#0F1B2D</color>
+    <color name="aw_text_muted">#4A5B70</color>
+    <color name="aw_text_faint">#586A80</color>
+    <color name="aw_brand">#2563EB</color>
+    <color name="aw_brand_fill">#2563EB</color>
+    <color name="aw_brand_fill_hover">#1D4ED8</color>
+    <color name="aw_on_brand_fill">#FFFFFF</color>
+    <color name="aw_accent">#06B6D4</color>
+    <color name="aw_success">#0B7A55</color>
+    <color name="aw_success_bg">#E6F6EF</color>
+    <color name="aw_warning">#8A5200</color>
+    <color name="aw_warning_bg">#FDF3E3</color>
+    <color name="aw_danger">#C02626</color>
+    <color name="aw_danger_bg">#FDECEC</color>
+    <color name="aw_danger_fill">#C02626</color>
+    <color name="aw_on_danger_fill">#FFFFFF</color>
+    <color name="aw_focus">#1D4ED8</color>
+    <color name="aw_overlay">#7A0F1B2D</color>
+    <color name="aw_shadow">#1A0F1B2D</color>
+    <color name="aw_shadow_lifted">#290F1B2D</color>
+</resources>

@@ -1,0 +1,13 @@
+{
+  "id": "plan-architecture",
+  "title": "架构与设计边界（Plan）",
+  "source": "design-standards/system-architecture.md §7",
+  "required_when": "new_entry|cross_layer|new_storage|new_auth|new_deploy_unit",
+  "items": [
+    {"id": "boundary", "prompt": "边界：沿用 / 新开（说明）"},
+    {"id": "c4", "prompt": "C4 影响：L1 / L2 / L3 / N/A"},
+    {"id": "adr", "prompt": "ADR：否 / 是（路径）"},
+    {"id": "ux_visual", "prompt": "UX / 视觉约束（或 N/A）"},
+    {"id": "unverified", "prompt": "Unverified"}
+  ]
+}

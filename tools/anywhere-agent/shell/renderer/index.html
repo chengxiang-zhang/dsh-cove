@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:" />
+    <title>Anywhere Work</title>
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body data-sidebar="shown">
+    <header class="toolbar">
+      <div class="toolbar-lead">
+        <button class="toolbar-button" id="sidebar-toggle" aria-label="显示或隐藏侧栏">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5"/><path d="M6 2.5v11"/></svg>
+        </button>
+        <span class="toolbar-title" id="window-title">Anywhere Work</span>
+      </div>
+      <div class="toolbar-trail">
+        <div class="status" id="status" data-tone="busy" role="status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span class="status-label" id="status-label">正在启动</span>
+          <span class="status-detail" id="status-detail"></span>
+        </div>
+        <button class="toolbar-button" id="refresh" aria-label="刷新">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 2.5V5h-2.5"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="split" id="split">
+      <!-- The rail is the app's own navigation: what the window is showing, and the
+           two things that are always available (appearance and the folded facts). It
+           sits below the title bar so the window controls keep their corner. -->
+      <nav class="rail" id="rail" aria-label="主导航">
+        <button class="rail-button" id="rail-machines" type="button" data-rail="machines" aria-label="机器" title="机器">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h6"/></svg>
+        </button>
+        <button class="rail-button" id="rail-session" type="button" data-rail="session" aria-label="新会话" title="在所选的机器上开始一个新会话">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M8 5.5v5M5.5 8h5"/></svg>
+        </button>
+        <span class="rail-spacer"></span>
+        <button class="rail-button" id="rail-diagnostics" type="button" data-rail="diagnostics" aria-label="诊断" title="诊断">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M8 7.2v3.6M8 5.1h.01"/></svg>
+        </button>
+        <button class="rail-button" id="rail-appearance" type="button" data-rail="appearance" aria-label="外观" title="外观">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 9.6A5.5 5.5 0 0 1 6.4 2.8a5.5 5.5 0 1 0 6.8 6.8Z"/></svg>
+        </button>
+      </nav>
+
+      <aside class="sidebar" id="sidebar" aria-label="机器">
+        <div class="search">
+          <input id="query" type="search" placeholder="搜索机器" aria-label="搜索机器" autocomplete="off" spellcheck="false" />
+        </div>
+
+        <nav class="groups" id="groups" aria-label="机器列表"></nav>
+
+        <div class="sidebar-foot">
+          <button class="account" id="account" type="button" aria-label="网络状态">
+            <span class="account-dot" id="account-dot" aria-hidden="true"></span>
+            <span class="account-body">
+              <span class="account-name" id="account-name"></span>
+              <span class="account-line" id="account-line"></span>
+            </span>
+            <span class="account-action" id="account-action"></span>
+          </button>
+          <button class="disclosure" id="diagnostics-toggle" aria-expanded="false">诊断</button>
+          <dl class="diagnostics-rows" id="diagnostics-rows" hidden></dl>
+        </div>
+      </aside>
+
+      <section class="detail" id="detail">
+        <div class="detail-body" id="detail-body">
+        <div class="state-panel" id="state-panel">
+          <div class="welcome" id="welcome" hidden>
+            <p class="welcome-tagline" id="welcome-tagline"></p>
+          </div>
+          <h2 id="state-title">正在启动</h2>
+          <p id="state-body"></p>
+          <!-- The address this install enrolls against. It is the fact behind most
+               first-run failures and the only one the person can correct, so it is named
+               on the panel and can be changed from it. -->
+          <p class="state-server-row" id="state-server-row" hidden>
+            <button class="state-server" id="state-server" type="button" title="更改服务器地址"></button>
+            <span class="state-server-hint">更改</span>
+          </p>
+          <!-- The panel's own line for what is happening right now: a press that is still
+               working, or the reason it could not. It sits with the button rather than in a
+               corner, because a corner is where feedback goes to be missed. -->
+          <p class="state-note" id="state-note" hidden></p>
+          <div class="server-field" id="server-field" hidden>
+            <input
+              id="server-input"
+              type="url"
+              inputmode="url"
+              placeholder="https://netbird.example.com:443"
+              aria-label="服务器地址"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button class="button" id="server-save" type="button" data-variant="primary">保存并登录</button>
+            <button class="button" id="server-cancel" type="button">取消</button>
+          </div>
+          <p class="server-note" id="server-note" role="status" hidden></p>
+          <div class="state-actions" id="state-actions"></div>
+        </div>
+        <div class="detail-notice" id="notice" hidden></div>
+        </div>
+      </section>
+    </main>
+
+    <p class="sr-only" id="live" aria-live="polite"></p>
+    <script src="brand.js"></script>
+    <script src="view.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

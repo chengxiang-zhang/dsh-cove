@@ -1,0 +1,70 @@
+/** Dialog field styling shared by the branch-create and delete modals. */
+
+.dialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldLabel {
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.fieldInput {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(127, 127, 127, 0.25));
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-overlay);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.fieldInput:focus {
+  border-color: var(--dsw-alias-interactive-border-active, var(--dsw-alias-label-secondary));
+}
+
+.dialogError {
+  font-size: 11.5px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+/** The one-line explanation under a checkbox, aligned with its label text. */
+.dialogHint {
+  margin-top: -4px;
+  padding-left: 22px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.successText {
+  font-size: 12.5px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.prUrl {
+  margin-top: 6px;
+  font-size: 12px;
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--dsw-alias-brand-primary);
+  word-break: break-all;
+}

@@ -1,0 +1,60 @@
+{
+  "comment": true,
+  "defaultRoute": {
+    "label": "默认负责人：未匹配类别时的兜底，指向所有者",
+    "reviewers": [
+      "chengxiang-zhang"
+    ],
+    "assignees": [
+      "chengxiang-zhang"
+    ],
+    "ai": false
+  },
+  "routes": [
+    {
+      "name": "plugins",
+      "label": "Web 运行时能力（侧栏 / 设置 / 会话区 / Host 服务）",
+      "types": [
+        "Web 运行时能力（侧栏 / 设置 / 会话区 / Host 服务）"
+      ],
+      "prAllowed": true,
+      "ai": false,
+      "reviewers": [
+        "chengxiang-zhang"
+      ],
+      "assignees": [
+        "chengxiang-zhang"
+      ]
+    },
+    {
+      "name": "community-plugins",
+      "label": "社区插件索引",
+      "types": [
+        "社区插件索引"
+      ],
+      "prAllowed": true,
+      "ai": false,
+      "reviewers": [
+        "chengxiang-zhang"
+      ],
+      "assignees": [
+        "chengxiang-zhang"
+      ]
+    },
+    {
+      "name": "maintenance",
+      "label": "维护 / 其他",
+      "types": [
+        "维护 / 其他"
+      ],
+      "prAllowed": true,
+      "ai": false,
+      "reviewers": [
+        "chengxiang-zhang"
+      ],
+      "assignees": [
+        "chengxiang-zhang"
+      ]
+    }
+  ]
+}

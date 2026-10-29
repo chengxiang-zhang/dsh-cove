@@ -1,0 +1,17 @@
+{
+  "name": "__ZONE_NAME__",
+  "domain": "netbird",
+  "enabled": true,
+  "enable_search_domain": true,
+  "distribution_groups": [
+    "__DISTRIBUTION_GROUP__"
+  ],
+  "records": [
+    {
+      "name": "dsh.__MACHINE__.netbird.",
+      "type": 1,
+      "content": "__NETBIRD_IP__",
+      "ttl": 300
+    }
+  ]
+}

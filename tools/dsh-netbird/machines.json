@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "domainPattern": "dsh.<netbird-machine-name>.netbird",
+  "gatewayPort": 3080,
+  "upstreamPort": 3080,
+  "machines": [
+    {
+      "netbirdName": "studio-mac",
+      "domain": "dsh.studio-mac.netbird",
+      "authMode": "network-gate",
+      "netbirdIp": "100.64.0.11",
+      "os": "darwin",
+      "sshAlias": "ssh-studio-mac"
+    },
+    {
+      "netbirdName": "laptop-b",
+      "domain": "dsh.laptop-b.netbird",
+      "authMode": "network-gate",
+      "netbirdIp": "100.64.0.12",
+      "os": "darwin",
+      "sshAlias": "ssh-laptop-b"
+    },
+    {
+      "netbirdName": "imac-office",
+      "domain": "dsh.imac-office.netbird",
+      "authMode": "password",
+      "netbirdIp": "100.64.0.13",
+      "os": "darwin",
+      "sshAlias": "ssh-imac-office"
+    },
+    {
+      "netbirdName": "thinkpad-lab",
+      "domain": "dsh.thinkpad-lab.netbird",
+      "authMode": "network-gate",
+      "netbirdIp": "100.64.0.14",
+      "os": "linux",
+      "sshAlias": "ssh-thinkpad-lab"
+    },
+    {
+      "netbirdName": "tower-lab",
+      "domain": "dsh.tower-lab.netbird",
+      "authMode": "network-gate",
+      "netbirdIp": "100.64.0.15",
+      "os": "linux",
+      "sshAlias": "ssh-tower-lab",
+      "peerId": "peer-sample-0001",
+      "dnsZoneId": "zone-sample-0001"
+    },
+    {
+      "netbirdName": "thinkcentre-lab",
+      "domain": "dsh.thinkcentre-lab.netbird",
+      "authMode": "network-gate",
+      "netbirdIp": "100.64.0.16",
+      "os": "linux",
+      "sshAlias": "ssh-thinkcentre-lab",
+      "peerId": "peer-sample-0002",
+      "dnsZoneId": "zone-sample-0002"
+    }
+  ]
+}

@@ -1,0 +1,1999 @@
+<!doctype html>
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anywhere Work · 一条命令接入私有网络</title>
+<meta name="description" content="一条命令，把你的 Mac、Linux 或 Android 接进只属于你的私有网络：同账号的设备互相直达，网外看不到，也连不上。">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#080D17" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F6F8FC" media="(prefers-color-scheme: light)">
+<link rel="canonical" href="https://anywhere.example.com/">
+<meta property="og:title" content="Anywhere Work · 一条命令接入私有网络">
+<meta property="og:description" content="把你的 Mac、Linux 和手机接进只属于自己的私有网络。同账号的设备互相直达，网外看不到也连不上。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://anywhere.example.com/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23080D17'/%3E%3Ccircle cx='32' cy='33' r='13' fill='none' stroke='%23fff' stroke-width='7' stroke-linecap='round' stroke-dasharray='64 20' transform='rotate(-45 32 33)'/%3E%3Ccircle cx='42' cy='23' r='6' fill='%2322D3EE'/%3E%3C/svg%3E">
+<style>
+/* AW-TOKENS:START */
+:root {
+  --aw-bg: #F6F8FC;
+  --aw-surface: #FFFFFF;
+  --aw-surface-alt: #EEF2F7;
+  --aw-surface-hover: #EEF2F7;
+  --aw-border: #DCE3EC;
+  --aw-border-strong: #C3CEDD;
+  --aw-control-border: #8494A8;
+  --aw-text: #0F1B2D;
+  --aw-text-muted: #4A5B70;
+  --aw-text-faint: #586A80;
+  --aw-brand: #2563EB;
+  --aw-brand-fill: #2563EB;
+  --aw-brand-fill-hover: #1D4ED8;
+  --aw-on-brand-fill: #FFFFFF;
+  --aw-accent: #06B6D4;
+  --aw-success: #0B7A55;
+  --aw-success-bg: #E6F6EF;
+  --aw-warning: #8A5200;
+  --aw-warning-bg: #FDF3E3;
+  --aw-danger: #C02626;
+  --aw-danger-bg: #FDECEC;
+  --aw-danger-fill: #C02626;
+  --aw-on-danger-fill: #FFFFFF;
+  --aw-focus: #1D4ED8;
+  --aw-overlay: rgba(15, 27, 45, 0.48);
+  --aw-shadow: rgba(15, 27, 45, 0.10);
+  --aw-shadow-lifted: rgba(15, 27, 45, 0.16);
+  --aw-space-3xs: 2px;
+  --aw-space-2xs: 4px;
+  --aw-space-xs: 6px;
+  --aw-space-sm: 8px;
+  --aw-space-md: 12px;
+  --aw-space-lg: 16px;
+  --aw-space-xl: 20px;
+  --aw-space-2xl: 24px;
+  --aw-space-3xl: 32px;
+  --aw-space-4xl: 40px;
+  --aw-space-5xl: 56px;
+  --aw-space-6xl: 72px;
+  --aw-radius-xs: 6px;
+  --aw-radius-sm: 8px;
+  --aw-radius-md: 12px;
+  --aw-radius-lg: 16px;
+  --aw-radius-xl: 22px;
+  --aw-radius-pill: 999px;
+  --aw-size-hero: 68px;
+  --aw-leading-hero: 1.08;
+  --aw-weight-hero: 600;
+  --aw-tracking-hero: 0;
+  --aw-size-section: 44px;
+  --aw-leading-section: 1.2;
+  --aw-weight-section: 600;
+  --aw-tracking-section: 0;
+  --aw-size-display: 40px;
+  --aw-leading-display: 1.15;
+  --aw-weight-display: 700;
+  --aw-tracking-display: -0.02em;
+  --aw-size-title: 28px;
+  --aw-leading-title: 1.25;
+  --aw-weight-title: 650;
+  --aw-tracking-title: -0.01em;
+  --aw-size-heading: 20px;
+  --aw-leading-heading: 1.35;
+  --aw-weight-heading: 600;
+  --aw-tracking-heading: 0;
+  --aw-size-body: 16px;
+  --aw-leading-body: 1.65;
+  --aw-weight-body: 400;
+  --aw-tracking-body: 0;
+  --aw-size-small: 14px;
+  --aw-leading-small: 1.6;
+  --aw-weight-small: 400;
+  --aw-tracking-small: 0;
+  --aw-size-caption: 13px;
+  --aw-leading-caption: 1.5;
+  --aw-weight-caption: 500;
+  --aw-tracking-caption: 0.01em;
+  --aw-size-mono: 13.5px;
+  --aw-leading-mono: 1.6;
+  --aw-weight-mono: 400;
+  --aw-tracking-mono: 0;
+  --aw-dur-instant: 90ms;
+  --aw-dur-fast: 160ms;
+  --aw-dur-base: 240ms;
+  --aw-dur-slow: 400ms;
+  --aw-dur-deliberate: 900ms;
+  --aw-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --aw-ease-enter: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --aw-ease-exit: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --aw-shadow-flat: none;
+  --aw-shadow-raised: 0 1px 2px rgba(15,27,45,0.06), 0 1px 3px rgba(15,27,45,0.08);
+  --aw-shadow-lifted: 0 12px 32px -12px rgba(15,27,45,0.22), 0 2px 8px rgba(15,27,45,0.06);
+  --aw-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Roboto, Helvetica, Arial, sans-serif;
+  --aw-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", "Noto Sans Mono CJK SC", monospace;
+  color-scheme: light;
+}
+
+/* The reader who never touches the toggle still gets the scheme the OS asks for. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --aw-bg: #080D17;
+    --aw-surface: #111A2B;
+    --aw-surface-alt: #1A2438;
+    --aw-surface-hover: #0D1524;
+    --aw-border: #253148;
+    --aw-border-strong: #33415C;
+    --aw-control-border: #5B6E8C;
+    --aw-text: #E9EFF8;
+    --aw-text-muted: #A3B3C9;
+    --aw-text-faint: #8C9DB4;
+    --aw-brand: #7EB0FF;
+    --aw-brand-fill: #2F6FE4;
+    --aw-brand-fill-hover: #2559C4;
+    --aw-on-brand-fill: #FFFFFF;
+    --aw-accent: #22D3EE;
+    --aw-success: #4ADE9B;
+    --aw-success-bg: #0E2A22;
+    --aw-warning: #F5C24B;
+    --aw-warning-bg: #2E2410;
+    --aw-danger: #FF8A8A;
+    --aw-danger-bg: #2E1417;
+    --aw-danger-fill: #FF8A8A;
+    --aw-on-danger-fill: #080D17;
+    --aw-focus: #7EB0FF;
+    --aw-overlay: rgba(3, 7, 14, 0.66);
+    --aw-shadow: rgba(0, 0, 0, 0.40);
+    --aw-shadow-lifted: rgba(0, 0, 0, 0.55);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --aw-bg: #080D17;
+  --aw-surface: #111A2B;
+  --aw-surface-alt: #1A2438;
+  --aw-surface-hover: #0D1524;
+  --aw-border: #253148;
+  --aw-border-strong: #33415C;
+  --aw-control-border: #5B6E8C;
+  --aw-text: #E9EFF8;
+  --aw-text-muted: #A3B3C9;
+  --aw-text-faint: #8C9DB4;
+  --aw-brand: #7EB0FF;
+  --aw-brand-fill: #2F6FE4;
+  --aw-brand-fill-hover: #2559C4;
+  --aw-on-brand-fill: #FFFFFF;
+  --aw-accent: #22D3EE;
+  --aw-success: #4ADE9B;
+  --aw-success-bg: #0E2A22;
+  --aw-warning: #F5C24B;
+  --aw-warning-bg: #2E2410;
+  --aw-danger: #FF8A8A;
+  --aw-danger-bg: #2E1417;
+  --aw-danger-fill: #FF8A8A;
+  --aw-on-danger-fill: #080D17;
+  --aw-focus: #7EB0FF;
+  --aw-overlay: rgba(3, 7, 14, 0.66);
+  --aw-shadow: rgba(0, 0, 0, 0.40);
+  --aw-shadow-lifted: rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+/* AW-TOKENS:END */
+
+/* ------------------------------------------------------------------------
+   The page reads the brand tokens above and nothing else. Two palettes exist
+   on purpose: the bands that follow the reader's theme, and the fixed navy
+   bands (header, hero, deck entry, footer) that are the product's identity in
+   both schemes. `.on-ink` re-points the same aliases at the dark scheme's
+   values, so every component below is written once and works in both.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --page: var(--aw-bg);
+  --surface: var(--aw-surface);
+  --surface-alt: var(--aw-surface-alt);
+  --surface-hover: var(--aw-surface-hover);
+  --border: var(--aw-border);
+  --border-strong: var(--aw-border-strong);
+  /* Interaction boundaries must clear WCAG 2.2 SC 1.4.11 (3:1 against the
+     adjacent colour); decoration only has to be visible, so the two are not
+     the same colour. Cards and table rules use --border; anything you click
+     uses --control-border. */
+  --control-border: var(--aw-control-border);
+  --text: var(--aw-text);
+  --muted: var(--aw-text-muted);
+  --faint: var(--aw-text-faint);
+  --brand: var(--aw-brand);
+  --brand-fill: var(--aw-brand-fill);
+  --brand-fill-hover: var(--aw-brand-fill-hover);
+  --on-brand: var(--aw-on-brand-fill);
+  --accent: var(--aw-accent);
+  --focus: var(--aw-focus);
+  --success: var(--aw-success);
+  --success-bg: var(--aw-success-bg);
+  --warning: var(--aw-warning);
+  --warning-bg: var(--aw-warning-bg);
+  --card-shadow: var(--aw-shadow-raised);
+  --lift-shadow: var(--aw-shadow-lifted);
+
+  --wrap: 1120px;
+  --gutter: clamp(20px, 4vw, 40px);
+  --band: clamp(48px, 5vw, 76px);
+  --radius-card: var(--aw-radius-lg);
+
+  /* The token scale is the floor. Past 1600px the whole reading scale takes one
+     step up, because 16px body text on a 27-inch display reads as fine print
+     while the display sizes below keep growing with the viewport. */
+  --text-body: var(--aw-size-body);
+  --text-small: var(--text-small);
+  --text-caption: var(--text-caption);
+  --text-mono: var(--text-mono);
+  --text-heading: var(--aw-size-heading);
+}
+
+.on-ink {
+  --page: #080D17;
+  --surface: #111A2B;
+  --surface-alt: #1A2438;
+  --surface-hover: #0D1524;
+  --border: #253148;
+  --border-strong: #33415C;
+  --control-border: #5B6E8C;
+  --text: #E9EFF8;
+  --muted: #A3B3C9;
+  --faint: #8C9DB4;
+  --brand: #7EB0FF;
+  --brand-fill: #2F6FE4;
+  --brand-fill-hover: #2559C4;
+  --on-brand: #FFFFFF;
+  --accent: #22D3EE;
+  --focus: #7EB0FF;
+  --success: #4ADE9B;
+  --success-bg: #0E2A22;
+  --warning: #F5C24B;
+  --warning-bg: #2E2410;
+  --card-shadow: none;
+  --lift-shadow: none;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+  scroll-padding-top: 80px;
+}
+
+body {
+  margin: 0;
+  background: var(--aw-bg);
+  color: var(--aw-text);
+  font-family: var(--aw-font-sans);
+  font-size: var(--text-body);
+  line-height: var(--aw-leading-body);
+  /* Chinese has no spaces, so the default rule breaks a word in half
+     ("私有网" / "络"). keep-all breaks at punctuation instead, and the
+     anywhere fallback only fires for a phrase wider than the column. */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3 {
+  margin: 0;
+  color: var(--text);
+  text-wrap: pretty;
+}
+h1 {
+  font-size: clamp(34px, 3.7vw, var(--aw-size-hero));
+  line-height: var(--aw-leading-hero);
+  font-weight: var(--aw-weight-hero);
+  letter-spacing: var(--aw-tracking-hero);
+}
+h2 {
+  font-size: clamp(26px, 2.5vw, var(--aw-size-section));
+  line-height: var(--aw-leading-section);
+  font-weight: var(--aw-weight-section);
+  letter-spacing: var(--aw-tracking-section);
+}
+h3 {
+  font-size: var(--text-heading);
+  line-height: var(--aw-leading-heading);
+  font-weight: 600;
+}
+/* Chinese is set at the token's tracking; the Latin edition is the one that
+   wants a negative letter-spacing, and that is a language rule, not a size. */
+html[data-lang='en'] h1 { letter-spacing: -0.022em; }
+html[data-lang='en'] body { line-height: 1.62; }
+p { margin: 0; text-wrap: pretty; }
+ul, ol { margin: 0; padding: 0; list-style: none; }
+img { max-width: 100%; }
+
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+b, strong { font-weight: 600; color: var(--text); }
+.mono { font-family: var(--aw-font-mono); font-size: var(--text-mono); font-variant-numeric: tabular-nums; }
+.meta { font-size: var(--text-small); color: var(--muted); }
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--aw-radius-xs);
+}
+
+.skip {
+  position: absolute;
+  left: var(--gutter);
+  top: 8px;
+  z-index: 100;
+  transform: translateY(-200%);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--aw-radius-sm);
+  padding: 8px 14px;
+  font-size: var(--text-small);
+}
+.skip:focus { transform: translateY(0); }
+
+.wrap {
+  width: 100%;
+  max-width: var(--wrap);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------- topbar */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: rgba(8, 13, 23, 0.97);
+  border-bottom: 1px solid var(--border);
+}
+.topbar__inner {
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 2vw, 24px);
+  min-height: 64px;
+}
+.lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text);
+  font-size: var(--text-small);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.lockup:hover { text-decoration: none; }
+.lockup svg { display: block; border-radius: 7px; }
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-inline-start: auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.nav::-webkit-scrollbar { display: none; }
+.nav a {
+  color: var(--muted);
+  font-size: var(--text-small);
+  padding: 8px 11px;
+  border-radius: var(--aw-radius-sm);
+  white-space: nowrap;
+}
+.nav a:hover {
+  color: var(--text);
+  background: var(--surface-alt);
+  text-decoration: none;
+}
+.nav a[data-entry] {
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, 0.04);
+}
+.nav a[data-entry]:hover { border-color: var(--brand); }
+
+.controls { display: flex; align-items: center; gap: 6px; }
+.control {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: var(--text-caption);
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--control-border);
+  border-radius: var(--aw-radius-sm);
+  padding: 7px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.control:hover { color: var(--text); border-color: var(--border-strong); }
+
+/* ----------------------------------------------------------------- hero */
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  background: var(--page);
+  color: var(--text);
+  padding-block: clamp(32px, 3.6vw, 56px) 0;
+}
+.hero__glow {
+  position: absolute;
+  inset: -34% -12% auto -12%;
+  height: 780px;
+  pointer-events: none;
+  background:
+    radial-gradient(52% 50% at 20% 14%, rgba(47, 111, 228, 0.42), transparent 70%),
+    radial-gradient(36% 38% at 82% 6%, rgba(34, 211, 238, 0.20), transparent 72%);
+}
+.hero__grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgba(126, 176, 255, 0.075) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(126, 176, 255, 0.075) 1px, transparent 1px);
+  background-size: 64px 64px;
+  -webkit-mask-image: radial-gradient(72% 62% at 26% 0%, #000 0%, transparent 76%);
+  mask-image: radial-gradient(72% 62% at 26% 0%, #000 0%, transparent 76%);
+}
+.hero__inner {
+  position: relative;
+  display: grid;
+  /* The headline column is sized for the headline; the diagram gets the larger
+     share because a scaled-down diagram is an unreadable one. The install bench
+     below spans the full container, so the one command never shares its line
+     with a button or a column edge. */
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: clamp(32px, 4.4vw, 72px);
+  align-items: stretch;
+  padding-block-end: clamp(24px, 2.6vw, 36px);
+}
+
+.hero h1 { max-width: 16em; }
+
+/* The headline's one key word. "接着" is the whole product claim - the work is
+   not started over on another machine, it is picked back up - so it carries
+   emphasis the rest of the line does not. Three cues, because no single one
+   survives every reader: the brand ramp in the glyphs, an underline that draws
+   itself in on load, and (Chinese only) a caret, since 接着 is followed by more
+   sentence while the English key word is followed by the full stop. Position is
+   relative on the word and absolute on the two marks, so the line breaking of
+   the headline is untouched. */
+.hl {
+  position: relative;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.hl::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0.02em;
+  inset-block-end: -0.055em;
+  height: 0.052em;
+  border-radius: 999px;
+  background-image: linear-gradient(90deg, var(--accent), var(--brand));
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.45);
+  transform-origin: left center;
+  animation: hl-draw 900ms cubic-bezier(0.22, 0.68, 0.24, 1) both;
+}
+html[data-lang='zh'] .hl::before {
+  content: '';
+  position: absolute;
+  inset-block: 0.1em 0.14em;
+  inset-inline-start: calc(100% + 0.09em);
+  width: 0.05em;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.7);
+  animation: hl-caret 1150ms steps(1, end) infinite;
+}
+/* The gradient is the emphasis, not the message: without it the word is still
+   the underlined, coloured one, and it stays a plain colour rather than
+   disappearing behind a transparent fill. */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .hl {
+    background-image: linear-gradient(96deg, var(--accent) 6%, var(--brand) 62%, #dbe8ff 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: var(--accent);
+  }
+  /* A selection paints its own background, so the fill has to be handed back
+     or the selected word would stay gradient-on-gradient. */
+  .hl::selection {
+    background: var(--accent);
+    -webkit-text-fill-color: var(--page);
+    color: var(--page);
+  }
+}
+@keyframes hl-draw {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes hl-caret {
+  0%, 48% { opacity: 1; }
+  49%, 100% { opacity: 0; }
+}
+.hero__lead {
+  margin-block-start: 20px;
+  max-width: 30em;
+  font-size: clamp(17px, 1.2vw, 21px);
+  line-height: 1.62;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------- install */
+
+.install { margin-block-start: 24px; }
+
+.tablist {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--aw-radius-md);
+  background: rgba(255, 255, 255, 0.03);
+}
+.tab {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.tab:hover { color: var(--text); }
+.tab[aria-selected='true'] {
+  background: var(--brand-fill);
+  color: var(--on-brand);
+}
+.tab__badge {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  color: inherit;
+  opacity: 0.85;
+}
+
+.panel { margin-block-start: 16px; }
+.panel__note {
+  margin-block-start: 12px;
+  max-width: 46em;
+  color: var(--muted);
+  font-size: var(--text-small);
+}
+
+.cmd {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  margin-block-start: 14px;
+  padding: 12px 12px 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--aw-radius-md);
+}
+.cmd__code {
+  margin: 0;
+  word-break: normal;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--aw-font-mono);
+  font-size: var(--text-mono);
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+  -webkit-user-select: all;
+}
+.cmd__out {
+  margin: 0;
+  word-break: normal;
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--aw-radius-sm);
+  font-family: var(--aw-font-mono);
+  font-size: var(--text-mono);
+  line-height: 1.7;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cmd__stack { display: grid; gap: 12px; flex: 1 1 auto; min-width: 0; }
+/* The Android panel is the one panel whose block is a picture plus an action,
+   so it stays a row: QR left, download button right. */
+.cmd--media { flex-direction: row; align-items: center; }
+.cmd--media .button { max-width: 260px; }
+.copy {
+  appearance: none;
+  align-self: flex-end;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: var(--text-caption);
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--control-border);
+  border-radius: var(--aw-radius-sm);
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.copy:hover { border-color: var(--brand); }
+.copy[data-state='copied'] { color: var(--success); border-color: var(--success); }
+
+.install__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-block-start: 12px;
+  font-size: var(--text-caption);
+  color: var(--faint);
+}
+.install__facts span { display: inline-flex; align-items: center; gap: 6px; }
+.install__facts span::before {
+  content: '';
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font: inherit;
+  font-size: var(--text-small);
+  font-weight: 600;
+  line-height: 1;
+  padding: 12px 18px;
+  border-radius: var(--aw-radius-sm);
+  border: 1px solid transparent;
+  background: var(--brand-fill);
+  color: var(--on-brand);
+  cursor: pointer;
+  text-decoration: none;
+}
+.button:hover { background: var(--brand-fill-hover); text-decoration: none; }
+.button--ghost {
+  background: transparent;
+  border-color: var(--control-border);
+  color: var(--text);
+}
+.button--ghost:hover { background: var(--surface-alt); border-color: var(--brand); }
+.button--ghost .button__icon { color: var(--accent); }
+.button__icon { display: inline-flex; }
+.button--wide { width: 100%; }
+
+.hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  margin-block-start: 22px;
+}
+.hero__actions .hero__secondary {
+  font-size: var(--text-small);
+  color: var(--brand);
+}
+
+/* --------------------------------------------------------- topology art */
+
+.hero__visual { display: flex; }
+.hero__copy { align-self: center; }
+
+.hero__bench { padding-block-start: clamp(24px, 2.8vw, 40px); }
+.hero__bench .install { max-width: 820px; margin-block-start: 0; }
+.hero__bench .cmd { flex-direction: row; align-items: center; }
+.hero__bench .cmd .copy { align-self: auto; }
+
+.topo {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: clamp(14px, 1.8vw, 20px);
+  border: 1px solid var(--border);
+  border-radius: var(--aw-radius-xl);
+  background: linear-gradient(180deg, rgba(37, 49, 72, 0.42), rgba(13, 21, 36, 0.86));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+/* Centred in whatever height the copy column sets, with the caption pinned to
+   the bottom edge, so the two columns end on the same line. */
+.topo__svg { display: block; width: 100%; height: auto; margin-block: auto; font-family: var(--aw-font-sans); }
+.topo__zone { fill: rgba(47, 111, 228, 0.10); stroke: rgba(126, 176, 255, 0.42); stroke-width: 1.5; stroke-dasharray: 7 7; }
+.topo__zone-label { fill: var(--brand); font-size: 13px; font-weight: 600; letter-spacing: 0.04em; }
+.topo__node rect { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
+.topo__node text { fill: var(--text); font-size: 15px; font-weight: 500; }
+.topo__node--dim rect { fill: #0D1524; }
+.topo__node--dim text { fill: var(--faint); }
+.topo__hub circle { fill: var(--brand-fill); }
+.topo__hub .topo__lock-body { fill: #FFFFFF; }
+.topo__hub .topo__lock-shackle { fill: none; stroke: #FFFFFF; stroke-width: 2.6; stroke-linecap: round; }
+.topo__link { fill: none; stroke: var(--brand); stroke-width: 2; opacity: 0.5; }
+.topo__flow { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 5 11; animation: flow 3.6s linear infinite; }
+@keyframes flow { to { stroke-dashoffset: -32; } }
+.topo__blocked { fill: none; stroke: var(--faint); stroke-width: 1.5; stroke-dasharray: 4 6; }
+.topo__cross { stroke: var(--faint); stroke-width: 1.8; stroke-linecap: round; }
+.topo__note { fill: var(--faint); font-size: 12.5px; }
+.topo figcaption {
+  margin-block-start: 14px;
+  padding-block-start: 14px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-small);
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------ trust row */
+
+.trust {
+  position: relative;
+  border-top: 1px solid var(--border);
+}
+.trust__inner {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(16px, 2.4vw, 28px);
+  padding-block: 20px;
+}
+.trust__item { display: flex; gap: 10px; align-items: flex-start; }
+.trust__item svg { flex: 0 0 auto; margin-block-start: 2px; color: var(--brand); }
+.trust__item b { display: block; font-size: var(--text-small); }
+.trust__item span { display: block; font-size: var(--text-caption); color: var(--muted); }
+
+/* ------------------------------------------------------------- sections */
+
+.section { padding-block: var(--band); }
+.section--tint { background: var(--surface-alt); }
+.section--tight { padding-block: clamp(44px, 4.2vw, 64px); }
+/* Two tinted sections in a row need a seam, otherwise their two paddings read
+   as one accidental void instead of two ideas. */
+.section--tint + .section--tint { border-top: 1px solid var(--border); }
+.band--dark {
+  background: var(--page);
+  color: var(--text);
+  border-block: 1px solid var(--border);
+}
+
+.section__head { max-width: 44em; }
+.section__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-caption);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--brand);
+}
+.section__eyebrow::before {
+  content: '';
+  width: 14px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--brand);
+}
+.section__head h2 { margin-block-start: 12px; }
+.section__head p {
+  margin-block-start: 12px;
+  color: var(--muted);
+  max-width: 38em;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(16px, 2.2vw, 24px);
+  margin-block-start: clamp(28px, 3.4vw, 40px);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: clamp(20px, 2.4vw, 28px);
+  box-shadow: var(--card-shadow);
+}
+.card > h3 { margin-block-end: 18px; }
+
+.steps { display: grid; gap: 20px; counter-reset: step; }
+.steps li {
+  position: relative;
+  padding-inline-start: 40px;
+  counter-increment: step;
+}
+.steps li::before {
+  content: counter(step);
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 1px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-alt);
+  color: var(--brand);
+  font-size: var(--text-caption);
+  font-weight: 600;
+}
+.steps li:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  inset-inline-start: 13px;
+  inset-block: 30px -20px;
+  width: 1px;
+  background: var(--border);
+}
+.steps b { display: block; }
+.steps p { margin-block-start: 4px; font-size: var(--text-small); color: var(--muted); }
+.outcome {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-block-start: 9px;
+  padding: 4px 10px;
+  border-radius: var(--aw-radius-sm);
+  background: var(--success-bg);
+  color: var(--success);
+  font-size: var(--text-caption);
+}
+.outcome::before { content: '→'; font-size: 12px; }
+
+.details {
+  margin-block-start: clamp(24px, 3vw, 32px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  padding-inline: clamp(18px, 2.2vw, 26px);
+}
+.details > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  cursor: pointer;
+  list-style: none;
+  padding-block: 18px;
+  font-weight: 600;
+}
+.details > summary::-webkit-details-marker { display: none; }
+.details > summary::after {
+  content: '';
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-inline-end: 4px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform var(--aw-dur-fast) var(--aw-ease-standard);
+}
+.details[open] > summary::after { transform: rotate(-135deg); }
+.details__body {
+  padding-block-end: 20px;
+  color: var(--muted);
+  font-size: var(--text-small);
+  max-width: 56em;
+}
+.details__body p + p { margin-block-start: 12px; }
+
+/* --------------------------------------------------------- deck entry */
+
+.deck__inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.92fr);
+  gap: clamp(28px, 4.4vw, 64px);
+  align-items: center;
+}
+.deck__inner p { color: var(--muted); max-width: 34em; margin-block-start: 14px; }
+.deck__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-block-start: 24px;
+}
+.deck__meta {
+  margin-block-start: 16px;
+  font-size: var(--text-caption);
+  color: var(--faint);
+}
+.deck__preview {
+  display: block;
+  color: var(--text);
+  text-decoration: none;
+}
+.deck__preview:hover { text-decoration: none; }
+.deck__frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: clamp(20px, 3vw, 34px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--aw-radius-lg);
+  background:
+    radial-gradient(60% 70% at 18% 12%, rgba(47, 111, 228, 0.42), transparent 72%),
+    linear-gradient(160deg, #111A2B, #060A12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: transform var(--aw-dur-base) var(--aw-ease-standard), border-color var(--aw-dur-base) var(--aw-ease-standard);
+}
+.deck__preview:hover .deck__frame,
+.deck__preview:focus-visible .deck__frame {
+  transform: translateY(-3px);
+  border-color: var(--brand);
+}
+.deck__frame-eyebrow {
+  font-family: var(--aw-font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.18em;
+  color: var(--brand);
+}
+.deck__frame-title {
+  font-size: clamp(22px, 2.6vw, 34px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.deck__frame-sub { font-size: var(--text-small); color: var(--muted); }
+.deck__play {
+  position: absolute;
+  inset-inline-end: clamp(16px, 2.4vw, 26px);
+  inset-block-end: clamp(16px, 2.4vw, 26px);
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--brand-fill);
+  color: #FFFFFF;
+}
+.deck__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-block-start: 16px;
+}
+.deck__chips span {
+  font-size: var(--text-caption);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--aw-radius-pill);
+  padding: 4px 10px;
+}
+
+/* ------------------------------------------------------------- verify */
+
+.verify__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(16px, 2.2vw, 24px);
+  margin-block-start: clamp(28px, 3.4vw, 40px);
+}
+.verify__grid .card > h3 { margin-block-end: 6px; }
+.verify__grid .card > p { font-size: var(--text-small); color: var(--muted); }
+.verify__grid .cmd { align-items: stretch; }
+.verify__note {
+  margin-block-start: 18px;
+  font-size: var(--text-small);
+  color: var(--muted);
+  max-width: 52em;
+}
+
+/* ------------------------------------------------------ not ready yet */
+
+.limits__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin-block-start: clamp(28px, 3.4vw, 40px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--border);
+  overflow: hidden;
+}
+.limits__item { background: var(--surface); padding: clamp(16px, 2vw, 22px); }
+.limits__item h3 { font-size: var(--text-small); }
+.limits__item .limits__state {
+  display: block;
+  margin-block-start: 2px;
+  font-size: var(--text-caption);
+  font-weight: 500;
+  color: var(--muted);
+}
+.limits__item .limits__state--blocked { color: var(--warning); }
+.limits__item p { margin-block-start: 10px; font-size: var(--text-caption); color: var(--muted); }
+.limits__policy {
+  margin-block-start: 18px;
+  font-size: var(--text-small);
+  color: var(--muted);
+  max-width: 44em;
+}
+
+/* ---------------------------------------------------------------- faq */
+
+.faq { margin-block-start: clamp(24px, 3vw, 32px); display: grid; gap: 10px; }
+.faq details {
+  border: 1px solid var(--border);
+  border-radius: var(--aw-radius-md);
+  background: var(--surface);
+}
+.faq summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  cursor: pointer;
+  list-style: none;
+  padding: 15px 18px;
+  font-weight: 600;
+}
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after {
+  content: '';
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform var(--aw-dur-fast) var(--aw-ease-standard);
+}
+.faq details[open] summary::after { transform: rotate(-135deg); }
+.faq .answer {
+  padding: 0 18px 18px;
+  max-width: 62em;
+  color: var(--muted);
+  font-size: var(--text-small);
+}
+.faq .answer p + p { margin-block-start: 10px; }
+.faq .answer .cmd {
+  flex-direction: row;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  margin-block-start: 12px;
+}
+.faq .answer .cmd .copy { align-self: auto; }
+
+/* -------------------------------------------------------------- footer */
+
+.footer {
+  background: var(--page);
+  color: var(--text);
+  border-top: 1px solid var(--border);
+  padding-block: clamp(40px, 5vw, 64px) 28px;
+}
+.footer__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr));
+  gap: clamp(24px, 3.4vw, 48px);
+}
+.footer__about p {
+  margin-block-start: 16px;
+  max-width: 34em;
+  font-size: var(--text-small);
+  color: var(--muted);
+}
+.footer h2 {
+  font-size: var(--text-caption);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+.footer ul { margin-block-start: 14px; display: grid; gap: 9px; }
+.footer ul a { font-size: var(--text-small); }
+.footer ul a.mono { font-family: var(--aw-font-mono); }
+.footer__note {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: 8px 24px;
+  margin-block-start: clamp(28px, 3.4vw, 44px);
+  padding-block-start: 20px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-caption);
+  color: var(--faint);
+  line-height: 1.9;
+}
+.footer__note p { font-size: var(--text-caption); color: var(--faint); }
+
+/* ------------------------------------------------------------ responsive */
+
+/* Wider screens get a wider measure and a larger reading scale, instead of a
+   1120px column floating in the middle of a 27-inch display. */
+@media (min-width: 1280px) {
+  :root { --wrap: 1200px; }
+}
+
+@media (min-width: 1600px) {
+  :root {
+    --wrap: 1296px;
+    --text-body: 17px;
+    --text-small: 15px;
+    --text-caption: 14px;
+    --text-mono: 14.5px;
+    --text-heading: 22px;
+  }
+}
+
+@media (min-width: 1920px) {
+  :root { --wrap: 1400px; }
+}
+
+@media (max-width: 980px) {
+  .limits__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* One column, and the order that puts the action before the illustration:
+     the headline and its line, then the command, then the diagram. */
+  .hero { display: flex; flex-direction: column; }
+  .hero__inner { display: contents; }
+  .hero__copy, .hero__visual { width: 100%; max-width: var(--wrap); margin-inline: auto; padding-inline: var(--gutter); }
+  .hero__copy { order: 1; }
+  .hero__bench { order: 2; }
+  .hero__visual { order: 3; }
+  .trust { order: 4; }
+  .deck__inner { grid-template-columns: 1fr; }
+  .deck__preview { order: -1; }
+  .trust__inner { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .footer__grid { grid-template-columns: 1fr 1fr; }
+  .footer__about { grid-column: 1 / -1; }
+}
+
+@media (max-width: 720px) {
+  .hero__bench .cmd, .faq .answer .cmd { flex-direction: column; align-items: stretch; }
+  .hero__bench .cmd .copy, .faq .answer .cmd .copy { align-self: flex-end; }
+  .faq .answer .cmd { width: auto; }
+  .grid-2, .verify__grid { grid-template-columns: 1fr; }
+  .nav { gap: 0; }
+  .nav a { padding: 8px 9px; }
+  .control span { display: none; }
+  .control { padding: 8px 10px; }
+}
+
+@media (max-width: 560px) {
+  /* The four entries plus two controls and the wordmark are 476px wide at this
+     size. Dropping the wordmark (the mark alone is the lockup) keeps every
+     entry visible instead of hiding them behind a silent horizontal scroll. */
+  .lockup span { display: none; }
+}
+
+@media (max-width: 520px) {
+  .limits__grid { grid-template-columns: 1fr; }
+  .trust__inner { grid-template-columns: 1fr; }
+  .footer__grid { grid-template-columns: 1fr; }
+  .cmd { flex-direction: column; align-items: stretch; }
+  .copy { justify-content: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main" data-zh="跳到主要内容" data-en="Skip to main content">跳到主要内容</a>
+
+<header class="topbar on-ink">
+  <div class="wrap topbar__inner">
+    <a class="lockup" href="/" aria-label="Anywhere Work">
+      <svg width="26" height="26" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+        <rect width="64" height="64" rx="15" fill="#080D17"/>
+        <circle cx="32" cy="33" r="13" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-dasharray="64 20" transform="rotate(-45 32 33)"/>
+        <circle cx="42" cy="23" r="6" fill="#22D3EE"/>
+      </svg>
+      <span>Anywhere Work</span>
+    </a>
+    <nav class="nav" aria-label="页面导航">
+      <a href="#quickstart" data-zh="接入" data-en="Install">接入</a>
+      <a href="#deck" data-entry data-zh="演示" data-en="Demo">演示</a>
+      <a href="#verify" data-zh="验证" data-en="Verify">验证</a>
+      <a href="#faq" data-zh="常见问题" data-en="FAQ">常见问题</a>
+    </nav>
+    <div class="controls">
+      <button class="control" id="lang" type="button" aria-label="切换到英文" data-zh="EN" data-en="中文">EN</button>
+      <button class="control" id="theme" type="button" aria-label="切换主题">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <span id="theme-label" data-zh="跟随系统" data-en="Auto">跟随系统</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero on-ink" id="top">
+    <div class="hero__glow" aria-hidden="true"></div>
+    <div class="hero__grid" aria-hidden="true"></div>
+
+    <div class="wrap hero__inner">
+      <div class="hero__copy">
+        <h1 data-zh="在任何地方，接着干你的活。" data-en="Your machines, anywhere."
+            data-mark-zh="接着" data-mark-en="anywhere">在任何地方，<span class="hl">接着</span>干你的活。</h1>
+
+        <p class="hero__lead"
+           data-zh="一条命令，把你的 Mac、Linux 或 Android 接进只属于你的私有网络。同账号的设备互相直达；网外看不到，也连不上。"
+           data-en="One command puts your Mac, Linux or Android device on a private network of your own. Devices on the same account reach each other; nobody outside can see or reach them.">一条命令，把你的 Mac、Linux 或 Android 接进只属于你的私有网络。同账号的设备互相直达；网外看不到，也连不上。</p>
+      </div>
+
+      <div class="hero__visual">
+        <figure class="topo">
+          <svg class="topo__svg" viewBox="0 0 600 392" role="img" aria-labelledby="topo-title topo-desc">
+            <title id="topo-title" data-zh="只有你的设备在网内" data-en="Only your devices are on the network">只有你的设备在网内</title>
+            <desc id="topo-desc" data-zh="办公室的 Mac、家里的 Mac 和你的手机，通过一条私有通道互相直达；网外的设备看不到它们，也连不上。" data-en="Your office Mac, your home Mac and your phone reach each other over one private tunnel; devices outside the network cannot see or reach them.">办公室的 Mac、家里的 Mac 和你的手机，通过一条私有通道互相直达；网外的设备看不到它们，也连不上。</desc>
+
+            <rect class="topo__zone" x="24" y="52" width="340" height="312" rx="24"/>
+            <text class="topo__zone-label" x="48" y="86"
+                  data-zh="你的私有网络" data-en="Your private network">你的私有网络</text>
+
+            <g class="topo__node">
+              <rect x="48" y="106" width="150" height="48" rx="13"/>
+              <text x="123" y="135" text-anchor="middle" data-zh="办公室 Mac" data-en="Office Mac">办公室 Mac</text>
+            </g>
+            <g class="topo__node">
+              <rect x="48" y="178" width="150" height="48" rx="13"/>
+              <text x="123" y="207" text-anchor="middle" data-zh="家里 Mac" data-en="Home Mac">家里 Mac</text>
+            </g>
+            <g class="topo__node">
+              <rect x="48" y="250" width="150" height="48" rx="13"/>
+              <text x="123" y="279" text-anchor="middle" data-zh="你的手机" data-en="Your phone">你的手机</text>
+            </g>
+
+            <path class="topo__link" d="M198 130 C 238 130 246 202 266 202"/>
+            <path class="topo__link" d="M198 202 H 266"/>
+            <path class="topo__link" d="M198 274 C 238 274 246 202 266 202"/>
+            <path class="topo__flow" d="M198 130 C 238 130 246 202 266 202"/>
+            <path class="topo__flow" d="M198 202 H 266" style="animation-delay:-1.1s"/>
+            <path class="topo__flow" d="M198 274 C 238 274 246 202 266 202" style="animation-delay:-2.2s"/>
+
+            <g class="topo__hub">
+              <circle cx="298" cy="202" r="30"/>
+              <rect class="topo__lock-body" x="288.5" y="199" width="19" height="14" rx="3.5"/>
+              <path class="topo__lock-shackle" d="M293 199v-5a5 5 0 0 1 10 0v5"/>
+            </g>
+            <text class="topo__note" x="298" y="300" text-anchor="middle"
+                  data-zh="端到端私有通道" data-en="Private tunnel">端到端私有通道</text>
+
+            <g class="topo__node topo__node--dim">
+              <rect x="428" y="106" width="148" height="48" rx="13"/>
+              <text x="502" y="135" text-anchor="middle" data-zh="别人的设备" data-en="Everyone else">别人的设备</text>
+            </g>
+            <path class="topo__blocked" d="M364 202 H 392 V 130 H 428"/>
+            <path class="topo__cross" d="M385 162 L 399 176 M399 162 L 385 176"/>
+            <text class="topo__note" x="502" y="182" text-anchor="middle"
+                  data-zh="看不到 · 连不上" data-en="Cannot see or reach you">看不到 · 连不上</text>
+          </svg>
+          <figcaption data-zh="办公室的 Mac、家里的 Mac、手机同账号互相直达；网外看不到，也连不上。"
+                      data-en="Your office Mac, home Mac and phone reach each other on one account; from outside, nobody can see or reach you.">办公室的 Mac、家里的 Mac、手机同账号互相直达；网外看不到，也连不上。</figcaption>
+        </figure>
+      </div>
+    </div>
+
+
+    <div class="wrap hero__bench">
+        <div class="install">
+          <div class="tablist" role="tablist" aria-label="选择设备">
+            <button class="tab" role="tab" id="tab-mac" aria-controls="panel-mac" aria-selected="true" type="button">
+              macOS
+            </button>
+            <button class="tab" role="tab" id="tab-linux" aria-controls="panel-linux" aria-selected="false" tabindex="-1" type="button">Linux</button>
+            <button class="tab" role="tab" id="tab-android" aria-controls="panel-android" aria-selected="false" tabindex="-1" type="button">Android</button>
+            <button class="tab" role="tab" id="tab-windows" aria-controls="panel-windows" aria-selected="false" tabindex="-1" type="button">
+              Windows <span class="tab__badge" data-zh="接入命令可用" data-en="Onboarding ready">接入命令可用</span>
+            </button>
+            <button class="tab" role="tab" id="tab-ios" aria-controls="panel-ios" aria-selected="false" tabindex="-1" type="button">
+              iOS <span class="tab__badge" data-zh="开发中" data-en="Soon">开发中</span>
+            </button>
+          </div>
+
+          <div class="panel" role="tabpanel" id="panel-mac" aria-labelledby="tab-mac" tabindex="0">
+            <div class="cmd">
+              <pre class="cmd__code" id="cmd-unix">curl -fsSL https://anywhere.example.com/install.sh | sh</pre>
+              <button class="copy" type="button" data-copy="cmd-unix" data-label-zh="复制安装命令" data-label-en="Copy the install command" aria-describedby="copy-status">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+                <span data-zh="复制" data-en="Copy">复制</span>
+              </button>
+            </div>
+            <p class="panel__note" data-zh="打开「终端」粘贴执行。不改你的默认网关和系统代理。" data-en="Paste it into Terminal. It leaves your gateway and proxy alone.">打开「终端」粘贴执行。不改你的默认网关和系统代理。</p>
+            <p class="install__facts">
+              <span data-zh="十几秒装完" data-en="Installs in seconds">十几秒装完</span>
+              <span data-zh="装完 DSH 一起常驻" data-en="Sets up DSH as well">装完 DSH 一起常驻</span>
+              <span data-zh="不改系统代理" data-en="Leaves your proxy alone">不改系统代理</span>
+            </p>
+          </div>
+
+          <div class="panel" role="tabpanel" id="panel-linux" aria-labelledby="tab-linux" tabindex="0" hidden>
+            <div class="cmd">
+              <pre class="cmd__code" id="cmd-linux">curl -fsSL https://anywhere.example.com/install.sh | sh</pre>
+              <button class="copy" type="button" data-copy="cmd-linux" data-label-zh="复制安装命令" data-label-en="Copy the install command">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+                <span data-zh="复制" data-en="Copy">复制</span>
+              </button>
+            </div>
+            <p class="panel__note" data-zh="同一条命令，支持 amd64 与 arm64 的 glibc 发行版；需要 root 时脚本自己调用 sudo。" data-en="Same command, on amd64 and arm64 glibc distributions; it calls sudo when it needs root.">同一条命令，支持 amd64 与 arm64 的 glibc 发行版；需要 root 时脚本自己调用 sudo。</p>
+            <p class="install__facts">
+              <span data-zh="客户端写到 /usr/local/bin" data-en="Client goes to /usr/local/bin">客户端写到 /usr/local/bin</span>
+              <span data-zh="DSH 用用户级 systemd 单元" data-en="DSH runs as a user systemd unit">DSH 用用户级 systemd 单元</span>
+              <span data-zh="容器里加 --no-service" data-en="Add --no-service in a container">容器里加 --no-service</span>
+            </p>
+          </div>
+
+          <div class="panel" role="tabpanel" id="panel-android" aria-labelledby="tab-android" tabindex="0" hidden>
+            <div class="cmd cmd--media">
+              <img src="qr-phone.svg" width="132" height="132" alt="下载页二维码：https://anywhere.example.com/">
+              <div class="cmd__stack">
+                <a class="button button--wide" href="https://anywhere.example.com/AnywhereWork.apk" download>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><path d="M12 3v12M7 11l5 5 5-5M5 21h14"/></svg>
+                  <span data-zh="下载 Android 安装包" data-en="Download for Android">下载 Android 安装包</span>
+                </a>
+                <p class="meta" id="apk-meta"
+                   data-zh="arm64 · 需要系统能运行 Android 应用 · App 内可自更新"
+                   data-en="arm64 · the system must be able to run Android apps · updates itself in-app">arm64 · 需要系统能运行 Android 应用 · App 内可自更新</p>
+              </div>
+            </div>
+            <p class="panel__note" data-zh="手机不需要电脑：用相机扫码，或者直接在手机上打开这个地址。" data-en="A phone needs no computer: scan the code, or open this address on the phone itself.">手机不需要电脑：用相机扫码，或者直接在手机上打开这个地址。</p>
+            <p class="install__facts">
+              <span data-zh="在 App 里登录" data-en="Sign in inside the app">在 App 里登录</span>
+              <span data-zh="和电脑进同一个分组" data-en="Same group as your computer">和电脑进同一个分组</span>
+            </p>
+          </div>
+
+          <div class="panel" role="tabpanel" id="panel-windows" aria-labelledby="tab-windows" tabindex="0" hidden>
+            <div class="cmd">
+              <pre class="cmd__code" id="cmd-powershell">iwr https://anywhere.example.com/install.ps1 -UseBasicParsing | iex</pre>
+              <button class="copy" type="button" data-copy="cmd-powershell" data-label-zh="复制安装命令" data-label-en="Copy the install command">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+                <span data-zh="复制" data-en="Copy">复制</span>
+              </button>
+            </div>
+            <p class="panel__note" data-zh="在 PowerShell 里粘贴执行。装后台服务那一步需要管理员权限，脚本会明确告诉你。" data-en="Paste it into PowerShell. Installing the background service needs an administrator prompt, and the script says so.">在 PowerShell 里粘贴执行。装后台服务那一步需要管理员权限，脚本会明确告诉你。</p>
+            <p class="install__facts">
+              <span data-zh="一条命令接入私网" data-en="Joins the private network in one command">一条命令接入私网</span>
+              <span data-zh="装完 DSH 一起常驻" data-en="Sets up DSH as well">装完 DSH 一起常驻</span>
+              <span data-zh="不改系统代理" data-en="Leaves your proxy alone">不改系统代理</span>
+            </p>
+            <p class="meta" data-zh="桌面客户端安装包随下一次发版提供。" data-en="The desktop app installer arrives with the next release.">桌面客户端安装包随下一次发版提供。</p>
+          </div>
+
+          <div class="panel" role="tabpanel" id="panel-ios" aria-labelledby="tab-ios" tabindex="0" hidden>
+            <p class="panel__note" data-zh="iOS 暂时装不了。" data-en="iOS is not available yet.">iOS 暂时装不了。</p>
+            <p class="install__facts">
+              <span data-zh="手机上先用 Android 版本" data-en="Use the Android build on a phone">手机上先用 Android 版本</span>
+              <span data-zh="Mac 已经可以一条命令接入" data-en="A Mac already installs with one command">Mac 已经可以一条命令接入</span>
+            </p>
+            <p class="meta"><a href="#limits" data-zh="看当前的支持情况" data-en="See what is supported today">看当前的支持情况</a></p>
+          </div>
+        </div>
+
+        <div class="hero__actions">
+          <a class="button button--ghost" href="#deck">
+            <span class="button__icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" focusable="false"><path d="M8 5.5v13l11-6.5z"/></svg>
+            </span>
+            <span data-zh="看 5 分钟演示" data-en="Watch the 5-minute demo">看 5 分钟演示</span>
+          </a>
+          <a class="hero__secondary" href="/install.sh" data-zh="先读安装脚本" data-en="Read the installer first">先读安装脚本</a>
+        </div>
+        <p class="visually-hidden" id="copy-status" role="status" aria-live="polite"></p>
+    </div>
+    <div class="trust">
+      <div class="wrap trust__inner">
+        <div class="trust__item">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><path d="M12 3l7 3v6c0 4.4-3 8.3-7 9-4-.7-7-4.6-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+          <span><b data-zh="逐个校验" data-en="Verified">逐个校验</b><span data-zh="安装包比对 SHA-256，不匹配就中止" data-en="Every archive is compared against its SHA-256">安装包比对 SHA-256，不匹配就中止</span></span>
+        </div>
+        <div class="trust__item">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><path d="M14 3v5h5"/><path d="M6 3h8l5 5v13H6z"/><path d="M9 13h6M9 17h4"/></svg>
+          <span><b data-zh="脚本可审阅" data-en="Auditable">脚本可审阅</b><span data-zh="安装前可以先读" data-en="Read it before you run it">安装前可以先读</span></span>
+        </div>
+        <div class="trust__item">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <span><b data-zh="两分钟生效" data-en="Two minutes">两分钟生效</b><span data-zh="登录后自动建组，不需要审批" data-en="Your group is created automatically, no approval">登录后自动建组，不需要审批</span></span>
+        </div>
+        <div class="trust__item">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          <span><b data-zh="只对你可见" data-en="Only yours">只对你可见</b><span data-zh="同组之外看不到、连不上你的机器" data-en="Nobody outside your group can see or reach you">同组之外看不到、连不上你的机器</span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="quickstart">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__eyebrow" data-zh="接下来" data-en="Next">接下来</p>
+        <h2 data-zh="装完会发生什么" data-en="What happens after you run it">装完会发生什么</h2>
+        <p data-zh="每一步都有明确的结果，卡住了也能退回来。"
+           data-en="Every step ends in a concrete result, and there is a way back if it fails.">每一步都有明确的结果，卡住了也能退回来。</p>
+      </div>
+
+      <div class="grid-2">
+        <article class="card">
+          <h3 data-zh="电脑上" data-en="On a computer">电脑上</h3>
+          <ol class="steps">
+            <li>
+              <b data-zh="执行安装命令" data-en="Run the install command">执行安装命令</b>
+              <p data-zh="脚本下载客户端并校验 SHA-256。" data-en="The script downloads the client and verifies its SHA-256.">脚本下载客户端并校验 SHA-256。</p>
+              <span class="outcome" data-zh="校验通过，开始安装" data-en="Checksum matches, install starts">校验通过，开始安装</span>
+            </li>
+            <li>
+              <b data-zh="在浏览器里登录" data-en="Sign in from the browser">在浏览器里登录</b>
+              <p data-zh="默认飞书登录，也可以切账号 + 密码。" data-en="Feishu is the default; account and password also work.">默认飞书登录，也可以切账号 + 密码。</p>
+              <span class="outcome" data-zh="服务端自动建立只属于你的分组" data-en="Your own group is created server-side">服务端自动建立只属于你的分组</span>
+            </li>
+            <li>
+              <b data-zh="回到终端确认" data-en="Confirm in the terminal">回到终端确认</b>
+              <p data-zh="执行 anywhere status，看到 Management 与 Signal 都是 Connected。" data-en="Run anywhere status and check that Management and Signal both report Connected.">执行 anywhere status，看到 Management 与 Signal 都是 Connected。</p>
+              <span class="outcome" data-zh="你自己的机器出现在机器列表里" data-en="Your machines show up in your own list">你自己的机器出现在机器列表里</span>
+            </li>
+          </ol>
+        </article>
+
+        <article class="card">
+          <h3 data-zh="手机上" data-en="On a phone">手机上</h3>
+          <ol class="steps">
+            <li>
+              <b data-zh="装好并打开 App" data-en="Install and open the app">装好并打开 App</b>
+              <p data-zh="不需要电脑，也不需要先接上私有网络。" data-en="No computer needed, and no need to be on the network first.">不需要电脑，也不需要先接上私有网络。</p>
+              <span class="outcome" data-zh="看到登录页" data-en="The sign-in screen appears">看到登录页</span>
+            </li>
+            <li>
+              <b data-zh="用同一个公司账号登录" data-en="Sign in with the same account">用同一个公司账号登录</b>
+              <p data-zh="飞书优先，也可以切账号密码。" data-en="Feishu first; account and password also work.">飞书优先，也可以切账号密码。</p>
+              <span class="outcome" data-zh="手机进入和电脑相同的分组" data-en="The phone joins the same group as your computer">手机进入和电脑相同的分组</span>
+            </li>
+            <li>
+              <b data-zh="点开一台机器" data-en="Open one of your machines">点开一台机器</b>
+              <p data-zh="在 App 内直接打开那台机器的工作区。" data-en="The workspace opens inside the app.">在 App 内直接打开那台机器的工作区。</p>
+              <span class="outcome" data-zh="手机、电脑共用一份工作现场" data-en="Phone and computer share one working session">手机、电脑共用一份工作现场</span>
+            </li>
+          </ol>
+        </article>
+      </div>
+
+      <details class="details">
+        <summary data-zh="脚本到底做了什么" data-en="What the script actually does">脚本到底做了什么</summary>
+        <div class="details__body">
+          <p data-zh="校验安装包、把客户端装到 /usr/local/bin、注册后台服务，再装好 DSH 并让它常驻。除了客户端要写 /usr/local/bin，其余都在你自己的账号下完成。"
+             data-en="It verifies the archive, installs the client to /usr/local/bin, registers a background service, then installs DSH and keeps it running. Apart from the client's own directory, all of it stays inside your account.">校验安装包、把客户端装到 /usr/local/bin、注册后台服务，再装好 DSH 并让它常驻。除了客户端要写 /usr/local/bin，其余都在你自己的账号下完成。</p>
+          <p data-zh="不改默认网关和系统代理，只解析私有网络内部的域名。装完终端会提示去 router-admin.example.com 申请模型 key，填进 DSH 之前对话会报鉴权失败。"
+             data-en="It leaves your default gateway and system proxy alone, and only resolves names inside the private network. The terminal then points at router-admin.example.com for a model key; conversations fail with an authentication error until you paste it into DSH.">不改默认网关和系统代理，只解析私有网络内部的域名。装完终端会提示去 router-admin.example.com 申请模型 key，填进 DSH 之前对话会报鉴权失败。</p>
+          <p><a href="/install.sh" class="mono" data-zh="查看脚本源码" data-en="Read the script source">查看脚本源码</a>
+             <span class="meta" data-zh="（想先空跑就加 --dry-run）" data-en=" (or dry-run it with --dry-run)">（想先空跑就加 --dry-run）</span></p>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section class="section band--dark on-ink" id="deck">
+    <div class="wrap deck__inner">
+      <div>
+        <p class="section__eyebrow" data-zh="产品演示" data-en="Demo">产品演示</p>
+        <h2 data-zh="5 分钟，看它怎么用" data-en="Five minutes, start to finish">5 分钟，看它怎么用</h2>
+        <p data-zh="从问题讲到现场演示：手机上怎么派活、怎么确认、断网换了设备怎么续上。带配音和字幕，也可以直接翻页看。"
+           data-en="From the problem to the live demo: handing work to a phone, approving it there, and picking it back up on another device. Narrated and subtitled, or just page through it.">从问题讲到现场演示：手机上怎么派活、怎么确认、断网换了设备怎么续上。带配音和字幕，也可以直接翻页看。</p>
+        <div class="deck__chips">
+          <span data-zh="16 页" data-en="16 slides">16 页</span>
+          <span data-zh="带配音与字幕" data-en="Narration and subtitles">带配音与字幕</span>
+          <span data-zh="可导出 PDF" data-en="Exports to PDF">可导出 PDF</span>
+        </div>
+        <div class="deck__actions">
+          <a class="button" href="/deck/" data-zh="打开演示" data-en="Open the demo">打开演示</a>
+          <a class="button button--ghost" href="/deck/anywhere-work-deck.pdf" data-zh="下载 PDF" data-en="Download the PDF">下载 PDF</a>
+        </div>
+      </div>
+
+      <a class="deck__preview" href="/deck/" aria-label="打开产品演示">
+        <div class="deck__frame">
+          <span class="deck__frame-eyebrow">ANYWHERE WORK</span>
+          <span class="deck__frame-title" data-zh="随身工位" data-en="Your desk, anywhere">随身工位</span>
+          <span class="deck__frame-sub" data-zh="公司自己的 AI，现在在手机上也能用了" data-en="The company's own AI, now usable from a phone">公司自己的 AI，现在在手机上也能用了</span>
+          <span class="deck__play" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" focusable="false"><path d="M8 5.5v13l11-6.5z"/></svg>
+          </span>
+        </div>
+      </a>
+    </div>
+  </section>
+
+  <section class="section" id="verify">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__eyebrow" data-zh="验证" data-en="Verify">验证</p>
+        <h2 data-zh="确认自己接上了" data-en="Confirm you are connected">确认自己接上了</h2>
+        <p data-zh="设备上跑两条命令就够了。第一条看通道，第二条看你能看到谁。"
+           data-en="Two commands on the device are enough. The first shows the tunnel, the second shows who you can see.">设备上跑两条命令就够了。第一条看通道，第二条看你能看到谁。</p>
+      </div>
+
+      <div class="verify__grid">
+        <article class="card">
+          <h3 data-zh="通道状态" data-en="Tunnel state">通道状态</h3>
+          <p data-zh="Management 与 Signal 都是 Connected 就算接上了。" data-en="Connected on both Management and Signal means you are on.">Management 与 Signal 都是 Connected 就算接上了。</p>
+          <div class="cmd on-ink">
+            <div class="cmd__stack">
+              <pre class="cmd__code" id="cmd-status">anywhere status</pre>
+              <pre class="cmd__out">Management: Connected
+Signal:     Connected
+Your machines: 2
+This device: studio-mac.vpn</pre>
+            </div>
+            <button class="copy" type="button" data-copy="cmd-status" data-label-zh="复制状态命令" data-label-en="Copy the status command">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+              <span data-zh="复制" data-en="Copy">复制</span>
+            </button>
+          </div>
+          <p class="verify__note" data-zh="装了后台服务的机器重启后会自动恢复连接。"
+             data-en="A machine with the background service reconnects by itself after a reboot.">装了后台服务的机器重启后会自动恢复连接。</p>
+        </article>
+
+        <article class="card">
+          <h3 data-zh="你能看到谁" data-en="Who you can see">你能看到谁</h3>
+          <p data-zh="列出来的应该只有你自己的机器。" data-en="The list should contain your own machines only.">列出来的应该只有你自己的机器。</p>
+          <div class="cmd on-ink">
+            <div class="cmd__stack">
+              <pre class="cmd__code" id="cmd-peers">anywhere machines</pre>
+              <pre class="cmd__out">办公室 Mac     100.64.x.x
+家里 Mac       100.64.x.y
+你的手机       100.64.x.z</pre>
+            </div>
+            <button class="copy" type="button" data-copy="cmd-peers" data-label-zh="复制机器列表命令" data-label-en="Copy the machines command">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+              <span data-zh="复制" data-en="Copy">复制</span>
+            </button>
+          </div>
+          <p class="verify__note" data-zh="列表里只有你自己的机器，别人的机器 ping 不通。"
+             data-en="The list holds your own machines only; nobody else's answers a ping.">列表里只有你自己的机器，别人的机器 ping 不通。</p>
+        </article>
+      </div>
+
+      <p class="verify__note" data-zh="管理员开通了网页入口的机器，浏览器打开 dsh.&lt;机器名&gt;.netbird 就能进去。"
+         data-en="For a machine an administrator has opened a web entry for, dsh.&lt;machine&gt;.netbird opens it in a browser.">管理员开通了网页入口的机器，浏览器打开 dsh.&lt;机器名&gt;.netbird 就能进去。</p>
+    </div>
+  </section>
+
+  <section class="section section--tint section--tight" id="limits">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__eyebrow" data-zh="暂不支持" data-en="Not supported yet">暂不支持</p>
+        <h2 data-zh="这些设备现在还不行" data-en="Not available on these yet">这些设备现在还不行</h2>
+      </div>
+
+      <div class="limits__grid">
+        <div class="limits__item">
+          <h3>Windows</h3>
+          <span class="limits__state" data-zh="接入可用" data-en="Onboarding ready">接入可用</span>
+          <p data-zh="接入私网已经有 PowerShell 安装脚本；桌面客户端安装包随下一次发版提供。"
+             data-en="Joining the private network has a PowerShell installer; the desktop app installer arrives with the next release.">接入私网已经有 PowerShell 安装脚本；桌面客户端安装包随下一次发版提供。</p>
+        </div>
+        <div class="limits__item">
+          <h3>iOS</h3>
+          <span class="limits__state" data-zh="在做" data-en="In progress">在做</span>
+          <p data-zh="只能走 TestFlight 或 App Store，要等 Apple 审核。"
+             data-en="It has to ship through TestFlight or the App Store, so it waits on Apple's review.">只能走 TestFlight 或 App Store，要等 Apple 审核。</p>
+        </div>
+        <div class="limits__item">
+          <h3 data-zh="鸿蒙 NEXT" data-en="HarmonyOS NEXT">鸿蒙 NEXT</h3>
+          <span class="limits__state limits__state--blocked" data-zh="装不了" data-en="Cannot install">装不了</span>
+          <p data-zh="不再兼容 Android 应用，也没有单独做一版。HarmonyOS 4 及更早可以照常安装。"
+             data-en="It dropped Android app support and there is no separate build. HarmonyOS 4 and earlier still install.">不再兼容 Android 应用，也没有单独做一版。HarmonyOS 4 及更早可以照常安装。</p>
+        </div>
+        <div class="limits__item">
+          <h3 data-zh="推送通知" data-en="Push notifications">推送通知</h3>
+          <span class="limits__state limits__state--blocked" data-zh="没有" data-en="None">没有</span>
+          <p data-zh="手机上不打开 App 就收不到提醒。"
+             data-en="Nothing notifies you unless the app is open.">手机上不打开 App 就收不到提醒。</p>
+        </div>
+      </div>
+
+      <p class="limits__policy" data-zh="iOS 还没有确定日期；Windows 的接入命令已可用，桌面客户端随发版提供。"
+         data-en="iOS has no date yet; Windows onboarding is available and its desktop app follows a release.">iOS 还没有确定日期；Windows 的接入命令已可用，桌面客户端随发版提供。</p>
+    </div>
+  </section>
+
+  <section class="section section--tint section--tight" id="faq">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__eyebrow" data-zh="常见问题" data-en="FAQ">常见问题</p>
+        <h2 data-zh="遇到问题先看这里" data-en="Start here if something breaks">遇到问题先看这里</h2>
+      </div>
+
+      <div class="faq">
+        <details>
+          <summary data-zh="登录后看不到机器" data-en="I signed in but see no machines">登录后看不到机器</summary>
+          <div class="answer">
+            <p data-zh="分组分配最多需要两分钟，稍等一下再刷新。只接入了一台设备时，本来就看不到别的机器；再接入第二台就会互相出现。"
+               data-en="Group assignment can take up to two minutes; wait and refresh. With a single device there is nothing else to see yet; connect a second one and they appear to each other.">分组分配最多需要两分钟，稍等一下再刷新。只接入了一台设备时，本来就看不到别的机器；再接入第二台就会互相出现。</p>
+          </div>
+        </details>
+        <details>
+          <summary data-zh="浏览器没有自动打开" data-en="The browser did not open">浏览器没有自动打开</summary>
+          <div class="answer">
+            <p data-zh="脚本会打印一条登录链接，复制到浏览器打开即可。链接有时效，过期就重新执行 anywhere up。"
+               data-en="The script prints a sign-in link; open it in any browser. The link expires, so run anywhere up again if it stops working.">脚本会打印一条登录链接，复制到浏览器打开即可。链接有时效，过期就重新执行 anywhere up。</p>
+          </div>
+        </details>
+        <details>
+          <summary data-zh="dsh.&lt;机器名&gt;.netbird 打不开" data-en="dsh.&lt;machine&gt;.netbird does not open">dsh.&lt;机器名&gt;.netbird 打不开</summary>
+          <div class="answer">
+            <p data-zh="三种可能：那台机器没有网页入口；客户端还没拿到新的 DNS 配置（执行 anywhere up 重连）；或者你用了 IP 或加了端口，入口只认这个名字。"
+               data-en="Three possibilities: that machine has no web entry; the client has not picked up the new DNS configuration (run anywhere up); or you used the IP or added a port, and the entry only answers to that name.">三种可能：那台机器没有网页入口；客户端还没拿到新的 DNS 配置（执行 anywhere up 重连）；或者你用了 IP 或加了端口，入口只认这个名字。</p>
+          </div>
+        </details>
+        <details>
+          <summary data-zh="想换账号或换机器" data-en="I want to switch account or machine">想换账号或换机器</summary>
+          <div class="answer">
+            <p data-zh="anywhere down 只是断开连接。换账号要管理员先删掉旧设备的记录，再重新登录。"
+               data-en="anywhere down only disconnects. Changing accounts needs an administrator to remove the old device record first, then you sign in again.">anywhere down 只是断开连接。换账号要管理员先删掉旧设备的记录，再重新登录。</p>
+          </div>
+        </details>
+        <details>
+          <summary data-zh="卸载客户端" data-en="Uninstalling the client">卸载客户端</summary>
+          <div class="answer">
+            <div class="cmd on-ink">
+              <pre class="cmd__code" id="cmd-uninstall">curl -fsSL https://anywhere.example.com/install.sh | sh -s -- --uninstall</pre>
+              <button class="copy" type="button" data-copy="cmd-uninstall" data-label-zh="复制卸载命令" data-label-en="Copy the uninstall command">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+                <span data-zh="复制" data-en="Copy">复制</span>
+              </button>
+            </div>
+            <p data-zh="会停掉后台服务并删除客户端；管理员那边删掉设备记录后，分组也会一起清掉。"
+               data-en="This stops the background service and removes the client. Once an administrator removes the device record, the group is cleaned up too.">会停掉后台服务并删除客户端；管理员那边删掉设备记录后，分组也会一起清掉。</p>
+          </div>
+        </details>
+                <details>
+          <summary data-zh="登录时提示 Failed to launch 飞书" data-en="Sign-in says Failed to launch 飞书">登录时提示 Failed to launch 飞书</summary>
+          <div class="answer">
+            <p data-zh="飞书的授权页没能拉起手机上的飞书 App。在那张页面上改用「更多登录方式」或「扫码登录」，也能完成同一次授权。"
+               data-en="Feishu's authorization page could not open the Feishu app on your phone. On that page, use 更多登录方式 (more sign-in methods) or 扫码登录 (scan a QR code) instead.">飞书的授权页没能拉起手机上的飞书 App。在那张页面上改用「更多登录方式」或「扫码登录」，也能完成同一次授权。</p>
+            <p data-zh="飞书装的是鸿蒙版、这个 App 是 Android 版时，系统不会把跳转交给飞书。"
+               data-en="If your Feishu is the HarmonyOS build and this app is the Android build, the hand-off does not happen.">飞书装的是鸿蒙版、这个 App 是 Android 版时，系统不会把跳转交给飞书。</p>
+          </div>
+        </details>
+                <details>
+          <summary data-zh="打不开官网怎么办" data-en="The site will not load">打不开官网怎么办</summary>
+          <div class="answer">
+            <p data-zh="官网在公网 HTTPS 上，没接入私有网络也能打开。公司网络拦了就用手机热点试一次，并把地址发给管理员。"
+               data-en="The site is on public HTTPS and works before you join the private network. If your office network blocks it, try a phone hotspot and send the address to an administrator.">官网在公网 HTTPS 上，没接入私有网络也能打开。公司网络拦了就用手机热点试一次，并把地址发给管理员。</p>
+          </div>
+        </details>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer on-ink">
+  <div class="wrap">
+    <div class="footer__grid">
+      <div class="footer__about">
+        <a class="lockup" href="/" aria-label="Anywhere Work">
+          <svg width="22" height="22" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+            <rect width="64" height="64" rx="15" fill="#080D17"/>
+            <circle cx="32" cy="33" r="13" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-dasharray="64 20" transform="rotate(-45 32 33)"/>
+            <circle cx="42" cy="23" r="6" fill="#22D3EE"/>
+          </svg>
+          <span>Anywhere Work</span>
+        </a>
+        <p data-zh="把你自己的机器接进私有网络，在任何地方接着干活。传输层用的是开源的 NetBird。"
+           data-en="Your own machines on a private network, so you can keep working anywhere. The transport underneath is the open-source NetBird.">把你自己的机器接进私有网络，在任何地方接着干活。传输层用的是开源的 NetBird。</p>
+      </div>
+      <div>
+        <h2 data-zh="入口" data-en="Entries">入口</h2>
+        <ul>
+          <li><a href="#quickstart" data-zh="一条命令接入" data-en="Install with one command">一条命令接入</a></li>
+          <li><a href="/deck/" data-zh="5 分钟演示" data-en="Five-minute demo">5 分钟演示</a></li>
+          <li><a href="#verify" data-zh="验证连接" data-en="Verify the connection">验证连接</a></li>
+          <li><a href="#faq" data-zh="常见问题" data-en="FAQ">常见问题</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2 data-zh="获取客户端" data-en="Get the client">获取客户端</h2>
+        <ul>
+          <li><a href="https://anywhere.example.com/AnywhereWork.apk" download data-zh="Android 安装包" data-en="Android package">Android 安装包</a></li>
+          <li><a href="/install.sh" data-zh="macOS 与 Linux 安装脚本" data-en="macOS and Linux installer">macOS 与 Linux 安装脚本</a></li>
+          <li><a href="/client/checksums.txt" data-zh="校验下载文件" data-en="Verify your download">校验下载文件</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer__note">
+      <p class="mono"><span data-zh="客户端" data-en="Client">客户端</span> <span id="footer-version">-</span></p>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  'use strict'
+
+  var doc = document.documentElement
+  var COPY_RESET_MS = 1800
+
+  /* ------------------------------------------------------------- language */
+
+  var LANG_KEY = 'aw-lang'
+
+  function applyLang(lang) {
+    var next = lang === 'en' ? 'en' : 'zh'
+    doc.setAttribute('data-lang', next)
+    doc.setAttribute('lang', next === 'en' ? 'en' : 'zh-CN')
+    document.querySelectorAll('[data-zh][data-en]').forEach(function (node) {
+      var value = next === 'en' ? node.dataset.en : node.dataset.zh
+      // A headline may mark the one word its emphasis rides on. The marked
+      // fragment is rebuilt as its own element rather than assigned as text, so
+      // the styling is not flattened here and so switching language replays the
+      // underline instead of leaving the previous language's word marked.
+      var mark = next === 'en' ? node.dataset.markEn : node.dataset.markZh
+      var at = mark ? value.indexOf(mark) : -1
+      if (at !== -1) {
+        var marked = document.createElement('span')
+        marked.className = 'hl'
+        marked.textContent = mark
+        node.textContent = ''
+        node.append(value.slice(0, at), marked, value.slice(at + mark.length))
+        return
+      }
+      if (node.tagName === 'BUTTON' || node.tagName === 'A') {
+        // A control's own label lives in a child span, so both stay in sync.
+        var span = node.querySelector('span[data-zh]')
+        if (span) { span.textContent = value } else { node.textContent = value }
+      } else {
+        node.textContent = value
+      }
+    })
+    var toggle = document.getElementById('lang')
+    toggle.textContent = next === 'en' ? '中文' : 'EN'
+    toggle.setAttribute('aria-label', next === 'en' ? '切换到中文' : 'Switch to English')
+    // A copy button's accessible name names the action and its object and stays
+    // put; only the visible label flips to "Copied", and the live region carries
+    // the announcement. Swapping the accessible name itself would make the
+    // control harder to find again with a screen reader.
+    document.querySelectorAll('[data-label-zh][data-label-en]').forEach(function (node) {
+      node.setAttribute('aria-label', next === 'en' ? node.dataset.labelEn : node.dataset.labelZh)
+    })
+    renderThemeControl()
+    try { localStorage.setItem(LANG_KEY, next) } catch (error) { /* private mode */ }
+  }
+
+  /* ---------------------------------------------------------------- theme */
+
+  var THEME_KEY = 'aw-theme'
+  var THEMES = ['auto', 'light', 'dark']
+  // Both languages are kept on the control at all times, so switching language
+  // later does not strand the label in the previous one.
+  var THEME_NAMES = {
+    auto: {zh: '跟随系统', en: 'Auto'},
+    light: {zh: '浅色', en: 'Light'},
+    dark: {zh: '深色', en: 'Dark'}
+  }
+
+  function applyTheme(mode) {
+    var next = THEMES.indexOf(mode) === -1 ? 'auto' : mode
+    if (next === 'auto') {
+      doc.removeAttribute('data-theme')
+    } else {
+      doc.setAttribute('data-theme', next)
+    }
+    try { localStorage.setItem(THEME_KEY, next) } catch (error) { /* private mode */ }
+    renderThemeControl()
+  }
+
+  // Rendered from the current language as well as the current theme, so a
+  // language switch cannot leave this control labelled in the old language.
+  function renderThemeControl() {
+    var next = doc.getAttribute('data-theme') || 'auto'
+    if (!THEME_NAMES[next]) { next = 'auto' }
+    var en = doc.getAttribute('data-lang') === 'en'
+    var label = document.getElementById('theme-label')
+    label.setAttribute('data-zh', THEME_NAMES[next].zh)
+    label.setAttribute('data-en', THEME_NAMES[next].en)
+    label.textContent = en ? THEME_NAMES[next].en : THEME_NAMES[next].zh
+    document.getElementById('theme').setAttribute(
+      'aria-label',
+      en ? 'Theme: ' + THEME_NAMES[next].en : '主题：' + THEME_NAMES[next].zh
+    )
+  }
+
+  /* ----------------------------------------------------------------- copy */
+
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text)
+    }
+    // The page is served over HTTPS, but a stale WebView or a permission
+    // refusal still lands here; execCommand is the documented fallback.
+    return new Promise(function (resolve, reject) {
+      var area = document.createElement('textarea')
+      area.value = text
+      area.setAttribute('readonly', '')
+      area.style.position = 'fixed'
+      area.style.top = '-1000px'
+      document.body.appendChild(area)
+      area.select()
+      var ok = false
+      try { ok = document.execCommand('copy') } catch (error) { ok = false }
+      document.body.removeChild(area)
+      ok ? resolve() : reject(new Error('copy failed'))
+    })
+  }
+
+  function bindCopy(button) {
+    button.addEventListener('click', function () {
+      var source = document.getElementById(button.dataset.copy)
+      if (!source) { return }
+      var label = button.querySelector('span[data-zh]')
+      copyText(source.textContent).then(function () {
+        var en = doc.getAttribute('data-lang') === 'en'
+        button.dataset.state = 'copied'
+        label.setAttribute('data-zh', '已复制')
+        label.setAttribute('data-en', 'Copied')
+        label.textContent = en ? 'Copied' : '已复制'
+        var status = document.getElementById('copy-status')
+        status.textContent = (en ? 'Copied: ' : '已复制：') + source.textContent
+        window.setTimeout(function () {
+          delete button.dataset.state
+          label.setAttribute('data-zh', '复制')
+          label.setAttribute('data-en', 'Copy')
+          label.textContent = doc.getAttribute('data-lang') === 'en' ? 'Copy' : '复制'
+          status.textContent = ''
+        }, COPY_RESET_MS)
+      }).catch(function () {
+        var status = document.getElementById('copy-status')
+        status.textContent = doc.getAttribute('data-lang') === 'en'
+          ? 'Could not copy automatically; select the command and copy it manually.'
+          : '自动复制失败，请手动选中命令复制。'
+      })
+    })
+  }
+
+  /* ----------------------------------------------------------------- tabs */
+
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'))
+
+  function selectTab(tab, focus) {
+    tabs.forEach(function (other) {
+      var selected = other === tab
+      other.setAttribute('aria-selected', selected ? 'true' : 'false')
+      other.tabIndex = selected ? 0 : -1
+      document.getElementById(other.getAttribute('aria-controls')).hidden = !selected
+    })
+    if (focus) { tab.focus() }
+  }
+
+  tabs.forEach(function (tab, index) {
+    tab.addEventListener('click', function () { selectTab(tab, false) })
+    tab.addEventListener('keydown', function (event) {
+      var offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
+      if (offset === 0) { return }
+      event.preventDefault()
+      selectTab(tabs[(index + offset + tabs.length) % tabs.length], true)
+    })
+  })
+
+  /* -------------------------------------------------------- initial state */
+
+  function initialLang() {
+    try {
+      var stored = localStorage.getItem(LANG_KEY)
+      if (stored) { return stored }
+    } catch (error) { /* private mode */ }
+    var query = new URLSearchParams(window.location.search).get('lang')
+    if (query) { return query }
+    return navigator.language && navigator.language.toLowerCase().indexOf('zh') === 0 ? 'zh' : 'en'
+  }
+
+  function initialTheme() {
+    try {
+      var stored = localStorage.getItem(THEME_KEY)
+      if (stored) { return stored }
+    } catch (error) { /* private mode */ }
+    return 'auto'
+  }
+
+  // Preselect the tab that matches the visitor's platform, so the first thing
+  // they see is the instruction for the device in their hand.
+  function initialTab() {
+    var ua = navigator.userAgent
+    // Order matters: an iPad reports "Macintosh" in modern Safari, and Android
+    // reports "Linux", so the specific platforms are tested first.
+    var id = 'tab-mac'
+    if (/iPhone|iPad|iPod/i.test(ua)) { id = 'tab-ios' }
+    else if (/Android/i.test(ua)) { id = 'tab-android' }
+    else if (/Windows/i.test(ua)) { id = 'tab-windows' }
+    else if (/Linux|X11|CrOS/i.test(ua)) { id = 'tab-linux' }
+
+    var hinted = document.getElementById(id) || tabs[0]
+    if (hinted !== tabs[0]) {
+      selectTab(hinted, false)
+      return
+    }
+  }
+
+  applyLang(initialLang())
+  applyTheme(initialTheme())
+  initialTab()
+  document.querySelectorAll('.copy').forEach(bindCopy)
+
+  document.getElementById('lang').addEventListener('click', function () {
+    var next = doc.getAttribute('data-lang') === 'en' ? 'zh' : 'en'
+    applyLang(next)
+  })
+
+  document.getElementById('theme').addEventListener('click', function () {
+    var current = doc.getAttribute('data-theme') || 'auto'
+    applyTheme(THEMES[(THEMES.indexOf(current) + 1) % THEMES.length])
+  })
+
+  /* ------------------------------------------------------------ live data */
+
+  fetch('/client/latest.txt').then(function (response) { return response.text() }).then(function (value) {
+    var version = value.trim()
+    if (!version) { return }
+    var chip = document.getElementById('channel-version')
+    if (chip) { chip.textContent = 'v' + version }
+    document.getElementById('footer-version').textContent = 'v' + version
+  }).catch(function () { /* the page is useful without the version */ })
+
+  fetch('/version.json').then(function (response) { return response.json() }).then(function (manifest) {
+    if (!manifest || !manifest.versionName) { return }
+    var meta = document.getElementById('apk-meta')
+    meta.setAttribute('data-zh', 'v' + manifest.versionName + ' · arm64 · 需要系统能运行 Android 应用 · App 内可自更新')
+    meta.setAttribute('data-en', 'v' + manifest.versionName + ' · arm64 · the system must be able to run Android apps · updates itself in-app')
+    meta.textContent = doc.getAttribute('data-lang') === 'en'
+      ? meta.getAttribute('data-en')
+      : meta.getAttribute('data-zh')
+  }).catch(function () { /* the APK button still works */ })
+})()
+</script>
+</body>
+</html>

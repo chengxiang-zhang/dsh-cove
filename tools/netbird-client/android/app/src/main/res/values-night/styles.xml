@@ -1,0 +1,13 @@
+<resources>
+
+    <!--
+      Dark theme. Only the two system-bar appearance flags differ: on a dark phone
+      the bars sit on a near-black surface, so the icons go back to light-on-dark.
+      The rest of the theme is inherited unchanged.
+    -->
+    <style name="AppTheme.Base" parent="AppTheme.Common">
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+
+</resources>

@@ -1,0 +1,4 @@
+<resources>
+    <!-- Anywhere Work brand colour, also the Android 12+ splash background. -->
+    <color name="splash_background">#080D17</color>
+</resources>

@@ -1,0 +1,174 @@
+/*
+ * Anywhere Work design tokens for the desktop shell.
+ *
+ * GENERATED FILE - do not edit. The source of truth is
+ * tools/dsh-netbird/brand/tokens.json; regenerate with
+ * `node scripts/dsh-netbird-brand.mjs --write` and let the brand check prove
+ * every surface still agrees.
+ */
+:root {
+  --aw-bg: #F6F8FC;
+  --aw-surface: #FFFFFF;
+  --aw-surface-alt: #EEF2F7;
+  --aw-surface-hover: #EEF2F7;
+  --aw-border: #DCE3EC;
+  --aw-border-strong: #C3CEDD;
+  --aw-control-border: #8494A8;
+  --aw-text: #0F1B2D;
+  --aw-text-muted: #4A5B70;
+  --aw-text-faint: #586A80;
+  --aw-brand: #2563EB;
+  --aw-brand-fill: #2563EB;
+  --aw-brand-fill-hover: #1D4ED8;
+  --aw-on-brand-fill: #FFFFFF;
+  --aw-accent: #06B6D4;
+  --aw-success: #0B7A55;
+  --aw-success-bg: #E6F6EF;
+  --aw-warning: #8A5200;
+  --aw-warning-bg: #FDF3E3;
+  --aw-danger: #C02626;
+  --aw-danger-bg: #FDECEC;
+  --aw-danger-fill: #C02626;
+  --aw-on-danger-fill: #FFFFFF;
+  --aw-focus: #1D4ED8;
+  --aw-overlay: rgba(15, 27, 45, 0.48);
+  --aw-shadow: rgba(15, 27, 45, 0.10);
+  --aw-shadow-lifted: rgba(15, 27, 45, 0.16);
+  --aw-space-3xs: 2px;
+  --aw-space-2xs: 4px;
+  --aw-space-xs: 6px;
+  --aw-space-sm: 8px;
+  --aw-space-md: 12px;
+  --aw-space-lg: 16px;
+  --aw-space-xl: 20px;
+  --aw-space-2xl: 24px;
+  --aw-space-3xl: 32px;
+  --aw-space-4xl: 40px;
+  --aw-space-5xl: 56px;
+  --aw-space-6xl: 72px;
+  --aw-radius-xs: 6px;
+  --aw-radius-sm: 8px;
+  --aw-radius-md: 12px;
+  --aw-radius-lg: 16px;
+  --aw-radius-xl: 22px;
+  --aw-radius-pill: 999px;
+  --aw-size-hero: 68px;
+  --aw-leading-hero: 1.08;
+  --aw-weight-hero: 600;
+  --aw-tracking-hero: 0;
+  --aw-size-section: 44px;
+  --aw-leading-section: 1.2;
+  --aw-weight-section: 600;
+  --aw-tracking-section: 0;
+  --aw-size-display: 40px;
+  --aw-leading-display: 1.15;
+  --aw-weight-display: 700;
+  --aw-tracking-display: -0.02em;
+  --aw-size-title: 28px;
+  --aw-leading-title: 1.25;
+  --aw-weight-title: 650;
+  --aw-tracking-title: -0.01em;
+  --aw-size-heading: 20px;
+  --aw-leading-heading: 1.35;
+  --aw-weight-heading: 600;
+  --aw-tracking-heading: 0;
+  --aw-size-body: 16px;
+  --aw-leading-body: 1.65;
+  --aw-weight-body: 400;
+  --aw-tracking-body: 0;
+  --aw-size-small: 14px;
+  --aw-leading-small: 1.6;
+  --aw-weight-small: 400;
+  --aw-tracking-small: 0;
+  --aw-size-caption: 13px;
+  --aw-leading-caption: 1.5;
+  --aw-weight-caption: 500;
+  --aw-tracking-caption: 0.01em;
+  --aw-size-mono: 13.5px;
+  --aw-leading-mono: 1.6;
+  --aw-weight-mono: 400;
+  --aw-tracking-mono: 0;
+  --aw-dur-instant: 90ms;
+  --aw-dur-fast: 160ms;
+  --aw-dur-base: 240ms;
+  --aw-dur-slow: 400ms;
+  --aw-dur-deliberate: 900ms;
+  --aw-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --aw-ease-enter: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --aw-ease-exit: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --aw-shadow-flat: none;
+  --aw-shadow-raised: 0 1px 2px rgba(15,27,45,0.06), 0 1px 3px rgba(15,27,45,0.08);
+  --aw-shadow-lifted: 0 12px 32px -12px rgba(15,27,45,0.22), 0 2px 8px rgba(15,27,45,0.06);
+  --aw-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Roboto, Helvetica, Arial, sans-serif;
+  --aw-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", "Noto Sans Mono CJK SC", monospace;
+  color-scheme: light;
+}
+
+/* The Mac's scheme is the default; an explicit choice wins over it. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-scheme='light']) {
+    --aw-bg: #080D17;
+    --aw-surface: #111A2B;
+    --aw-surface-alt: #1A2438;
+    --aw-surface-hover: #0D1524;
+    --aw-border: #253148;
+    --aw-border-strong: #33415C;
+    --aw-control-border: #5B6E8C;
+    --aw-text: #E9EFF8;
+    --aw-text-muted: #A3B3C9;
+    --aw-text-faint: #8C9DB4;
+    --aw-brand: #7EB0FF;
+    --aw-brand-fill: #2F6FE4;
+    --aw-brand-fill-hover: #2559C4;
+    --aw-on-brand-fill: #FFFFFF;
+    --aw-accent: #22D3EE;
+    --aw-success: #4ADE9B;
+    --aw-success-bg: #0E2A22;
+    --aw-warning: #F5C24B;
+    --aw-warning-bg: #2E2410;
+    --aw-danger: #FF8A8A;
+    --aw-danger-bg: #2E1417;
+    --aw-danger-fill: #FF8A8A;
+    --aw-on-danger-fill: #080D17;
+    --aw-focus: #7EB0FF;
+    --aw-overlay: rgba(3, 7, 14, 0.66);
+    --aw-shadow: rgba(0, 0, 0, 0.40);
+    --aw-shadow-lifted: rgba(0, 0, 0, 0.55);
+    color-scheme: dark;
+  }
+}
+
+:root[data-scheme='dark'] {
+  --aw-bg: #080D17;
+  --aw-surface: #111A2B;
+  --aw-surface-alt: #1A2438;
+  --aw-surface-hover: #0D1524;
+  --aw-border: #253148;
+  --aw-border-strong: #33415C;
+  --aw-control-border: #5B6E8C;
+  --aw-text: #E9EFF8;
+  --aw-text-muted: #A3B3C9;
+  --aw-text-faint: #8C9DB4;
+  --aw-brand: #7EB0FF;
+  --aw-brand-fill: #2F6FE4;
+  --aw-brand-fill-hover: #2559C4;
+  --aw-on-brand-fill: #FFFFFF;
+  --aw-accent: #22D3EE;
+  --aw-success: #4ADE9B;
+  --aw-success-bg: #0E2A22;
+  --aw-warning: #F5C24B;
+  --aw-warning-bg: #2E2410;
+  --aw-danger: #FF8A8A;
+  --aw-danger-bg: #2E1417;
+  --aw-danger-fill: #FF8A8A;
+  --aw-on-danger-fill: #080D17;
+  --aw-focus: #7EB0FF;
+  --aw-overlay: rgba(3, 7, 14, 0.66);
+  --aw-shadow: rgba(0, 0, 0, 0.40);
+  --aw-shadow-lifted: rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+:root[data-scheme='light'] {
+  color-scheme: light;
+}

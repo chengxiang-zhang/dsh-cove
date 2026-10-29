@@ -1,0 +1,14 @@
+services:
+  dsh-api-proxy:
+    build: .
+    ports:
+      - "8317:8317"
+    volumes:
+      - ./config.yaml:/config/config.yaml
+      - auth-data:/data
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+
+volumes:
+  auth-data:

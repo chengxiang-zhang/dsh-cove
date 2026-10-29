@@ -1,0 +1,21 @@
+[Unit]
+Description=DeepSeek Harness Web UI
+After=network-online.target netbird.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__GROUP__
+WorkingDirectory=__HOME__
+Environment=HOME=__HOME__
+Environment=DSH_HOME=__HOME__/.dsh
+Environment=PATH=__DSH_BIN_DIR__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=__DSH_BIN_DIR__/dsh web --host 127.0.0.1 --port 3080 --no-open --trusted-host dsh.__MACHINE__.netbird
+Restart=always
+RestartSec=5
+StandardOutput=append:__HOME__/.dsh/logs/web.log
+StandardError=append:__HOME__/.dsh/logs/web.log
+
+[Install]
+WantedBy=multi-user.target

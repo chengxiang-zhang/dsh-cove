@@ -1,0 +1,264 @@
+/* 会话区位置模块样式（input.right / input.dock / selector.context / chat 尾）。 */
+
+.mic,
+.micActive {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, #555);
+  cursor: pointer;
+}
+
+.mic:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgb(0 0 0 / 6%));
+}
+
+.micActive {
+  color: var(--dsw-alias-button-primary-fill, #3b82f6);
+  background: var(--dsw-alias-interactive-bg-active, rgb(0 0 0 / 10%));
+}
+
+.recognitionBar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover, rgb(0 0 0 / 6%));
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary, #555);
+}
+
+.recognitionBar button {
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: var(--dsw-alias-button-primary-fill, #3b82f6);
+  color: var(--dsw-alias-label-primary-foreground, #fff);
+  cursor: pointer;
+}
+
+.recognitionBar button:disabled { opacity: 0.55; cursor: wait; }
+
+.waveform {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 18px;
+}
+
+.waveform i {
+  width: 2px;
+  min-height: 3px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.7;
+}
+
+.recognitionDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-danger, #dc2626);
+  animation: recPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes recPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.turnTail {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--dsw-alias-interactive-bg-hover, rgb(0 0 0 / 6%));
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary, #555);
+  cursor: pointer;
+}
+
+/* Read-only actual model / effort badge on subagent catalog and tool rows. */
+.subagentModelBadge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 260px;
+  margin-left: 6px;
+  padding: 0 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-overlay, #e5e7eb);
+  color: var(--dsw-alias-label-secondary, #374151);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Conversation header lane chip: the session's branch (lane or main checkout),
+   right after the title. On a lane the chip is a button that opens the lane
+   menu; on the main checkout it stays a read-only span. */
+.laneChipWrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.laneChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 320px;
+  margin-left: 8px;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-overlay, #e5e7eb);
+  color: var(--dsw-alias-label-secondary, #374151);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+button.laneChip {
+  cursor: pointer;
+}
+
+button.laneChip:hover {
+  color: var(--dsw-alias-label-primary, #111827);
+}
+
+button.laneChip:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary, #4f46e5);
+  outline-offset: 1px;
+}
+
+.laneBranch {
+  overflow: hidden;
+  font-family: var(--ds-font-family-code);
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+.laneStatus {
+  flex: none;
+  opacity: 0.75;
+}
+
+.laneStatus::before {
+  content: '·';
+  margin-right: 4px;
+}
+
+.laneWarning {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-danger, rgb(220 38 38 / 12%));
+  color: var(--dsw-alias-label-danger, #dc2626);
+}
+
+/* Lane menu: the popover the chip opens. It carries the lane's directory, its
+   PR link, and the four lifecycle actions, so the header alone finishes a
+   branch off. Fixed width (not shrink-to-fit) keeps long paths from stretching
+   the header row. */
+.laneMenu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 320px;
+  padding: 10px;
+  border: 1px solid var(--dsw-alias-border-l2, rgb(0 0 0 / 10%));
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1, #fff);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary, #111827);
+  text-align: left;
+}
+
+.laneMenuFacts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.laneMenuPathLabel {
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+.laneMenuPath {
+  overflow: hidden;
+  font-family: var(--ds-font-family-code);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.laneMenuLink {
+  align-self: flex-start;
+  color: var(--dsw-alias-brand-primary, #4f46e5);
+  text-decoration: none;
+}
+
+.laneMenuLink:hover {
+  text-decoration: underline;
+}
+
+.laneMenuActions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.laneMenuItem {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.laneMenuItem:hover:not(:disabled) {
+  background: var(--dsw-alias-bg-overlay, rgb(0 0 0 / 6%));
+}
+
+.laneMenuItem:disabled {
+  color: var(--dsw-alias-label-tertiary, #9ca3af);
+  cursor: not-allowed;
+}
+
+.laneMenuHint {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+.laneMenuError {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--dsw-alias-label-danger, #dc2626);
+}

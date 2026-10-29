@@ -1,0 +1,284 @@
+name: Auto-assign PR reviewers
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  route:
+    name: Route PR to category reviewers
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+
+    steps:
+      - name: Load routes and request reviewers
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) {
+              return;
+            }
+
+            // 路由配置从 base 分支（可信代码）读取；PR 自身不能修改自己的路由。
+            let routes;
+            let defaultRoute = null;
+            try {
+              const config = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: '.github/pr-review-routes.json',
+                ref: pr.base.ref,
+              });
+              const parsed = JSON.parse(
+                Buffer.from(config.data.content, 'base64').toString('utf8')
+              );
+              if (!Array.isArray(parsed.routes)) {
+                throw new Error('routes must be an array');
+              }
+              routes = parsed.routes;
+              defaultRoute = parsed.defaultRoute || null;
+            } catch (error) {
+              core.warning(
+                'review routing config unavailable, skipping: ' +
+                  String((error && error.message) || error)
+              );
+              return;
+            }
+
+            // 变更文件（分页收集，上限 300 个）。
+            const files = [];
+            for (let page = 1; page <= 3; page++) {
+              const pageData = await github.rest.pulls.listFiles({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100,
+                page,
+              });
+              files.push(...pageData.data.map((item) => item.filename));
+              if (pageData.data.length < 100) {
+                break;
+              }
+            }
+            console.log('PR #' + pr.number + ': ' + files.length + ' changed files.');
+
+            // PR 描述中勾选的类别（`## PR 类别（PR Category）` 小节）。
+            const body = pr.body || '';
+            const categoryPattern = /(?:^|\n)##\s+PR 类别（PR Category）\s*\n+([\s\S]*?)(?=\n##\s+|$)/i;
+            const categoryMatch = body.match(categoryPattern);
+            const selectedTypes = [];
+            if (categoryMatch) {
+              const section = categoryMatch[1].replace(/<!--[\s\S]*?-->/g, '');
+              for (const line of section.split('\n')) {
+                const m = line.match(/^-\s*\[[xX]\]\s*(.+)$/);
+                if (m) {
+                  selectedTypes.push(m[1].trim());
+                }
+              }
+            }
+            console.log(
+              'PR #' + pr.number + ': selected categories: ' +
+                (selectedTypes.join(', ') || 'none')
+            );
+
+            const globToRegExp = (pattern) => {
+              const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const tokenized = escaped
+                .replace(/\*\*/g, '\u0000')
+                .replace(/\*/g, '[^/]*')
+                .replace(/\?/g, '[^/]')
+                .replace(/\u0000/g, '.*');
+              return new RegExp('^' + tokenized + '$');
+            };
+
+            const matched = [];
+            const seen = new Set();
+            for (const route of routes) {
+              if (seen.has(route.name)) {
+                continue;
+              }
+              seen.add(route.name);
+              const patterns = Array.isArray(route.paths) ? route.paths : [];
+              const pathHit = patterns.some((pattern) => {
+                const regexp = globToRegExp(pattern);
+                return files.some((file) => regexp.test(file));
+              });
+              let titleHit = false;
+              if (route.title) {
+                try {
+                  titleHit = new RegExp(route.title, 'i').test(pr.title || '');
+                } catch (error) {
+                  core.warning(
+                    'invalid title regex for route ' + route.name + ': ' +
+                      String((error && error.message) || error)
+                  );
+                }
+              }
+              const routeTypes = Array.isArray(route.types) ? route.types : [];
+              const typeHit =
+                routeTypes.length > 0 &&
+                selectedTypes.some((type) => routeTypes.includes(type));
+              const routeAuthors = Array.isArray(route.authors) ? route.authors : [];
+              const authorHit = routeAuthors.includes(pr.user.login);
+              if (pathHit || titleHit || typeHit || authorHit) {
+                matched.push(route);
+              }
+            }
+
+            if (matched.length === 0) {
+              console.log('PR #' + pr.number + ': no review route matched.');
+              // 兜底分配：确保每个 PR 都有人关联，不存在“无关联 PR”。
+              if (defaultRoute) {
+                const defaultReviewers = [...new Set(
+                  (defaultRoute.reviewers || []).filter((user) => user !== pr.user.login)
+                )];
+                const defaultAssignees = [...new Set(
+                  (defaultRoute.assignees || []).filter((user) => user !== pr.user.login)
+                )];
+                if (defaultReviewers.length > 0) {
+                  await github.rest.pulls.requestReviewers({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: pr.number,
+                    reviewers: defaultReviewers,
+                  });
+                  console.log(
+                    'PR #' + pr.number + ': requested default reviewers ' + defaultReviewers.join(', ') + '.'
+                  );
+                }
+                if (defaultAssignees.length > 0) {
+                  await github.rest.issues.addAssignees({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pr.number,
+                    assignees: defaultAssignees,
+                  });
+                  console.log(
+                    'PR #' + pr.number + ': assigned ' + defaultAssignees.join(', ') + '.'
+                  );
+                }
+              }
+              return;
+            }
+
+            // 类别只收 Issue（prAllowed === false）：自动关闭该类 PR 并引导改提 Issue；
+            // 当前 .github/pr-review-routes.json 的每个类别都允许 PR，因此没有阻塞类别。
+            const blockedRoutes = matched.filter(
+              (route) => route.prAllowed === false
+            );
+            const allowedRoutes = matched.filter(
+              (route) => route.prAllowed !== false
+            );
+            if (blockedRoutes.length > 0 && allowedRoutes.length === 0) {
+              const isRepoOwner =
+                pr.user.login === context.repo.owner ||
+                pr.user.login === 'github-actions[bot]';
+              if (!isRepoOwner) {
+                const labels = blockedRoutes
+                  .map((route) => route.label || route.name)
+                  .join('、');
+                const comment = [
+                  '本 PR 只命中只收 Issue 的类别（' + labels + '），该类别不接受 PR，已自动关闭。',
+                  '',
+                  'Wallpaper Engine / WebGL / 渲染器相关问题请改提 Issue（附复现步骤、环境信息与截图），修复由维护者在本地完成：',
+                  '',
+                  '- 提交 Issue：https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/issues/new',
+                  '- 类别规则见 `.github/pr-review-routes.json`。',
+                ].join('\n');
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: comment,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  state: 'closed',
+                  state_reason: 'not_planned',
+                });
+                core.setFailed(
+                  'PR #' + pr.number +
+                    ' matches issue-only categories and was auto-closed.'
+                );
+              }
+              return;
+            }
+
+            const reviewers = [...new Set(
+              allowedRoutes.flatMap((route) => route.reviewers || [])
+            )].filter((user) => user !== pr.user.login);
+
+            const assignees = [...new Set(
+              allowedRoutes.flatMap((route) => route.assignees || [])
+            )].filter((user) => user !== pr.user.login);
+
+            if (reviewers.length > 0) {
+              await github.rest.pulls.requestReviewers({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                reviewers,
+              });
+              console.log(
+                'PR #' + pr.number + ': requested review from ' + reviewers.join(', ') + '.'
+              );
+            } else {
+              console.log(
+                'PR #' + pr.number + ': matched ' +
+                  allowedRoutes.map((route) => route.name).join(', ') +
+                  ' but no reviewer to request.'
+              );
+            }
+
+            if (assignees.length > 0) {
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                assignees,
+              });
+              console.log(
+                'PR #' + pr.number + ': assigned ' + assignees.join(', ') + '.'
+              );
+            }
+
+            if (context.payload.action !== 'opened') {
+              return;
+            }
+
+            const lines = matched.map(
+              (route) => '- ' + route.name + (route.label ? '（' + route.label + '）' : '')
+            );
+            const summary = [];
+            if (assignees.length > 0) {
+              summary.push('已将 ' + assignees.join('、') + ' 设为负责人。');
+            }
+            if (reviewers.length > 0) {
+              summary.push('已请求 ' + reviewers.join('、') + ' 审查。');
+            }
+            const comment = [
+              '本 PR 已按类别自动路由：',
+              '',
+              ...lines,
+              '',
+              summary.join('') + '路由规则见 `.github/pr-review-routes.json`。',
+            ].join('\n');
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: comment,
+              });
+            } catch (error) {
+              core.warning(
+                'failed to post routing comment: ' + String((error && error.message) || error)
+              );
+            }

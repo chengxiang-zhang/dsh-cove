@@ -1,0 +1,14 @@
+# --- deck (anywhere work roadshow) begin ---
+    # Roadshow deck. Published by the deck deploy script into
+    # /www/wwwroot/deck; only this marked region belongs to that script. The rest
+    # of this vhost (the landing page at the root, /health, /version.json,
+    # /fleet.json, /install.sh, the /client/ redirect) belongs to the
+    # client-channel work and is left alone.
+    #
+    # /deck/ -> /www/wwwroot/deck/{index.html,anywhere-work-deck.pdf,audition/}
+    location ^~ /deck/ {
+        root /www/wwwroot;
+        add_header Cache-Control "no-cache";
+        add_header X-Robots-Tag "noindex, nofollow";
+    }
+    # --- deck (anywhere work roadshow) end ---

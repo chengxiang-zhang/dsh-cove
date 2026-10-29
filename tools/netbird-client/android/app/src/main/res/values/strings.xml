@@ -1,0 +1,26 @@
+<resources>
+    <!--
+      Launcher label. "Anywhere Work" is the product name and is what the app
+      header, the store listing and app.json use; the launcher truncates past
+      ~10 characters (verified on a Pixel 9 launcher), so the label is short.
+    -->
+    <string name="app_name">Anywhere</string>
+    <string name="app_name_full">Anywhere Work</string>
+    <string name="netbird_connection_channel_name">内网连接</string>
+    <string name="netbird_connection_channel_description">保持内网连接在后台稳定运行</string>
+    <string name="netbird_connection_notification_title">内网连接</string>
+    <!-- Ongoing-notification body once the app has reported a machine count. -->
+    <string name="netbird_connection_summary">已连接 · %1$d 台机器可用</string>
+
+    <!--
+      Finished-run notifications. A separate channel on purpose: the ongoing
+      connection notice must stay silent and low-importance, while this one is
+      allowed to alert, because someone is waiting to learn that long work they
+      started from the phone is over.
+    -->
+    <string name="run_notifications_channel_name">任务完成提醒</string>
+    <string name="run_notifications_channel_description">从手机发起的任务在机器上跑完后提醒你</string>
+    <!-- Body of the single notification one poll tick may raise. -->
+    <string name="run_notifications_summary">%1$s · %2$d 个任务已完成</string>
+    <string name="run_notifications_summary_errors">%1$s · 已完成 %2$d，出错 %3$d</string>
+</resources>

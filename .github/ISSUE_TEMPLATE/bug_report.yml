@@ -1,0 +1,117 @@
+name: Bug report / Bug 报告
+description: Submit a reproducible bug. Screenshot evidence is required; a report without it is closed. / 提交可复现的 Bug，必须附截图证据。
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep this template complete and fill in every required part. A bug report without screenshot evidence, a smoke test or a code reference is closed automatically.
+
+        This form is bilingual: field labels keep their Chinese anchors because repository automation matches them, while hints are given in English as well. Write your report in the language you prefer.
+
+        提交前请先搜索确认没有重复：[搜索现有 Issue](https://github.com/chengxiang-zhang/dsh-cove/issues?q=is%3Aissue)
+  - type: checkboxes
+    id: duplicate-check
+    attributes:
+      label: 提交前查重
+      description: Search open and closed issues before submitting. / 提交前请先搜索确认没有重复的 Issue。
+      options:
+        - label: 我已搜索过 open/closed 的 Issue，确认本 Issue 没有重复。
+          required: true
+  - type: dropdown
+    id: plugin
+    attributes:
+      label: 涉及插件
+      description: Select the plugin or area the bug is in. / 选择问题涉及的插件或区域。
+      options:
+        - Web 运行时能力 (dsh-web-all)
+        - 社区插件索引 (dsh-community-plugins)
+        - 安装 / 插件管理
+        - 其他 / 不确定
+    validations:
+      required: true
+  - type: dropdown
+    id: issue-type
+    attributes:
+      label: Issue 类型
+      description: This form is for reproducible bugs only; use the other form for feature requests. / 本表单仅用于可复现的 Bug。
+      options:
+        - Bug 报告
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: 摘要
+      description: One or two sentences describing the bug. / 用一两句话描述 Bug。
+      placeholder: What went wrong? / 出了什么问题？
+    validations:
+      required: true
+  - type: textarea
+    id: expected-outcome
+    attributes:
+      label: 预期结果
+      description: Describe what should happen instead. / 描述应该发生什么。
+      placeholder: What did you expect? / 你期望的结果是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: details-reproduction
+    attributes:
+      label: 详情 / 复现步骤
+      description: Give clear reproduction steps that a maintainer can follow. / 给出清晰的复现步骤。
+      placeholder: |
+        1. Open ... / 打开 ...
+        2. Click ... / 点击 ...
+        3. Observe ... / 出现 ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: DSH version, browser, plugin name and version, operating system and relevant configuration. / DSH 版本、浏览器、插件名称与版本、操作系统及关键配置。
+      placeholder: |
+        - DSH version / DSH 版本:
+        - Browser / 浏览器:
+        - Plugin and version / 插件名称与版本:
+        - OS / 操作系统:
+    validations:
+      required: true
+  - type: textarea
+    id: bug-screenshot
+    attributes:
+      label: Bug 截图
+      description: Paste or upload a screenshot that shows the bug. A report without screenshot evidence is closed automatically. / 粘贴或上传展示 Bug 的截图。
+      placeholder: Drag an image here, or paste a GitHub image or file link. / 将图片拖到此处，或粘贴 GitHub 图片 / 文件链接。
+    validations:
+      required: true
+  - type: textarea
+    id: smoke-test
+    attributes:
+      label: 冒烟测试
+      description: Describe the verification you actually ran - steps and observations on the exact DSH and plugin versions, builds or commands you executed, and any comparison run. An unverified description counts as invalid. / 说明你实际执行过的验证。
+      placeholder: |
+        - Environment / 环境（DSH / 插件版本）:
+        - Steps and observations / 执行步骤与观察结果:
+        - Comparison or previous version / 对照 / 历史版本差异:
+    validations:
+      required: true
+  - type: textarea
+    id: code-reference
+    attributes:
+      label: 引用代码
+      description: Point at the precise code location in this repository (file path plus function or line numbers, optionally a GitHub link) so a maintainer can navigate quickly. / 指向仓库内相关代码的精确位置。
+      placeholder: |
+        packages/dsh-web-all/src/client/sidebar/right-pane.tsx:120-135
+        https://github.com/chengxiang-zhang/dsh-cove/blob/dev/packages/dsh-web-all/src/client/sidebar/right-pane.tsx#L120-L135
+    validations:
+      required: true
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 补充信息
+      description: Logs, links or any other context. / 日志、链接或其他上下文。
+    validations:
+      required: false

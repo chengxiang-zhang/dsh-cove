@@ -1,0 +1,234 @@
+name: Android Release
+
+# The Android package is a first-party product of this repository and nothing built it: the
+# client workflow covers the tunnel helper and the desktop shell, and the APK was assembled on
+# a developer machine and pushed to the update channel by hand. This workflow builds the same
+# artifact on a runner and attaches it to the tag's release, so a released version carries the
+# phone app beside the desktop installer and the runtime package.
+#
+# It needs no secret: the native input (android/app/libs/netbird-portal.aar) and the signing
+# keystore (android/app/debug.keystore) are both committed, and the release build is signed
+# with that same debug key - which is what lets an APK install over an existing install and
+# over what the update channel serves.
+#
+# A published release asset is a distribution copy, not the update channel itself: the channel
+# is still deployed by tools/netbird-client/scripts/publish.sh, a deploy action run with the
+# operator's approval.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  android-apk:
+    name: Build the arm64 APK and attach it to the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      APP_DIR: tools/netbird-client
+      # Versions the project pins in android/build.gradle and android/gradle.properties. The
+      # platform package carries its own minor: the repository publishes `platforms;android-37.0`
+      # (installed as `platforms/android-37.0`), and a bare `platforms;android-37` is not a
+      # package - asking for it fails before anything is installed.
+      ANDROID_PLATFORM: 'android-37.0'
+      ANDROID_BUILD_TOOLS: '37.0.0'
+      ANDROID_NDK: '27.1.12297006'
+      ANDROID_CMAKE: '3.22.1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Full history: the gate below asks whether the tag's commit is on main.
+          fetch-depth: 0
+
+      # Releases are cut from main. A tag event carries no branch information, so the tag's
+      # commit is checked against main instead: a tag that points at an unintegrated commit is
+      # refused rather than quietly attaching a phone build to a release nobody reviewed.
+      - name: Require the tag to be on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main; cut releases from main"
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME is on main"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # The runner image already carries an Android SDK and sdkmanager; an SDK-setup action on top
+# of it failed before a single package was installed, so the pin is done directly instead and
+# the image's own SDK is used.
+      - name: Install the SDK pieces this app pins
+        run: |
+          set -o pipefail
+          {
+            set -u
+            SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+            [ -n "$SDK" ] || { echo "no Android SDK on this runner"; exit 1; }
+            echo "sdk: $SDK"
+            SDKMANAGER="$(command -v sdkmanager || true)"
+            [ -n "$SDKMANAGER" ] || SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+            [ -x "$SDKMANAGER" ] || { echo "sdkmanager not found under $SDK"; ls "$SDK" || true; exit 1; }
+            echo "sdkmanager: $SDKMANAGER"
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+            if ! "$SDKMANAGER" --install \
+              "platforms;${ANDROID_PLATFORM}" \
+              "build-tools;${ANDROID_BUILD_TOOLS}" \
+              "ndk;${ANDROID_NDK}" \
+              "cmake;${ANDROID_CMAKE}"; then
+              # Say what the repository does offer under the pinned names, so a rename does not
+              # cost another round trip.
+              echo "--- available under the pinned prefixes ---"
+              "$SDKMANAGER" --list 2>/dev/null \
+                | grep -E "platforms;android-37|build-tools;${ANDROID_BUILD_TOOLS%%.*}|ndk;27|cmake;3\.22" | head -20 || true
+              exit 1
+            fi
+            ls "$SDK/ndk" "$SDK/cmake" "$SDK/platforms" 2>/dev/null || true
+          } 2>&1 | tee "$RUNNER_TEMP/sdk.log"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('tools/netbird-client/android/**/*.gradle*', 'tools/netbird-client/android/gradle/wrapper/gradle-wrapper.properties') }}
+
+      # local.properties is committed with a developer's SDK path; on a runner the SDK is
+      # wherever the image put it, and the Android plugin prefers that file over the
+      # environment.
+      - name: Point the project at this runner's SDK
+        run: printf 'sdk.dir=%s\n' "${ANDROID_SDK_ROOT:-$ANDROID_HOME}" > "$APP_DIR/android/local.properties"
+
+      - name: Install the JavaScript dependencies the bundle needs
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          set -o pipefail
+          npm ci --no-audit --no-fund 2>&1 | tail -5
+
+      - name: Build the release APK
+        working-directory: ${{ env.APP_DIR }}
+        env:
+          # Pinned to the tag this release is being cut as. Gradle otherwise derives the same
+          # value from the repository's released version; passing it makes the intent explicit
+          # and refuses a mismatch at the artifact gate below.
+          VERSION_NAME: ${{ github.ref_name }}
+          # The control plane this build enrolls against, from the repository variable so no
+          # real address lives in the source. Empty means the compiled fallback, and a person
+          # then enters their server once in the app's own screen - the same shape the desktop
+          # installer has, and the same variable name, so a deployment sets it in one place.
+          AW_MANAGEMENT_URL: ${{ vars.AW_MANAGEMENT_URL }}
+        run: |
+          set -o pipefail
+          ./android/gradlew -p android :app:assembleRelease -PawVersionName="${VERSION_NAME#v}" 2>&1 | tee "$RUNNER_TEMP/apk-build.log" | tail -20
+
+      - name: Name the artifact after the version it carries
+        id: apk
+        run: |
+          set -u
+          APK="$APP_DIR/android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          # What the APK carries, not what a source file says it should: the two are the
+          # same by construction (build.gradle derives them from the repository version and
+          # the git build number), and the artifact is the one that gets published.
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          BADGING="$("$SDK/build-tools/${ANDROID_BUILD_TOOLS}/aapt2" dump badging "$APK" | head -1)"
+          VERSION_CODE="$(printf '%s' "$BADGING" | sed -nE "s/.*versionCode='([0-9]+)'.*/\1/p")"
+          VERSION_NAME="$(printf '%s' "$BADGING" | sed -nE "s/.*versionName='([^']+)'.*/\1/p")"
+          if [ -z "$VERSION_NAME" ] || [ -z "$VERSION_CODE" ]; then
+            echo "::error::could not read the version out of the APK: $BADGING"
+            exit 1
+          fi
+          # The tag is what this release is called; the APK must agree with it.
+          if [ "v${VERSION_NAME}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::the APK carries ${VERSION_NAME} but this release is ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          OUT="$RUNNER_TEMP/AnywhereWork-${VERSION_NAME}.apk"
+          cp "$APK" "$OUT"
+          printf '%s\n' "$BADGING" | head -3
+          du -h "$OUT"
+          echo "name=AnywhereWork-${VERSION_NAME}.apk" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION_NAME} (${VERSION_CODE})" >> "$GITHUB_OUTPUT"
+
+      - name: Attach the APK to this tag's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK="$RUNNER_TEMP/${{ steps.apk.outputs.name }}"
+          echo "attaching $APK (version ${{ steps.apk.outputs.version }})"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$APK" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            # Another workflow on this tag may create the release at the same moment; whoever
+            # loses the race uploads into the release the winner created.
+            gh release create "$GITHUB_REF_NAME" "$APK" \
+              --title "dsh-cove $GITHUB_REF_NAME" \
+              --notes "Release assets are attached by the release, desktop and Android workflows." \
+              --repo "$GITHUB_REPOSITORY" \
+              || gh release upload "$GITHUB_REF_NAME" "$APK" --clobber --repo "$GITHUB_REPOSITORY"
+          fi
+          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' --repo "$GITHUB_REPOSITORY"
+
+      # The outcome travels to a branch: this repository is private and its run logs need API
+      # access that the person who asked for the release does not have.
+      - name: Report the outcome to the ci-status-android branch
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          {
+            echo "workflow: android-release"
+            echo "tag: $GITHUB_REF_NAME"
+            echo "commit: $GITHUB_SHA"
+            echo "outcome: ${{ job.status }}"
+            echo "apk: ${{ steps.apk.outputs.name }}"
+            echo "run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "--- steps ---"
+            gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
+              --jq '.jobs[] | .name + " :: " + (.steps[]? | .name + ": " + .conclusion)' 2>&1 || true
+            echo
+            echo "--- sdk.log (tail) ---"
+            tail -40 "$RUNNER_TEMP/sdk.log" 2>/dev/null || echo "(no sdk log)"
+            echo
+            echo "--- apk-build.log (tail) ---"
+            tail -60 "$RUNNER_TEMP/apk-build.log" 2>/dev/null || echo "(no build log)"
+            echo
+            # The failing step's own words: a job-level or step-level "failure" still costs a
+            # round trip otherwise.
+            for id in $(gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
+              --jq '.jobs[] | select(.conclusion == "failure") | .databaseId' 2>/dev/null); do
+              echo "--- failed job $id (log tail) ---"
+              gh run view --job "$id" --repo "$GITHUB_REPOSITORY" --log 2>&1 | tail -60 || true
+              echo
+            done
+            echo
+            echo "--- release assets ---"
+            gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' --repo "$GITHUB_REPOSITORY" 2>/dev/null || echo "(no release)"
+          } > "$RUNNER_TEMP/android-report.txt"
+          git config user.name "dsh-cove ci"
+          git config user.email "ci@users.noreply.github.com"
+          git checkout --orphan ci-status-android
+          git rm -rf . >/dev/null 2>&1 || true
+          cp "$RUNNER_TEMP/android-report.txt" android-release.txt
+          git add android-release.txt
+          git commit -m "ci(android-release): $GITHUB_REF_NAME ${{ job.status }}"
+          # Its own branch: the other release workflows force-push theirs and would delete this.
+          git push --force origin ci-status-android

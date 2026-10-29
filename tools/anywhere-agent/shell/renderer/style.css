@@ -1,0 +1,863 @@
+/*
+ * Desktop shell styling.
+ *
+ * Every colour, size, duration and radius comes from the generated token sheet, so
+ * this file states no brand value of its own. That is the point of the token
+ * pipeline: the shell cannot drift from the landing page, the Android app or the
+ * console.
+ *
+ * The shape is a split view - a list of machines beside the detail pane - and the
+ * craft is quiet on purpose: one surface step between the list and the content, no
+ * rules where a hover state can carry the same meaning, and room between rows
+ * instead of borders between them. The list is the app's whole navigation, so it is
+ * the one place that is dense; everything else is whitespace. The window keeps a
+ * toolbar because status has to be visible while a workspace covers the pane, and
+ * because a self-drawn frame is a window that reads as broken.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+/* An explicit `display` on a class beats the user agent's rule for [hidden], so the
+   hidden states need to win outright. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--aw-bg);
+  color: var(--aw-text);
+  font-family: var(--aw-font-sans);
+  font-size: var(--aw-size-caption);
+  line-height: var(--aw-leading-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------- toolbar */
+
+.toolbar {
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aw-space-md);
+  min-height: 46px;
+  /* Clear of the window controls, which float over this corner on macOS. */
+  padding: 0 var(--aw-space-md) 0 84px;
+  background: var(--aw-surface);
+  border-bottom: 1px solid var(--aw-border);
+}
+
+/* Windows draws its own frame and title bar, so the toolbar has nothing floating
+   over it and the inset would only push the lead controls off-centre. */
+html[data-platform='win32'] .toolbar {
+  padding-left: var(--aw-space-md);
+}
+
+.toolbar-lead,
+.toolbar-trail {
+  display: flex;
+  align-items: center;
+  gap: var(--aw-space-xs);
+  min-width: 0;
+}
+
+.toolbar-title {
+  font-size: var(--aw-size-caption);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Icon buttons, sized and rounded the way toolbar controls are. */
+.toolbar-button {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  color: var(--aw-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--aw-radius-xs);
+  cursor: pointer;
+  transition: background var(--aw-dur-fast) var(--aw-ease-standard), color var(--aw-dur-fast) var(--aw-ease-standard);
+}
+
+.toolbar-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.toolbar-button:hover {
+  background: var(--aw-surface-alt);
+  color: var(--aw-text);
+}
+
+.toolbar-button:hover:active {
+  background: var(--aw-border);
+}
+
+.toolbar-button:focus-visible {
+  outline: 2px solid var(--aw-focus);
+  outline-offset: 1px;
+}
+
+.toolbar-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+}
+
+/* The status reports itself in the quiet register: a dot and a word. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aw-space-xs);
+  color: var(--aw-text-muted);
+  font-size: var(--aw-size-caption);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--aw-radius-pill);
+  background: currentColor;
+  flex: none;
+  color: var(--aw-text-faint);
+}
+
+.status-label {
+  font-weight: 500;
+}
+
+.status-detail {
+  color: var(--aw-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status[data-tone='good'] .status-dot {
+  color: var(--aw-success);
+}
+
+.status[data-tone='busy'] .status-dot {
+  color: var(--aw-warning);
+}
+
+.status[data-tone='attention'] .status-dot {
+  color: var(--aw-brand);
+}
+
+.status[data-tone='bad'] .status-dot {
+  color: var(--aw-danger);
+}
+
+/* ------------------------------------------------------------------- split */
+
+.split {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  /* rail | list | content. The rail is the app's navigation and never folds away:
+     folding the list is about the list, not about losing where you are. */
+  grid-template-columns: 48px 248px 1fr;
+}
+
+body[data-sidebar='hidden'] .split {
+  grid-template-columns: 48px 1fr;
+}
+
+body[data-sidebar='hidden'] .sidebar {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- nav rail */
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--aw-space-2xs);
+  min-height: 0;
+  padding: var(--aw-space-sm) 0;
+  background: var(--aw-surface);
+  border-right: 1px solid var(--aw-border);
+}
+
+.rail-spacer {
+  flex: 1;
+}
+
+.rail-button {
+  /* The current-view bar is drawn against the rail's own edge. */
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  color: var(--aw-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--aw-radius-sm);
+  cursor: pointer;
+  transition: background var(--aw-dur-fast) var(--aw-ease-standard), color var(--aw-dur-fast) var(--aw-ease-standard);
+}
+
+.rail-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.rail-button:hover {
+  background: var(--aw-surface-alt);
+  color: var(--aw-text);
+}
+
+.rail-button:focus-visible {
+  outline: 2px solid var(--aw-focus);
+  outline-offset: 1px;
+}
+
+.rail-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: transparent;
+}
+
+/* The current view is the one mark that stays lit, so "where am I" is a glance: a filled
+   control, the brand on the glyph, and an edge bar that reads even where the tint is
+   nearly invisible (a dark room, a dimmed display). */
+.rail-button[data-active='true'] {
+  background: var(--aw-surface-alt);
+  color: var(--aw-brand);
+}
+
+.rail-button[data-active='true']::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  width: 2px;
+  height: 16px;
+  transform: translateY(-50%);
+  border-radius: var(--aw-radius-xs);
+  background: var(--aw-brand);
+}
+
+.rail-button[aria-pressed='true'] {
+  color: var(--aw-text);
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--aw-surface);
+  border-right: 1px solid var(--aw-border);
+}
+
+/* ------------------------------------------------------------------ search */
+
+.search {
+  flex: none;
+  padding: var(--aw-space-sm) var(--aw-space-sm) var(--aw-space-xs);
+}
+
+.search input {
+  width: 100%;
+  padding: var(--aw-space-xs) var(--aw-space-sm);
+  min-height: 30px;
+  background: var(--aw-surface-alt);
+  color: var(--aw-text);
+  border: 1px solid transparent;
+  border-radius: var(--aw-radius-sm);
+  font-family: inherit;
+  font-size: var(--aw-size-caption);
+  transition: border-color var(--aw-dur-fast) var(--aw-ease-standard);
+}
+
+.search input::placeholder {
+  color: var(--aw-text-faint);
+}
+
+.search input:hover {
+  border-color: var(--aw-border);
+}
+
+.search input:focus-visible {
+  outline: 2px solid var(--aw-focus);
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------------- list */
+
+.groups {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--aw-space-2xs) var(--aw-space-xs) var(--aw-space-md);
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aw-space-xs);
+  min-height: 28px;
+  padding: var(--aw-space-sm) var(--aw-space-sm) var(--aw-space-2xs);
+}
+
+.group-title {
+  color: var(--aw-text-faint);
+  font-size: var(--aw-size-caption);
+  font-weight: 600;
+  letter-spacing: var(--aw-tracking-caption);
+}
+
+/* The one action a section can carry: turning the private network on. It is here
+   rather than in the pane because it changes what the list holds, not what the
+   detail shows. */
+.group-action {
+  padding: 0 var(--aw-space-xs);
+  min-height: 22px;
+  background: transparent;
+  color: var(--aw-brand);
+  border: 0;
+  border-radius: var(--aw-radius-xs);
+  font: inherit;
+  font-size: var(--aw-size-caption);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.group-action:hover {
+  background: var(--aw-surface-alt);
+}
+
+.group-action:focus-visible {
+  outline: 2px solid var(--aw-focus);
+  outline-offset: 1px;
+}
+
+.group-hint {
+  padding: var(--aw-space-xs) var(--aw-space-sm) var(--aw-space-sm);
+  color: var(--aw-text-faint);
+  font-size: var(--aw-size-caption);
+}
+
+.machine {
+  display: flex;
+  align-items: center;
+  gap: var(--aw-space-sm);
+  width: 100%;
+  padding: var(--aw-space-xs) var(--aw-space-sm);
+  min-height: 38px;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-radius: var(--aw-radius-sm);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--aw-dur-fast) var(--aw-ease-standard);
+}
+
+.machine:hover {
+  background: var(--aw-surface-alt);
+}
+
+.machine:focus-visible {
+  outline: 2px solid var(--aw-focus);
+  outline-offset: -2px;
+}
+
+/* Selected reads as a filled row - the idiom every current source list uses - with
+   the name carrying the weight, so the state does not depend on colour alone. */
+.machine[aria-selected='true'] {
+  background: var(--aw-surface-alt);
+}
+
+.machine[aria-selected='true'] .machine-name {
+  font-weight: 600;
+}
+
+.machine-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--aw-radius-pill);
+  background: var(--aw-success);
+  flex: none;
+}
+
+.machine-dot[data-needs-login='true'] {
+  background: var(--aw-warning);
+}
+
+/* Finished work the user has not looked at, while they were on another machine. A
+   separate mark from the dot above, because the two answer different questions: that
+   one is "can I enter this machine", this one is "how much finished inside". It
+   carries the count as text, so the badge is readable rather than merely visible.
+
+   The fill means *act on me*, and only a failure earns it: a red badge that never goes
+   away for ordinary finished work turns into wallpaper. The quiet variant keeps the same
+   box so the row's alignment does not move between the two, and draws the count in body
+   text colour - a contract pair (7:1 in both schemes), not a colour invented here. */
+.machine-unread {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--aw-space-2xs);
+  background: var(--aw-danger-fill);
+  color: var(--aw-on-danger-fill);
+  border-radius: var(--aw-radius-pill);
+  font-size: var(--aw-size-caption);
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.machine-unread[data-tone='notice'] {
+  background: transparent;
+  color: var(--aw-text);
+  border-radius: 0;
+  padding: 0;
+}
+
+.machine-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.machine-name {
+  font-size: var(--aw-size-caption);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.machine-host {
+  color: var(--aw-text-faint);
+  font-family: var(--aw-font-mono);
+  font-size: var(--aw-size-caption);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.machine-badge {
+  flex: none;
+  color: var(--aw-warning);
+  font-size: var(--aw-size-caption);
+}
+
+/* -------------------------------------------------------------- sidebar foot */
+
+.sidebar-foot {
+  flex: none;
+  padding: var(--aw-space-xs) var(--aw-space-xs) var(--aw-space-sm);
+  border-top: 1px solid var(--aw-border);
+}
+
+/* Where the two halves of the product are kept apart: the line under the name says
+   whether the *other* machines are reachable, never whether the app works. */
+.account {
+  display: flex;
+  align-items: center;
+  gap: var(--aw-space-sm);
+  width: 100%;
+  padding: var(--aw-space-xs) var(--aw-space-sm);
+  min-height: 40px;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-radius: var(--aw-radius-sm);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--aw-dur-fast) var(--aw-ease-standard);
+}
+
+.account:hover:not(:disabled) {
+  background: var(--aw-surface-alt);
+}
+
+.account:disabled {
+  cursor: default;
+}
+
+.account:focus-visible {
+  outline: 2px solid var(--aw-focus);
+  outline-offset: -2px;
+}
+
+.account-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--aw-radius-pill);
+  background: var(--aw-text-faint);
+  flex: none;
+}
+
+.account[data-tone='good'] .account-dot {
+  background: var(--aw-success);
+}
+
+.account[data-tone='busy'] .account-dot {
+  background: var(--aw-warning);
+}
+
+.account[data-tone='attention'] .account-dot {
+  background: var(--aw-brand);
+}
+
+.account[data-tone='bad'] .account-dot {
+  background: var(--aw-danger);
+}
+
+.account-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-name {
+  display: block;
+  font-size: var(--aw-size-caption);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-line {
+  display: block;
+  color: var(--aw-text-faint);
+  font-size: var(--aw-size-caption);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-action {
+  flex: none;
+  color: var(--aw-brand);
+  font-size: var(--aw-size-caption);
+  font-weight: 500;
+}
+
+.account:disabled .account-action {
+  color: var(--aw-text-faint);
+}
+
+/* Diagnostics live at the bottom, folded: they are for the person debugging, not
+   for the person working. */
+.disclosure {
+  width: 100%;
+  padding: var(--aw-space-xs) var(--aw-space-sm);
+  background: transparent;
+  color: var(--aw-text-muted);
+  border: 0;
+  border-radius: var(--aw-radius-xs);
+  font: inherit;
+  font-size: var(--aw-size-caption);
+  text-align: left;
+  cursor: pointer;
+}
+
+.disclosure:hover {
+  background: var(--aw-surface-alt);
+  color: var(--aw-text);
+}
+
+.disclosure::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: var(--aw-space-xs);
+  transition: transform var(--aw-dur-fast) var(--aw-ease-standard);
+}
+
+.disclosure[aria-expanded='true']::before {
+  transform: rotate(90deg);
+}
+
+.diagnostics-rows {
+  margin: var(--aw-space-xs) 0 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--aw-space-2xs) var(--aw-space-sm);
+  font-size: var(--aw-size-caption);
+}
+
+.diagnostics-rows dt {
+  color: var(--aw-text-faint);
+}
+
+.diagnostics-rows dd {
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-font-mono);
+  font-size: var(--aw-size-mono);
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------------ detail */
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--aw-bg);
+}
+
+/* The pane the workspace view is placed over. */
+.detail-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+/* The screen the user meets before a workspace does: a headline, one line of
+   explanation, and the one action that resolves it. */
+.state-panel {
+  max-width: 46ch;
+  margin: 0 auto;
+  padding: 18vh var(--aw-space-xl) var(--aw-space-6xl);
+  text-align: center;
+}
+
+.state-panel h2 {
+  margin: 0 0 var(--aw-space-sm);
+  font-size: var(--aw-size-heading);
+  font-weight: 600;
+  letter-spacing: var(--aw-tracking-heading);
+}
+
+/* The front door is a headline, not a notice: the pane the user lands on gets the
+   display step, one line of direction, and the one action that opens a machine. */
+.state-panel[data-kind='home'] {
+  padding-top: 22vh;
+}
+
+.state-panel[data-kind='home'] h2 {
+  font-size: var(--aw-size-title);
+  letter-spacing: var(--aw-tracking-title);
+}
+
+.state-panel p {
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-size: var(--aw-size-caption);
+  line-height: var(--aw-leading-small);
+}
+
+.state-panel[data-state='error'] h2 {
+  color: var(--aw-danger);
+}
+
+/* The server's name, kept beside the state rather than folded into it: a failure the
+   person can fix has to name what failed. The line is also the control that changes it -
+   one affordance instead of a button that repeats what the line already says. */
+.state-server-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--aw-space-xs);
+  margin-top: var(--aw-space-sm) !important;
+}
+
+.state-server {
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--aw-text-faint);
+  font-family: inherit;
+  font-size: var(--aw-size-caption);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--aw-control-border);
+  text-underline-offset: 3px;
+}
+
+.state-server:hover {
+  color: var(--aw-text);
+  text-decoration-color: currentColor;
+}
+
+.state-server:focus-visible {
+  outline: 2px solid var(--aw-focus);
+  outline-offset: 2px;
+}
+
+.state-server-hint {
+  color: var(--aw-text-faint);
+  font-size: var(--aw-size-caption);
+}
+
+/* The address field, opened from the panel's own action. One row, because a person who
+   needs it needs exactly one value. */
+.server-field {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--aw-space-sm);
+  margin-top: var(--aw-space-lg);
+  flex-wrap: wrap;
+}
+
+.server-field input {
+  min-width: 30ch;
+  min-height: 30px;
+  padding: 0 var(--aw-space-sm);
+  background: var(--aw-surface);
+  color: var(--aw-text);
+  border: 1px solid var(--aw-control-border);
+  border-radius: var(--aw-radius-sm);
+  font-family: inherit;
+  font-size: var(--aw-size-caption);
+}
+
+.server-field input:focus-visible {
+  outline: 2px solid var(--aw-focus);
+  outline-offset: 1px;
+}
+
+/* A rejected value says why instead of closing as if it were stored. */
+.server-note {
+  margin-top: var(--aw-space-sm) !important;
+  color: var(--aw-danger) !important;
+}
+
+/* The panel's own line while a press is working, or the reason it did not. */
+.state-note {
+  margin-top: var(--aw-space-md) !important;
+  color: var(--aw-text-muted) !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.state-note[data-tone='danger'] {
+  color: var(--aw-danger) !important;
+}
+
+.welcome {
+  margin-bottom: var(--aw-space-lg);
+}
+
+.welcome-tagline {
+  margin: 0;
+  color: var(--aw-text-faint);
+  font-size: var(--aw-size-caption);
+}
+
+.state-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--aw-space-sm);
+  margin-top: var(--aw-space-xl);
+  flex-wrap: wrap;
+}
+
+.detail-notice {
+  position: absolute;
+  left: var(--aw-space-lg);
+  bottom: var(--aw-space-lg);
+  padding: var(--aw-space-xs) var(--aw-space-md);
+  background: var(--aw-surface);
+  border: 1px solid var(--aw-warning);
+  border-radius: var(--aw-radius-sm);
+  color: var(--aw-warning);
+  font-size: var(--aw-size-caption);
+  box-shadow: var(--aw-shadow-raised);
+}
+
+/* ----------------------------------------------------------------- buttons */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--aw-space-xs);
+  padding: 0 var(--aw-space-md);
+  min-height: 30px;
+  background: var(--aw-surface);
+  color: var(--aw-text);
+  border: 1px solid var(--aw-control-border);
+  border-radius: var(--aw-radius-sm);
+  font-family: inherit;
+  font-size: var(--aw-size-caption);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--aw-dur-fast) var(--aw-ease-standard), border-color var(--aw-dur-fast) var(--aw-ease-standard);
+}
+
+.button:hover {
+  background: var(--aw-surface-alt);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--aw-focus);
+  outline-offset: 2px;
+}
+
+.button[data-variant='primary'] {
+  background: var(--aw-brand-fill);
+  border-color: var(--aw-brand-fill);
+  color: var(--aw-on-brand-fill);
+}
+
+.button[data-variant='primary']:hover {
+  background: var(--aw-brand-fill-hover);
+  border-color: var(--aw-brand-fill-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

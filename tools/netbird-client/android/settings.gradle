@@ -1,0 +1,13 @@
+pluginManagement { includeBuild("../node_modules/@react-native/gradle-plugin") }
+plugins { id("com.facebook.react.settings") }
+extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
+rootProject.name = 'NetBirdPortal'
+include ':app'
+includeBuild('../node_modules/@react-native/gradle-plugin')
+
+// GeckoView (bundled Firefox engine) ships from Mozilla's Maven, not Google.
+dependencyResolutionManagement {
+    repositories {
+        maven { url 'https://maven.mozilla.org/maven2/' }
+    }
+}

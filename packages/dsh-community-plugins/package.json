@@ -1,0 +1,41 @@
+{
+  "name": "@dsh-cove/dsh-client-ui-community-plugins",
+  "description": "Community plugin index data source: community.json is the single source of the community plugin catalog.",
+  "version": "0.4.7",
+  "type": "module",
+  "exports": {
+    "./community.json": "./community.json",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "node -e \"JSON.parse(require('node:fs').readFileSync('community.json', 'utf8'))\"",
+    "typecheck": "node -e \"JSON.parse(require('node:fs').readFileSync('community.json', 'utf8'))\"",
+    "test": "vitest run"
+  },
+  "license": "BSD-3-Clause",
+  "devDependencies": {
+    "vitest": "^4.1.1"
+  },
+  "files": [
+    "community.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chengxiang-zhang/dsh-cove.git"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "community-plugins",
+    "index"
+  ],
+  "homepage": "https://github.com/chengxiang-zhang/dsh-cove/tree/main/packages/dsh-community-plugins#readme",
+  "bugs": {
+    "url": "https://github.com/chengxiang-zhang/dsh-cove/issues"
+  },
+  "author": "dsh-cove contributors",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  }
+}

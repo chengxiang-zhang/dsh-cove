@@ -1,0 +1,72 @@
+/*
+ * 侧栏标题行（官方 shell 的 DOM，不属于本包）。
+ *
+ * 官方 sidebar 展开时在标题行左端渲染 DeepSeek 品牌锁排（whale mark + 字标，
+ * 由 @deepseek-ai/dsh-client-ui-brand-official 填入 sidebar.brand.mark /
+ * sidebar.brand.name），右端渲染折叠/展开按钮；收起成 rail 之后，同一枚 mark
+ * 又成了按钮的外观。本包一律不要这枚品牌：
+ *
+ *  - 标题行的品牌位与它那个「新建会话」隐形点击区不出现（按钮本身也不能留在
+ *    可点区里，所以隐藏的是 .brand 元素而不是它的内容）；
+ *  - 标题行因此不再承载任何东西，整行收掉（展开态与 rail 都不留空带）；
+ *  - 折叠/展开按钮搬到底部页脚，展开态与「设置」行并列（右下角），rail 排在
+ *    设置齿轮正上方；两种状态下按钮都显示面板图标，不再用品牌 mark 当外观。
+ *
+ * 锚定方式与 compat shim 打出的 data-pane="sidebar" 同一路数——官方只给这些
+ * 节点 css-module 局部名（hash_local，如 hHd-Xa_logoRow）。选择器里的 `_` 前缀
+ * 就是那层 hash 与局部名的分隔，用来避免 `[class*='toggle']` 这类过宽的匹配：
+ * 侧栏里 `_collapsed` / `_toggle` / `_logoRow` 各自只命中一个官方节点。
+ * 官方改局部名或挪动按钮归属时，这里要同步。
+ */
+
+/* 品牌位（含其隐形点击区）不出现。 */
+[data-pane='sidebar'] [class*='_logoRow'] > [class*='_brand'] {
+  display: none;
+}
+
+/* 标题行不再有内容：整行收掉，并放开裁剪，免得影响搬走的按钮。 */
+[data-pane='sidebar'] [class*='_logoRow'] {
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+/* 折叠按钮的定位基准：侧栏列本身（列与官方 root 同尺寸，中间层是 display:contents）。 */
+[data-pane='sidebar'] {
+  position: relative;
+}
+
+/*
+ * 展开态：右下角，与「设置」行同一水平线（右缘对齐侧栏内容右缘）。
+ * 「设置」那行是整行按钮，右端 28px 与按钮重叠；z-index 让重叠处归折叠按钮
+ * （两者都是定位元素且 z-index:auto 时，命中测试按 DOM 顺序，设置行在后）。
+ */
+[data-pane='sidebar']:not(:has([class*='_collapsed'])) [class*='_toggle'] {
+  position: absolute;
+  z-index: 2;
+  right: 12px;
+  bottom: 16px;
+}
+
+/*
+ * rail：与设置齿轮同轴排在其上方（36px 按钮 + 8px 间距），不再出现在栏首。
+ * 用 margin 居中而不是 transform，避免覆盖官方 rail 入场动画的 transform。
+ */
+[data-pane='sidebar']:has([class*='_collapsed']) [class*='_toggle'] {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  bottom: 60px;
+  left: 0;
+  margin-inline: auto;
+}
+
+/* rail 的按钮外观：恒定显示面板图标，官方那枚品牌 mark 不出现。 */
+[data-pane='sidebar'] [class*='_railMark'] {
+  display: none;
+}
+
+[data-pane='sidebar']:has([class*='_collapsed']) [class*='_panelIcon'] {
+  display: inline;
+}

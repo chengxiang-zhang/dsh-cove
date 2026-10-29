@@ -1,0 +1,25 @@
+# External identity provider connector for NetBird's embedded IdP (Dex).
+#
+# On this deployment the connector lives in the embedded IdP's own store (the
+# `connector` table of its `idp.db`), not in a file; the fragment below is the
+# field set, so a replacement IdP can be wired without reverse-engineering that
+# database. Field names follow Dex's connector configuration.
+id: __IDP_CONNECTOR_ID__
+type: oidc
+name: __IDP_CONNECTOR_NAME__
+config:
+  # Issuer of the external IdP; an OIDC discovery document must answer there.
+  issuer: https://__IDP_HOST__
+  clientID: __IDP_CLIENT_ID__
+  clientSecret: __IDP_CLIENT_SECRET__
+  # The management server's own callback. The clients' loopback callback belongs
+  # to a different, deployment-registered client (`netbird-cli`,
+  # `redirect_uri=http://localhost:53000/`, `prompt=login`) and is never this
+  # value - the app never registers a redirect of its own.
+  redirectURI: https://__MANAGEMENT_HOST__/oauth2/callback
+  # Lark/Feishu reports an email as verified for any non-empty address; without
+  # this the connector refuses those logins.
+  insecureSkipEmailVerified: true
+  # Group claims are what the per-member `u-<user>` groups are built from, so the
+  # isolation model needs them enabled.
+  insecureEnableGroups: true
