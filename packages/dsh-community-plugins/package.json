@@ -1,7 +1,7 @@
 {
   "name": "@dsh-cove/dsh-client-ui-community-plugins",
   "description": "Community plugin index data source: community.json is the single source of the community plugin catalog.",
-  "version": "0.4.7",
+  "version": "0.4.9",
   "type": "module",
   "exports": {
     "./community.json": "./community.json",
