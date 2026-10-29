@@ -1,0 +1,58 @@
+# 依赖与构建产物
+node_modules/
+
+# npm 认证配置（含令牌引用，禁止提交）
+.npmrc
+
+# 本地工具缓存
+*.log
+.DS_Store
+.codegraph/
+
+# GUI 测试截图
+gui-test-screenshots/
+
+# 本地性能调试脚本
+.dsh/perf/
+
+# 本地调试探针脚本（不入库）
+.dsh/*.js
+.dsh/*.py
+
+# worktree 插件运行时状态（含本地绝对路径，不入库）
+.dsh/workspaces/
+
+# 评审提示草稿：本地资料，不上传
+REVIEW-PROMPT.md
+# 营销视频工程：本地生成，不上传
+/marketing/dsh-web-ui-promo-60s/
+
+# pnpm 11 项目内包存储（本地依赖缓存，不入库）
+.pnpm-store/
+
+# 挂载冒烟产物（scripts/e2e-mount.sh）
+*.tgz
+playwright-report/
+test-results/
+
+# 构建产物（tsdown 输出）——所有包统一不入库（src 层已跟踪文件不受影响）
+**/lib/
+!scripts/lib/
+**/dist/
+.e2e-tmp
+
+# 部署真值：只提交 config/deployment.example.json
+config/deployment.local.json
+packages/dsh-web-all/presets/hiopen.patch.yml
+
+# local secrets and machine-local env (never commit)
+.env.local
+
+# 本地凭据：任何位置的 .api-key 都不入库（含工具目录下的副本）
+.api-key
+
+# 本地验证证据：原先只写在 .git/info/exclude（不随克隆传播），改为随仓库生效
+.dsh-evidence/
+
+# 退役材料：移出跟踪但保留在磁盘（可逆，不删除）
+.retired/

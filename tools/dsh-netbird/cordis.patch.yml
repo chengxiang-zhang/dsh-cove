@@ -1,0 +1,45 @@
+# Merge these settings into the existing web-all row in
+# $DSH_HOME/profiles/web/cordis.patch.yml.
+# DSH's default 2-second Ping/Pong deadline is too aggressive across an overlay
+# network and busy hosts. A 30-second deadline tolerates ordinary scheduling and
+# mesh jitter while still detecting dead WebSocket peers promptly.
+- id: typert-gateway
+  config:
+    websocketHeartbeatIntervalMs: 30000
+
+# A peer's browser reaches this machine through nginx, so it can never see the
+# host's display. The adaptive chooser decides `native` here anyway: it reads the
+# loopback bind as "the operator sits at the display" and cannot see the proxy in
+# front of it, so every darwin machine resolves the OS chooser. A peer's "choose
+# directory" then opens a dialog on the unattended host and waits for an operator
+# that is not there; the request only ends when the proxy gives up (HTTP 504).
+# Compose the browse pair instead: the backend answers from the host filesystem
+# and its client surface renders that listing in the browser. Both faces are one
+# interaction, so pin them together (`name` in a patch is a mismatch guard, not a
+# rename: the bundle row must be disabled and the pair inserted).
+- id: directory-picker
+  name: '@deepseek-ai/dsh-host-directory-picker-auto'
+  disabled: true
+- insert:
+    - id: directory-picker-browse
+      name: '@deepseek-ai/dsh-host-directory-picker-browse'
+    - id: directory-picker-browse-surface
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+
+- id: web-all
+  config:
+    noBrowserAuth: false
+    remote-web-ui:
+      enabled: true
+      integratedAuthEnabled: true
+      legacyGatewayEnabled: false
+      # Configure bootstrapAdminUsername/bootstrapAdminPassword for first use.
+      # Set publicBaseUrl to the exact HTTPS origin before enabling OAuth.
+      # publicBaseUrl: https://dsh.__MACHINE__.netbird
+      # oidcProviders: []
+      # feishuAuth: {}
+
+# Trusted browser authority is NOT configured here: the profile `web` row's
+# trustedHosts never reaches the runtime fence in this SDK. Pass the canonical
+# authority on the service command line instead:
+#   dsh web --host 127.0.0.1 --port 3080 --no-open --trusted-host dsh.__MACHINE__

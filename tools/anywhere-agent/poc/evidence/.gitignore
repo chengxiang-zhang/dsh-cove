@@ -1,0 +1,7 @@
+# PoC evidence stays local.
+#
+# The screenshots show real colleagues' workspaces, workspace names and session
+# titles. They are evidence for a review, not repository content: nothing here may
+# be committed.
+*
+!.gitignore

@@ -1,0 +1,9 @@
+{
+  "protocol": 1,
+  "netbird": "v0.78.1",
+  "helper": "0.1.1",
+  "update": {
+    "channel": "",
+    "minProtocol": 1
+  }
+}

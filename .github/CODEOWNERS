@@ -1,0 +1,15 @@
+# Repository code owners.
+#
+# CODEOWNERS routes review requests; it is not an access-control list. The
+# maintainer is the only reviewer today, so every path resolves to the same
+# owner. Split this file when a second maintainer takes a stable area.
+#
+# Rules are evaluated bottom-up: the last matching pattern wins.
+
+*                       @chengxiang-zhang
+
+/packages/dsh-web-all/  @chengxiang-zhang
+/packages/dsh-community-plugins/ @chengxiang-zhang
+/scripts/               @chengxiang-zhang
+/docs/                  @chengxiang-zhang
+/.github/               @chengxiang-zhang

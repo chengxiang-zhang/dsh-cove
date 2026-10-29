@@ -1,0 +1,144 @@
+{
+  "cordisRows": [
+    "web-all"
+  ],
+  "browserSeats": {
+    "conversation.input.dock": [
+      "web-all-git-branch-chip"
+    ],
+    "sidebar.panellist": [
+      "web-all-ssh",
+      "web-all-memoir"
+    ],
+    "main": [
+      "web-all-ssh",
+      "web-all-memoir"
+    ],
+    "sidebar.right.pane.tab": [
+      "web-ui.git"
+    ],
+    "settings.plugins.tab": [
+      "lark-inbox",
+      "notify"
+    ]
+  },
+  "sidebarComponents": [
+    "ssh",
+    "memoir",
+    "right-pane",
+    "git-workbench",
+    "native-panels",
+    "page-shell"
+  ],
+  "conversationComponents": [
+    "git-branch",
+    "git-graph",
+    "selector-context",
+    "session-lane-chip",
+    "subagent-model",
+    "worktree"
+  ],
+  "rightPaneComponents": [
+    "git"
+  ],
+  "hostServices": [
+    "codex-bridge",
+    "family-config",
+    "family-namespaces",
+    "git-graph",
+    "lark-inbox",
+    "lifecycle",
+    "memoir",
+    "no-browser-auth",
+    "playwright-sessions",
+    "remote-web-ui",
+    "right-pane",
+    "schedule-mode",
+    "ssh",
+    "web-render",
+    "web-search-anthropic",
+    "worktree",
+    "notify"
+  ],
+  "routePrefixes": [
+    "/api/dsh-codex-bridge",
+    "/api/dsh-memoir",
+    "/api/gateway",
+    "/api/pair",
+    "/api/schedule-mode",
+    "/api/workbench",
+    "/git",
+    "/login",
+    "/lark-inbox/wizard",
+    "/workspace-model",
+    "/worktree",
+    "/api/dsh-notify"
+  ],
+  "toolNames": [
+    "lark_inbox_ack",
+    "lark_inbox_peek",
+    "lark_inbox_pop",
+    "memoir_read",
+    "memoir_record",
+    "memoir_update",
+    "schedule_mode_list",
+    "schedule_mode_set",
+    "ssh_cluster",
+    "ssh_download",
+    "ssh_exec",
+    "ssh_list",
+    "ssh_tunnel",
+    "ssh_upload"
+  ],
+  "toolPrefixes": [
+    "mcp__playwright__"
+  ],
+  "settingsNamespaces": [
+    "dsh-codex-bridge",
+    "dsh-ssh",
+    "lark-inbox",
+    "remote-web-ui",
+    "schedule-mode",
+    "web-render",
+    "workspace-model",
+    "notify"
+  ],
+  "semanticHooks": {
+    "data-pane": [
+      "sidebar",
+      "conversation"
+    ],
+    "data-dsh-part": [
+      "workbench-git",
+      "chip",
+      "dialog",
+      "settings",
+      "wizard",
+      "panel",
+      "terminal",
+      "entry",
+      "lane-chip",
+      "lane-menu",
+      "field",
+      "feed-path"
+    ],
+    "data-dsh-plugin": [
+      "web-all",
+      "ssh",
+      "memoir",
+      "worktree",
+      "git-graph",
+      "lark-inbox",
+      "notify"
+    ]
+  },
+  "runtimeExports": {
+    "@dsh-cove/dsh-web-all": [
+      ".",
+      "./client",
+      "./invariant",
+      "./package.json",
+      "./src/*"
+    ]
+  }
+}

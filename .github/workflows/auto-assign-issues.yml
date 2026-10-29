@@ -1,0 +1,38 @@
+name: Auto-assign issues to collaborator
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  assign:
+    name: Assign issue to collaborator
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Assign every Issue to collaborator
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issue = context.payload.issue;
+            if (!issue || issue.pull_request) {
+              return;
+            }
+
+            // Issue ownership is independent from the PR routing configuration.
+            // Assign the repository owner: GitHub rejects assigning a user who is
+            // not a collaborator, which would fail every external issue creation.
+            const assignees = [context.repo.owner];
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              assignees,
+            });
+            console.log(
+              'Issue #' + issue.number + ': assigned ' + assignees.join(', ') + '.'
+            );

@@ -1,0 +1,96 @@
+/*
+ * 原生页面版心：与官方插件页 PluginManagerPage.module.css 的 .page /
+ * .pageHead / .pageTitle / .pageIntro / .toolbar 完全同形（同样的 token、
+ * 同样的尺寸），所以家族页面和官方插件页看起来、滚动起来是同一套东西。
+ */
+
+.page {
+  box-sizing: border-box;
+  height: 100%;
+  color: var(--dsw-alias-label-primary);
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 0 clamp(24px, 4vw, 48px) 48px;
+  display: flex;
+  overflow: auto;
+}
+
+.page > * {
+  width: 100%;
+  max-width: 960px;
+}
+
+.pageHead {
+  box-sizing: border-box;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding-top: 28px;
+  display: flex;
+  flex: none;
+}
+
+[data-platform='darwin'] .pageHead {
+  padding-top: calc(28px + var(--dsh-frame-top-clearance, 0px));
+}
+
+.pageHeading {
+  min-width: 0;
+}
+
+.pageTitle {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 28px;
+}
+
+.pageIntro {
+  color: var(--dsw-alias-label-secondary);
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  display: flex;
+}
+
+.toolbar {
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  display: flex;
+  flex: none;
+}
+
+.section {
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  display: flex;
+}
+
+.sectionFill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.notice {
+  color: var(--dsw-alias-label-tertiary);
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  display: flex;
+}
+
+.noticeError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.noticeAction {
+  margin-left: auto;
+}

@@ -1,0 +1,47 @@
+# Management host virtual host: the TLS front for the management API, the
+# embedded IdP and the dashboard.
+#
+# Replace every __PLACEHOLDER__ with the deployment's own host, certificate paths
+# and upstream container names. The two REQUIREMENT blocks are not choices: they
+# are what the clients and the dashboard were measured to need.
+server {
+    listen 443 ssl;
+    server_name __MANAGEMENT_HOST__;
+
+    ssl_certificate     __TLS_CERTIFICATE__;
+    ssl_certificate_key __TLS_CERTIFICATE_KEY__;
+
+    # REQUIREMENT: the dashboard is a Next.js static export whose own rule has no
+    # SPA fallback, and only its 404.html boots the application shell. Its OIDC
+    # client uses redirect_uri=/nb-auth (/nb-silent-auth for silent renewal), and
+    # neither path has a matching HTML file, so both must return the shell
+    # directly. nginx keeps the query string and the browser URL stays /nb-auth.
+    location = /nb-auth {
+        proxy_pass http://__DASHBOARD_UPSTREAM__/index.html;
+    }
+
+    location = /nb-silent-auth {
+        proxy_pass http://__DASHBOARD_UPSTREAM__/index.html;
+    }
+
+    # REQUIREMENT: clients enroll against this host directly, so the management
+    # REST API, its RPC prefix (the path a client dials for the network map) and
+    # the embedded IdP at /oauth2/ must all answer here. The RPC prefix is
+    # deployment-specific; complete that location from your own server's routes
+    # rather than from this placeholder.
+    location /api/ {
+        proxy_pass http://__MANAGEMENT_UPSTREAM__;
+    }
+
+    location /oauth2/ {
+        proxy_pass http://__MANAGEMENT_UPSTREAM__;
+    }
+
+    location /__MANAGEMENT_RPC_PREFIX__/ {
+        proxy_pass http://__MANAGEMENT_UPSTREAM__;
+    }
+
+    location / {
+        proxy_pass http://__DASHBOARD_UPSTREAM__;
+    }
+}

@@ -1,0 +1,47 @@
+# Dependency updates.
+#
+# Version updates are grouped to keep review volume low; DeepSeek SDK packages
+# move as a cohort, so they are grouped separately and reviewed against the
+# runtime host version before merging. Security updates are always enabled by
+# the repository setting and are not limited by this file.
+#
+# Dependabot pull requests are bot-authored: they skip the contribution-evidence
+# gate and must still pass every required check before a maintainer merges them.
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      deepseek-sdk:
+        patterns:
+          - "@deepseek-ai/*"
+      dev-tooling:
+        dependency-type: development
+        exclude-patterns:
+          - "@deepseek-ai/*"
+      runtime-dependencies:
+        dependency-type: production
+        exclude-patterns:
+          - "@deepseek-ai/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore
+      include: scope

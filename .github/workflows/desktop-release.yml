@@ -1,0 +1,456 @@
+name: Desktop Release
+
+# The macOS app is a first-party artifact of this repository, but the runtime release
+# workflow has no way to produce it: it runs on Linux and it publishes an npm tarball.
+# This workflow builds the installer on a macOS runner and attaches it to the same tag's
+# release, so a released version carries something a person can actually open.
+#
+# It deliberately depends on nothing but the repository: the Electron runtime and the
+# app-scoped overlay helper are fetched/built here, and the release is written with the
+# workflow's own token. No operator credential is involved.
+#
+# It also reports back through a branch (`ci-status`) instead of an API: whoever asked for
+# the build can read the outcome with an ordinary `git fetch`, without repository API
+# access. The report is written on success and on failure alike.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  # The report step reads this run's own failed-step log, which needs actions: read; an
+  # explicit permissions block drops the defaults, so it is granted here.
+  actions: read
+
+concurrency:
+  group: desktop-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  macos-installer:
+    name: Package Anywhere Work.app and attach it to the release
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      # The Electron runtime the shell was developed and verified against. Pinned here
+      # rather than floated, because the packaged bundle must be reproducible. The hash is
+      # the official darwin-arm64 archive for that version, cross-checked by two
+      # independent downloads (130,738,603 bytes) rather than parsed out of a release list.
+      ELECTRON_VERSION: '44.9.0'
+      ELECTRON_ZIP_SHA256: '12d873a5ae98a6598e730402e9278c5d132e97ea1a4405a7713bec2a3e83921f'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Releases are cut from main. A tag event carries no branch information, so the tag's
+      # commit is checked against main instead: a tag that points at an unintegrated commit is
+      # refused rather than quietly attaching an installer to a release nobody reviewed.
+      - name: Require the tag to be on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main; cut releases from main"
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME is on main"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
+      - name: Fetch the Electron runtime the packager expects
+        run: |
+          set -o pipefail
+          # Straight from Electron's own release rather than through npm: npm's
+          # postinstall fetches this same archive, but it is silent when it does not, and
+          # it left the runner with a runtime directory that did not exist ("added 13
+          # packages in 1s" and no Electron.app).
+          RUNTIME="$RUNNER_TEMP/electron-runtime"
+          ZIP="electron-v${ELECTRON_VERSION}-darwin-arm64.zip"
+          BASE="https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}"
+          mkdir -p "$RUNTIME"
+          {
+            echo "==> $BASE/$ZIP"
+            curl -fL --retry 3 --retry-delay 2 --max-time 900 -o "$RUNTIME/$ZIP" "$BASE/$ZIP"
+            GOT="$(shasum -a 256 "$RUNTIME/$ZIP" | awk '{ print $1 }')"
+            echo "sha256 $GOT"
+            if [ "$GOT" != "$ELECTRON_ZIP_SHA256" ]; then
+              echo "checksum mismatch: expected $ELECTRON_ZIP_SHA256"
+              exit 1
+            fi
+            # ditto, not unzip: an .app bundle carries symlinks and permissions that a
+            # plain unzip does not preserve.
+            ditto -x -k "$RUNTIME/$ZIP" "$RUNTIME/unpacked"
+            test -d "$RUNTIME/unpacked/Electron.app"
+            echo "Electron.app unpacked: $(du -sh "$RUNTIME/unpacked/Electron.app" | cut -f1)"
+          } 2>&1 | tee "$RUNNER_TEMP/electron.log"
+          echo "ELECTRON_DIST=$RUNTIME/unpacked/Electron.app" >> "$GITHUB_ENV"
+
+      - name: Build the app-scoped overlay helper for this runner
+        run: |
+          set -o pipefail
+          # Single quotes inside the substitution: nested double quotes would close the
+          # outer string and turn the rest of the line into a stray command.
+          HELPER_VERSION="$(node -p 'require("./tools/anywhere-agent/packaging/version-contract.json").helper')" \
+            bash tools/anywhere-agent/scripts/build-tunnel.sh 2>&1 | tee "$RUNNER_TEMP/helper.log"
+          test -x "$HOME/.cache/anywhere-agent/bin/anywhere-tunnel"
+          "$HOME/.cache/anywhere-agent/bin/anywhere-tunnel" <<< '{"id":1,"cmd":"version"}' | head -1
+
+      # The disk image is what a person downloads, and what makes it installable (the
+      # Applications shortcut, the install notes, the background) is asserted by mounting an
+      # image, not by reading the script that writes it. hdiutil only exists on macOS, so
+      # this gate lives here rather than in the Linux CI job.
+      - name: Verify the installer layout
+        run: node --test tools/anywhere-agent/test/make-dmg.test.mjs 2>&1 | tee "$RUNNER_TEMP/installer-layout.log"
+
+      - name: Build the app and the disk image
+        # The tag is the version this installer is released as. Passing it keeps the bundle,
+        # the disk image's name and the release in agreement, instead of the app carrying a
+        # number typed into the tool months earlier.
+        #
+        # `AW_MANAGEMENT_URL` is the deployment's own endpoint, read from a repository
+        # variable so that no real address lives in the source. When it is set the packager
+        # bakes it into the bundle (`endpoint.json`), which is what lets a person open the app
+        # and sign in without being asked where the fleet is; when it is empty the build ships
+        # without one and the window asks for the address instead of dialling a placeholder.
+        env:
+          VERSION: ${{ github.ref_name }}
+          AW_MANAGEMENT_URL: ${{ vars.AW_MANAGEMENT_URL }}
+        run: |
+          export VERSION="${VERSION#v}"
+          bash tools/anywhere-agent/scripts/package-mac.sh --dmg 2>&1 | tee "$RUNNER_TEMP/package.log"
+
+      - name: Release notes for this tag
+        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+
+      - name: Attach the installer to this tag's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # find, not ls: shellcheck's SC2012, which actionlint fails on, flags parsing
+          # ls output for filenames that may contain anything.
+          DMG="$(find tools/anywhere-agent/build -maxdepth 1 -name '*.dmg' -print -quit)"
+          echo "installer: $DMG ($(du -h "$DMG" | cut -f1))"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$DMG" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$DMG" \
+              --title "dsh-cove $GITHUB_REF_NAME" \
+              --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+
+      # The runtime tarball is published by the release workflow from a secret this
+      # workflow does not own. Once it is on the registry it is public, so nothing stops
+      # this job from putting it on the same release - and doing so means a released tag
+      # carries both things a version has: the package and the app.
+      - name: Attach the runtime package once the registry has it
+        # Best effort on purpose: the installer is what this workflow owes a release. A
+        # registry or upload hiccup while adding the package must not fail the build that
+        # a person downloads.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          VERSION="$(node -p 'require("./packages/dsh-web-all/package.json").version')"
+          SPEC="@dsh-cove/dsh-web-all@${VERSION}"
+          {
+            echo "waiting for $SPEC on the registry (bounded, best effort)"
+            for _ in $(seq 1 30); do
+              if npm view "$SPEC" version --registry=https://registry.npmjs.org/ >/dev/null 2>&1; then
+                echo "found $SPEC"
+                break
+              fi
+              sleep 20
+            done
+            if ! npm view "$SPEC" version --registry=https://registry.npmjs.org/ >/dev/null 2>&1; then
+              echo "the registry does not have $SPEC yet; leaving the release with the installer only"
+              exit 0
+            fi
+            cd "$RUNNER_TEMP"
+            npm pack "$SPEC" --registry=https://registry.npmjs.org/ 2>&1 | tail -3
+            TGZ="$(find "$RUNNER_TEMP" -maxdepth 1 -name '*.tgz' -print -quit)"
+            gh release upload "$GITHUB_REF_NAME" "$TGZ" --clobber --repo "$GITHUB_REPOSITORY"
+            echo "attached $TGZ"
+          } 2>&1 | tee "$RUNNER_TEMP/runtime-asset.log"
+          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' --repo "$GITHUB_REPOSITORY"
+
+      - name: Keep the installer as a workflow artifact too
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: anywhere-work-dmg
+          path: tools/anywhere-agent/build/*.dmg
+          if-no-files-found: warn
+
+  windows-installer:
+    name: Package Anywhere Work for Windows and attach it to the release
+    # After the macOS job on purpose: two jobs racing `gh release create` on one tag is a
+    # 422, and the Windows job still runs when macOS failed (`if: always()`), because a tag
+    # that carries one installer beats a tag that carries none.
+    needs: [macos-installer]
+    if: always()
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      ELECTRON_VERSION: '44.9.0'
+      # electron-v44.9.0-win32-x64.zip: 158,625,558 bytes. The hash came from two
+      # independent channels (the GitHub release and the npmmirror binary mirror), which
+      # agree with each other and with the size - the same two-download rule the darwin pin
+      # above follows. The same file's darwin-arm64 line reproduces the pin already in use,
+      # which is what says the source is the right one.
+      ELECTRON_WIN_ZIP_SHA256: '88e08039d0ef359bab9f674e8051fa103bd8628ea7c5a5e1daaa610a8a0c6931'
+      ELECTRON_WIN_ZIP_BYTES: '158625558'
+      # Signing is external, like the iOS job's: a certificate cannot be committed and an
+      # unsigned installer is what SmartScreen warns about. Absent secrets mean an unsigned
+      # build, which the install notes already explain to the person running it.
+      AW_WINDOWS_SIGNING: ${{ secrets.AW_WINDOWS_SIGNING }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Full history: the build number is the commit count, and the gate below asks
+          # whether the tag's commit is on main.
+          fetch-depth: 0
+
+      # Releases are cut from main. GitHub tag events carry no branch information, so the
+      # tag's commit is checked against main instead.
+      - name: Require the tag to be on main
+        shell: bash
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main; cut releases from main"
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME is on main"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
+      # The runtime, not the vendor's installer: the packager stages the directory, writes
+      # the payload into resources/app and renames electron.exe to the product's name.
+      - name: Fetch the Electron runtime the packager expects
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = "electron-v$env:ELECTRON_VERSION-win32-x64.zip"
+          $url = "https://github.com/electron/electron/releases/download/v$env:ELECTRON_VERSION/$zip"
+          $runtime = Join-Path $env:RUNNER_TEMP 'electron-runtime'
+          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+          $archive = Join-Path $runtime $zip
+          Invoke-WebRequest -Uri $url -OutFile $archive -UseBasicParsing
+          $size = (Get-Item $archive).Length
+          if ("$size" -ne $env:ELECTRON_WIN_ZIP_BYTES) { throw "unexpected archive size: $size" }
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
+          if ($hash -ne $env:ELECTRON_WIN_ZIP_SHA256) { throw "sha256 mismatch: $hash" }
+          Write-Host "runtime verified: $hash"
+          $unpacked = Join-Path $runtime 'unpacked'
+          Expand-Archive -Path $archive -DestinationPath $unpacked -Force
+          "ELECTRON_WIN_DIST=$unpacked" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # The same Go source the macOS app embeds, cross-compiled: the engine is portable, so
+      # Windows needs no second implementation of the overlay - only a target.
+      - name: Build the engine for Windows
+        shell: bash
+        run: |
+          set -o pipefail
+          HELPER_VERSION="$(node -p 'require("./tools/anywhere-agent/packaging/version-contract.json").helper')"             GOOS=windows GOARCH=amd64 OUT="$RUNNER_TEMP/anywhere-tunnel.exe"             bash tools/anywhere-agent/scripts/build-tunnel.sh 2>&1 | tee "$RUNNER_TEMP/helper.log"
+          test -f "$RUNNER_TEMP/anywhere-tunnel.exe"
+          echo '{"id":1,"cmd":"version"}' | "$RUNNER_TEMP/anywhere-tunnel.exe" | head -1
+
+      # Staging and installer generation in one place: the packager writes the app
+      # directory, the icon and the NSIS source, so what CI runs and what a developer runs
+      # are the same command.
+      - name: Stage the app and write the installer source
+        env:
+          VERSION: ${{ github.ref_name }}
+          AW_MANAGEMENT_URL: ${{ vars.AW_MANAGEMENT_URL }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:VERSION.TrimStart('v')
+          $build = (git -C . rev-list --count HEAD).Trim()
+          $arguments = @(
+            'tools/anywhere-agent/scripts/package-windows.mjs',
+            '--runtime', $env:ELECTRON_WIN_DIST,
+            '--helper', (Join-Path $env:RUNNER_TEMP 'anywhere-tunnel.exe'),
+            '--version', $version,
+            '--build', $build
+          )
+          if ($env:AW_MANAGEMENT_URL) { $arguments += @('--endpoint', $env:AW_MANAGEMENT_URL) }
+          node @arguments 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/package.log"
+
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis --version=3.10 --no-progress -y
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nsi = Get-ChildItem tools/anywhere-agent/build -Filter '*.nsi' | Select-Object -First 1
+          if (-not $nsi) { throw 'the packager wrote no NSIS source' }
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" $nsi.FullName 2>&1 |
+            Tee-Object -FilePath "$env:RUNNER_TEMP/nsis.log"
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with $LASTEXITCODE" }
+          $installer = Get-ChildItem tools/anywhere-agent/build -Filter '*.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'no installer was written' }
+          Write-Host "installer: $($installer.Name) ($([math]::Round($installer.Length / 1MB, 1)) MB)"
+
+      # An installer that has never been run is a file, not an installer. This is the
+      # Windows counterpart of mounting the disk image in the macOS job: silent install,
+      # install over itself (which is what an update is), then uninstall.
+      - name: Verify the installer installs, upgrades over itself and uninstalls
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem tools/anywhere-agent/build -Filter '*.exe' | Select-Object -First 1
+          $target = Join-Path $env:LOCALAPPDATA 'Programs\Anywhere Work'
+          $app = Join-Path $target 'Anywhere Work.exe'
+          $arp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Anywhere Work'
+          if (Test-Path $target) { Remove-Item -Recurse -Force $target }
+
+          Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
+          if (-not (Test-Path $app)) { throw 'a silent install did not place the app' }
+          $version = (Get-ItemProperty -Path $arp -ErrorAction Stop).DisplayVersion
+          Write-Host "installed version: $version"
+          $helper = Join-Path $target 'resources\bin\anywhere-tunnel.exe'
+          if (-not (Test-Path $helper)) { throw 'the engine is not inside the installed app' }
+
+          Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
+          if (-not (Test-Path $app)) { throw 'installing over an existing install removed the app' }
+
+          $uninstaller = Join-Path $target 'Uninstall.exe'
+          if (-not (Test-Path $uninstaller)) { throw 'the installer wrote no uninstaller' }
+          Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait
+          Start-Sleep -Seconds 10
+          if (Test-Path $app) { throw 'uninstall left the app behind' }
+          if (Test-Path $arp) { throw 'uninstall left the Apps & features entry behind' }
+          Write-Host 'installer verified: install, upgrade over itself, uninstall'
+
+      - name: Sign the installer when a certificate is configured
+        if: env.AW_WINDOWS_SIGNING == 'true'
+        env:
+          CERTIFICATE_P12: ${{ secrets.AW_WINDOWS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.AW_WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'aw-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE_P12))
+          $installer = Get-ChildItem tools/anywhere-agent/build -Filter '*.exe' | Select-Object -First 1
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe is not on this runner' }
+          & $signtool.FullName sign /f $pfx /p $env:CERTIFICATE_PASSWORD /fd SHA256 `
+            /tr http://timestamp.digicert.com /td SHA256 $installer.FullName
+          if ($LASTEXITCODE -ne 0) { throw "signtool sign failed with $LASTEXITCODE" }
+          & $signtool.FullName verify /pa $installer.FullName
+          if ($LASTEXITCODE -ne 0) { throw "the signature did not verify ($LASTEXITCODE)" }
+          Write-Host "signed and verified: $($installer.Name)"
+
+      - name: Say whether the installer is signed
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ secrets.AW_WINDOWS_SIGNING }}" != "true" ]; then
+            echo "no Windows certificate is configured: this installer is unsigned, and SmartScreen will warn about it once."
+          fi
+
+      - name: Release notes for this tag
+        shell: bash
+        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+
+      - name: Attach the installer to this tag's release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          EXE="$(find tools/anywhere-agent/build -maxdepth 1 -name '*.exe' -print -quit)"
+          echo "installer: $EXE ($(du -h "$EXE" | cut -f1))"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$EXE" --clobber
+          else
+            # The macOS job normally created it already; this path is for a tag whose
+            # macOS job failed, and it tolerates losing that race rather than failing the
+            # run over an upload that another job legitimately owns.
+            gh release create "$GITHUB_REF_NAME" "$EXE"               --title "dsh-cove $GITHUB_REF_NAME"               --notes-file "$RUNNER_TEMP/notes.md"               || gh release upload "$GITHUB_REF_NAME" "$EXE" --clobber
+          fi
+
+      - name: Keep the installer as a workflow artifact too
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: anywhere-work-windows
+          path: tools/anywhere-agent/build/*.exe
+          if-no-files-found: warn
+
+  # One report for both installers, force-pushed once. Two jobs reporting separately would
+  # each rewrite the orphan branch and delete the other's file.
+  report:
+    name: Report the outcome to the ci-status branch
+    needs: [macos-installer, windows-installer]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # The report is a branch, not an API call: the requester can read it with a plain
+      # `git fetch origin ci-status`, which needs no repository token.
+      - name: Write the outcome and push it once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          OUTCOME="${{ job.status }}"
+          mkdir -p "$RUNNER_TEMP/report"
+          {
+            echo "workflow: desktop-release"
+            echo "tag: $GITHUB_REF_NAME"
+            echo "commit: $GITHUB_SHA"
+            echo "outcome: $OUTCOME"
+            echo "run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "macos:   ${{ needs.macos-installer.result }}"
+            echo "windows: ${{ needs.windows-installer.result }}"
+            echo
+            echo "--- release assets ---"
+            gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' 2>/dev/null || echo "(no release)"
+            echo
+            # The failing step's own words, so whoever asked for the build does not have to
+            # open the Actions page to find out what broke. A job's own logs are not on this
+            # runner's disk, so they are read back through the API.
+            echo "--- failed step log (tail) ---"
+            gh run view "$GITHUB_RUN_ID" --log-failed 2>&1 | tail -60 || echo "(no failed-step log)"
+          } > "$RUNNER_TEMP/report/desktop-release.txt"
+
+          git config user.name "dsh-cove ci"
+          git config user.email "ci@users.noreply.github.com"
+          git checkout --orphan ci-status
+          git rm -rf . >/dev/null 2>&1 || true
+          cp "$RUNNER_TEMP/report/desktop-release.txt" desktop-release.txt
+          git add desktop-release.txt
+          git commit -m "ci(desktop-release): $GITHUB_REF_NAME $OUTCOME"
+          git push --force origin ci-status

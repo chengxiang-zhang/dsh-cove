@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="1024" height="1024">
+  <defs>
+    <clipPath id="shape"><rect width="72" height="72" rx="16.20" ry="16.20"/></clipPath>
+  </defs>
+  <g clip-path="url(#shape)">
+    <image href="../../netbird-client/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_background.png" x="-18" y="-18" width="108" height="108"/>
+    <image href="../../netbird-client/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png" x="-18" y="-18" width="108" height="108"/>
+  </g>
+</svg>

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 100%; overflow: hidden; }
+  body {
+    position: relative;
+    font-family: -apple-system, "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(135deg, #0b1220 0%, #111a2c 55%, #16203a 100%);
+    color: #f8fafc;
+  }
+  .rule { position: absolute; left: 0; top: 0; width: 4px; height: 100%; background: #5b8cff; }
+
+  .stage { position: absolute; inset: 0; display: flex; align-items: center; gap: 56px; padding: 0 72px; }
+
+  .brand { flex: 0 0 auto; }
+  .eyebrow {
+    font-size: 13px; font-weight: 600; letter-spacing: .32em;
+    color: rgba(203, 213, 225, .78); text-transform: uppercase;
+  }
+  h1 { margin-top: 14px; font-size: 70px; line-height: 1.04; font-weight: 700; letter-spacing: -.01em; color: #ffffff; }
+  .tag { margin-top: 12px; font-size: 20px; font-weight: 500; letter-spacing: .05em; color: rgba(226, 232, 240, .88); }
+  .chips { margin-top: 26px; display: flex; flex-wrap: nowrap; gap: 8px; }
+  .chip {
+    font-size: 13px; font-weight: 500; color: rgba(226, 232, 240, .92);
+    padding: 6px 13px; white-space: nowrap; border-radius: 6px;
+    background: rgba(148, 163, 184, .10); border: 1px solid rgba(148, 163, 184, .28);
+  }
+
+  /* restraint: a plain panel wireframe, no illustration */
+  .motif { margin-left: auto; flex: 0 0 372px; }
+  .window {
+    border: 1px solid rgba(148, 163, 184, .22); border-radius: 10px;
+    background: rgba(148, 163, 184, .06); padding: 12px;
+  }
+  .titlebar { display: flex; gap: 6px; margin-bottom: 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(148, 163, 184, .38); }
+  .body { display: flex; gap: 12px; }
+  .rail { flex: 0 0 66px; display: flex; flex-direction: column; gap: 6px; }
+  .pane { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+  .bar { height: 10px; border-radius: 3px; background: rgba(148, 163, 184, .26); }
+  .rail .bar { height: 12px; }
+  .bar.accent { background: #5b8cff; }
+  .block {
+    height: 62px; border-radius: 6px; border: 1px solid rgba(148, 163, 184, .20);
+    background: rgba(148, 163, 184, .07);
+  }
+  .w90 { width: 90%; } .w72 { width: 72%; } .w56 { width: 56%; }
+</style>
+</head>
+<body>
+  <div class="rule"></div>
+  <div class="stage">
+    <div class="brand">
+      <div class="eyebrow">The Plugin Ecosystem for DeepSeek Harness</div>
+      <h1>dsh-cove</h1>
+      <div class="tag">DSH Web 一体化扩展套件</div>
+      <div class="chips">
+        <span class="chip">SSH 运维</span>
+        <span class="chip">记忆面板</span>
+        <span class="chip">Git 工作台</span>
+        <span class="chip">Web 鉴权</span>
+        <span class="chip">社区插件</span>
+        <span class="chip">创意工坊</span>
+      </div>
+    </div>
+    <div class="motif">
+      <div class="window">
+        <div class="titlebar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+        <div class="body">
+          <div class="rail">
+            <div class="bar accent"></div>
+            <div class="bar"></div>
+            <div class="bar"></div>
+            <div class="bar"></div>
+          </div>
+          <div class="pane">
+            <div class="bar w90"></div>
+            <div class="bar w56"></div>
+            <div class="block"></div>
+            <div class="bar w72"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

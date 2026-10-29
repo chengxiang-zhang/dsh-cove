@@ -1,0 +1,161 @@
+name: Reassign stale PR assignments
+
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  sweep:
+    name: Reassign stale PRs to the owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Reassign PRs with an inactive assignee
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const days = 14;
+            const since = new Date(Date.now() - days * 86400000).toISOString();
+
+            const assignees = new Set(['Aa728848']);
+            try {
+              const meta = await github.rest.repos.get({ owner, repo });
+              const config = await github.rest.repos.getContent({
+                owner,
+                repo,
+                path: '.github/pr-review-routes.json',
+                ref: meta.data.default_branch,
+              });
+              const parsed = JSON.parse(
+                Buffer.from(config.data.content, 'base64').toString('utf8')
+              );
+              for (const route of parsed.routes || []) {
+                for (const user of route.assignees || []) {
+                  assignees.add(user);
+                }
+              }
+              for (const user of (parsed.defaultRoute || {}).assignees || []) {
+                assignees.add(user);
+              }
+            } catch (error) {
+              console.log(
+                'routing config unavailable, defaulting to Aa728848'
+              );
+            }
+            assignees.delete(owner);
+
+            const items = [];
+            for (const login of assignees) {
+              const res = await github.rest.issues.listForRepo({
+                owner,
+                repo,
+                state: 'open',
+                assignee: login,
+                per_page: 100,
+              });
+              items.push(...res.data);
+              if (res.data.length === 100) {
+                console.log('note: more than 100 open items for ' + login);
+              }
+            }
+            if (items.length === 0) {
+              console.log('no open assigned items, done.');
+              return;
+            }
+
+            let reassigned = 0;
+            for (const item of items) {
+              const isPr = !!item.pull_request;
+              // Issues remain with the collaborator; only stale PR work escalates.
+              if (!isPr) {
+                continue;
+              }
+              const login = item.assignee && item.assignee.login;
+              if (!login || login === owner) {
+                continue;
+              }
+              const number = item.number;
+
+              let active = false;
+              try {
+                const comments = await github.rest.issues.listComments({
+                  owner,
+                  repo,
+                  issue_number: number,
+                  per_page: 100,
+                });
+                active = comments.data.some(
+                  (comment) =>
+                    comment.user &&
+                    comment.user.login === login &&
+                    new Date(comment.created_at) >= new Date(since)
+                );
+                if (!active && isPr) {
+                  const reviews = await github.rest.pulls.listReviews({
+                    owner,
+                    repo,
+                    pull_number: number,
+                    per_page: 100,
+                  });
+                  active = reviews.data.some(
+                    (review) =>
+                      review.user &&
+                      review.user.login === login &&
+                      new Date(review.submitted_at || review.updated_at) >=
+                        new Date(since)
+                  );
+                }
+              } catch (error) {
+                console.log(
+                  'activity check failed for #' + number + ': ' + error.message
+                );
+              }
+
+              if (active) {
+                continue;
+              }
+
+              const kind = isPr ? 'PR' : 'Issue';
+              try {
+                const note = [
+                  '维护者 @' + login + ' 已被分配但已超过 ' + days + ' 天未响应，',
+                  '已自动转移给 @' + owner + ' 处理；如需仍由该维护者处理，可重新指派。',
+                ].join('\n');
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: number,
+                  body: note,
+                });
+                await github.rest.issues.addAssignees({
+                  owner,
+                  repo,
+                  issue_number: number,
+                  assignees: [owner],
+                });
+                await github.rest.issues.removeAssignees({
+                  owner,
+                  repo,
+                  issue_number: number,
+                  assignees: [login],
+                });
+                console.log(
+                  kind + ' #' + number + ' reassigned from ' + login + ' to ' + owner + '.'
+                );
+                reassigned++;
+              } catch (error) {
+                console.log(
+                  'reassign failed for #' + number + ': ' + error.message
+                );
+              }
+            }
+            console.log('total reassigned: ' + reassigned + '.');

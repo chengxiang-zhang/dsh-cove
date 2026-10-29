@@ -1,0 +1,46 @@
+Anywhere Work 安装说明
+=====================
+
+1. 把「Anywhere Work.app」拖到旁边带箭头的「Applications」(应用程序)文件夹。
+2. 打开「应用程序」,双击 Anywhere Work。以后就从这里启动,图标会留在 Dock。
+
+不要直接在 dmg 窗口里双击运行:那个窗口是只读的安装卷,从里面启动既装不上,
+也更容易被 macOS 拦下。
+
+如果第一次打开被拦下(弹窗写着「未打开 "Anywhere Work"…Apple 无法验证…」),
+这是 ad-hoc 签名、未经 Apple 公证的必然结果,放行一次就行——两种方式选一种:
+
+  * 图形界面:点弹窗的「完成」→ 打开「系统设置」→「隐私与安全性」→ 在「安全性」
+    一栏点「仍要打开」,确认后再双击一次;
+    (macOS 14 及更早版本可以直接右键图标 →「打开」→ 再点「打开」。)
+  * 或者打开「终端」执行(任何 macOS 版本都管用,不用找菜单):
+        xattr -dr com.apple.quarantine "/Applications/Anywhere Work.app"
+
+放行一次之后,双击就能正常打开。卸载:在「应用程序」里把它拖进废纸篓。
+
+不需要你另外安装 Node 或 DeepSeek Harness:本机环境由客户端自己准备。
+
+How to install
+==============
+
+1. Drag "Anywhere Work.app" onto the arrowed "Applications" folder next to it.
+2. Open Applications and double-click Anywhere Work. Start it from there from now on;
+   the icon stays in the Dock.
+
+Do not double-click the app inside the dmg window: that window is a read-only install
+volume, so nothing gets installed and macOS is more likely to block the launch.
+
+If the first launch is blocked ("Anywhere Work was not opened... Apple cannot verify
+it"), that is what an ad-hoc signed, non-notarised build does. Allow it once, either way:
+
+  * In the dialog, click Done, then open System Settings - Privacy & Security - and click
+    "Open Anyway" in the Security section, then double-click the app again.
+    (On macOS 14 and earlier you can right-click the icon, choose Open, then Open again.)
+  * Or in Terminal, which works on every macOS version without hunting through menus:
+        xattr -dr com.apple.quarantine "/Applications/Anywhere Work.app"
+
+After that a double-click opens it normally. To uninstall, drag it from Applications to
+the Trash.
+
+You do not install Node or DeepSeek Harness yourself: the client provisions this machine
+on its own.

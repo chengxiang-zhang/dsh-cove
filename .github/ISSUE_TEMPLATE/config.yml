@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability / 报告安全漏洞
+    url: https://github.com/chengxiang-zhang/dsh-cove/security/advisories/new
+    about: Report vulnerabilities privately. Never open a public issue for an unfixed vulnerability; see SECURITY.md.
+  - name: Documentation index / 文档索引
+    url: https://github.com/chengxiang-zhang/dsh-cove/blob/main/docs/README.md
+    about: Read the documentation index before filing a usage question.

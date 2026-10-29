@@ -1,0 +1,30 @@
+# Reference systemd unit for DSH Web. Copy to /etc/systemd/system/dsh-web.service,
+# adjust User/Group, DSH_HOME, PATH, ExecStart flags (--host, --port, --trusted-host),
+# then: sudo systemctl daemon-reload && sudo systemctl enable --now dsh-web.service
+#
+# Secrets do not belong in this unit. Put model API keys in
+# $DSH_HOME/.credentials.yaml, or export them through an EnvironmentFile owned by
+# the service user (mode 0600) as shown below.
+
+[Unit]
+Description=DeepSeek Harness Web UI (npm @deepseek-ai/dsh)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dsh
+Group=dsh
+WorkingDirectory=/home/dsh/.dsh
+Environment=PATH=/home/dsh/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=DSH_HOME=/home/dsh/.dsh
+# Optional: environment file with model keys or provider URLs (not committed).
+EnvironmentFile=-/etc/dsh/dsh.env
+ExecStart=/usr/local/bin/dsh web --host 127.0.0.1 --port 3080 --trusted-host dsh.example.com --no-open
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/dsh/.dsh/logs/web.log
+StandardError=append:/home/dsh/.dsh/logs/web.log
+
+[Install]
+WantedBy=multi-user.target

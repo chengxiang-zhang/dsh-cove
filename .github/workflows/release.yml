@@ -1,0 +1,309 @@
+name: Release
+
+# The tag selects the runtime version. Never move latest until the exact
+# candidate registry bytes pass the consumer mount + browser smoke.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+# Serialize every release tag in this repository, including old-tag reruns.
+# This protects our latest read/write sequence, not publishers outside this workflow.
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  prepublish-smoke:
+    name: Build, gates and real packed-artifact smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DSH_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # Releases are cut from main. A tag event carries no branch information, so the tag's
+      # commit is checked against main instead: a tag that points at an unintegrated commit
+      # is refused rather than quietly publishing a build nobody reviewed on the release line.
+      - name: Require the tag to be on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main; cut releases from main"
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME is on main"
+      - name: Lint GitHub Actions workflows
+        uses: docker://rhysd/actionlint:latest
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 11
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify package versions match the tag
+        run: node scripts/verify-version.mjs "$GITHUB_REF_NAME"
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build
+      - name: Tests
+        run: pnpm test
+      - name: Script tests
+        run: pnpm test:scripts
+      - name: Runtime dependency guard
+        run: pnpm runtime-deps:check
+      - name: Generate release notes
+        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+      - name: Install dsh CLI (runtime host floor)
+        run: npm install -g "@deepseek-ai/dsh@$(node scripts/runtime-host-version.mjs)"
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright Chromium
+        timeout-minutes: 10
+        run: pnpm exec playwright install chromium
+      - name: Pack the release candidates once
+        # Both packages the release publishes, packed from this commit so every later stage
+        # verifies the bytes this run gates rather than rebuilding them.
+        run: |
+          pnpm --filter @dsh-cove/dsh-web-all pack --out "$RUNNER_TEMP/runtime.tgz"
+          pnpm --filter @dsh-cove/dsh-client-ui-community-plugins pack --out "$RUNNER_TEMP/community.tgz"
+      # The packed artifact's own gate: it is mounted into a scratch profile through the
+      # real CLI and the UI renders. That is what the published bytes must prove.
+      - name: Pre-publish real pack mount + headless-render smoke
+        id: smoke_mount
+        env:
+          WEB_ALL_TARBALL: ${{ runner.temp }}/runtime.tgz
+        run: |
+          set -o pipefail
+          bash scripts/e2e-mount.sh 2>&1 | tee "$RUNNER_TEMP/smoke.log"
+
+      # The gate's own output, on a branch: this repository is private and its run logs need
+      # API access, so a failure here would otherwise be unreadable to whoever asked for the
+      # release.
+      - name: Report the smoke output
+        if: always()
+        run: |
+          set -u
+          {
+            echo "tag: $GITHUB_REF_NAME"
+            echo "commit: $GITHUB_SHA"
+            echo "mount lane: ${{ steps.smoke_mount.outcome }}"
+            echo "run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "--- smoke.log (tail) ---"
+            tail -80 "$RUNNER_TEMP/smoke.log" 2>/dev/null || echo "(no smoke log)"
+          } > "$RUNNER_TEMP/smoke-report.txt"
+          git config user.name "dsh-cove ci"
+          git config user.email "ci@users.noreply.github.com"
+          git checkout --orphan ci-status-smoke
+          git rm -rf . >/dev/null 2>&1 || true
+          cp "$RUNNER_TEMP/smoke-report.txt" smoke-report.txt
+          git add smoke-report.txt
+          git commit -m "ci(smoke): $GITHUB_REF_NAME mount=${{ steps.smoke_mount.outcome }}"
+          git push --force origin ci-status-smoke
+      - name: Upload gated release inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: gated-release
+          path: |
+            ${{ runner.temp }}/runtime.tgz
+            ${{ runner.temp }}/community.tgz
+            ${{ runner.temp }}/release-notes.md
+          if-no-files-found: error
+
+  candidate:
+    name: Publish candidate (or verify existing immutable version)
+    needs: prepublish-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # `id-token: write` is what lets npm Trusted Publishing authenticate this job by its
+    # OIDC identity instead of a long-lived token. Job-level permissions replace the
+    # workflow's, so the read the checkout needs is named too.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org/
+      # Trusted publishing needs npm 11.5.1 or newer; the runner's bundled npm is older.
+      - name: Use an npm that speaks trusted publishing
+        run: npm install -g npm@11 && npm --version
+      - name: Download gated release inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: gated-release
+          path: ${{ runner.temp }}/gated-release
+      - name: Publish candidates without changing latest
+        env:
+          # A token is consulted only after OIDC fails, so this stays as a fallback for a
+          # deployment that has not configured a trusted publisher yet.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          node scripts/release-candidate.mjs publish "$RUNNER_TEMP/gated-release/runtime.tgz"
+          node scripts/release-candidate.mjs publish "$RUNNER_TEMP/gated-release/community.tgz"
+
+  verify-release:
+    name: Exact registry smoke, promote latest and GitHub Release
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Promoting `latest` is a registry write and the GitHub Release is a repository write:
+    # the first needs the OIDC identity, the second needs contents.
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      DSH_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 11
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org/
+      # Before anything that may write to the registry: `npm dist-tag` goes through the
+      # same trusted-publishing handshake as `npm publish`.
+      - name: Use an npm that speaks trusted publishing
+        run: npm install -g npm@11 && npm --version
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Install dsh CLI (runtime host floor)
+        run: npm install -g "@deepseek-ai/dsh@$(node scripts/runtime-host-version.mjs)"
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright Chromium
+        timeout-minutes: 10
+        run: pnpm exec playwright install chromium
+      - name: Download gated release inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: gated-release
+          path: ${{ runner.temp }}/gated-release
+      - name: Download and verify the exact registry artifacts
+        # Each verified path is captured here: two packages in one job would otherwise
+        # overwrite a single variable, and the promote step must name the downloaded bytes.
+        run: |
+          WEB_ALL_TARBALL="$(node scripts/release-candidate.mjs download "$RUNNER_TEMP/gated-release/runtime.tgz" "$RUNNER_TEMP/release-assets")"
+          COMMUNITY_TARBALL="$(node scripts/release-candidate.mjs download "$RUNNER_TEMP/gated-release/community.tgz" "$RUNNER_TEMP/release-assets")"
+          echo "WEB_ALL_TARBALL=$WEB_ALL_TARBALL" >> "$GITHUB_ENV"
+          echo "COMMUNITY_TARBALL=$COMMUNITY_TARBALL" >> "$GITHUB_ENV"
+      - name: Registry mount + headless-render smoke
+        run: bash scripts/e2e-mount.sh
+      - name: Promote verified artifacts to latest
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          node scripts/release-candidate.mjs promote "$WEB_ALL_TARBALL"
+          node scripts/release-candidate.mjs promote "$COMMUNITY_TARBALL"
+      - name: Create or reconcile GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release-assets/*.tgz --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/gated-release/release-notes.md" --title "dsh-cove $GITHUB_REF_NAME"
+          else
+            gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release-assets/*.tgz --notes-file "$RUNNER_TEMP/gated-release/release-notes.md" --title "dsh-cove $GITHUB_REF_NAME"
+          fi
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+      - name: Record gated tarball checksums
+        run: sha512sum "$RUNNER_TEMP/gated-release/runtime.tgz" "$RUNNER_TEMP/gated-release/community.tgz"
+
+  # A failed release is otherwise invisible to whoever asked for it: this workflow runs on
+  # a private repository, and reading its logs needs repository API access. The outcome and
+  # the failing job's own log therefore travel to a branch that a plain `git fetch` reads.
+  report:
+    name: Report the outcome to the ci-status-release branch
+    needs: [prepublish-smoke, candidate, verify-release]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Write and push the report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          mkdir -p "$RUNNER_TEMP/report"
+          {
+            echo "workflow: release"
+            echo "tag: $GITHUB_REF_NAME"
+            echo "commit: $GITHUB_SHA"
+            echo "smoke: ${{ needs.prepublish-smoke.result }}"
+            echo "candidate: ${{ needs.candidate.result }}"
+            echo "verify: ${{ needs.verify-release.result }}"
+            echo "run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "--- jobs ---"
+            gh run view "$GITHUB_RUN_ID" --json jobs --jq '.jobs[] | "\(.name): \(.status)/\(.conclusion)"' 2>&1 || true
+            echo
+            # Which step failed, not just which job: a job-level "failure" still needs a
+            # second round trip to diagnose otherwise.
+            echo "--- steps ---"
+            gh run view "$GITHUB_RUN_ID" --json jobs \
+              --jq '.jobs[] | .name + " :: " + (.steps[]? | .name + ": " + .conclusion)' 2>&1 || true
+            echo
+            # The failing job's own log. `gh run view --log-failed` refuses while the run is
+            # still in progress (it is, while this job runs), so the job is read by id.
+            for id in $(gh run view "$GITHUB_RUN_ID" --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .databaseId' 2>/dev/null); do
+              echo "--- failed job $id (log tail) ---"
+              gh run view --job "$id" --log 2>&1 | tail -80 || \
+                gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" 2>&1 | tail -80 || true
+              echo
+            done
+            echo "--- release assets ---"
+            gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' 2>/dev/null || echo "(no release)"
+          } > "$RUNNER_TEMP/report/release-report.txt"
+
+          git config user.name "dsh-cove ci"
+          git config user.email "ci@users.noreply.github.com"
+          git checkout --orphan ci-status-release
+          git rm -rf . >/dev/null 2>&1 || true
+          cp "$RUNNER_TEMP/report/release-report.txt" release-report.txt
+          git add release-report.txt
+          git commit -m "ci(release): $GITHUB_REF_NAME candidate=${{ needs.candidate.result }}"
+          # Its own branch: the desktop workflow reports to ci-status, and two force-pushes
+          # to one branch would delete each other's file.
+          git push --force origin ci-status-release

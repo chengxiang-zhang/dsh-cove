@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- DSH entry zones this app reads. One shared zone serves the whole fleet
+         (machines.json domainPattern `dsh.<netbird-machine-name>.netbird`), so
+         adding a machine never touches this file or the code. Only the zone is
+         compiled in, because Android's cleartext policy is a build-time
+         resource; the machine list is discovered at runtime.
+         Synced with tools/dsh-netbird/machines.json by
+         `pnpm dsh-netbird:mobile-registry`. -->
+    <string-array name="fleet_dsh_zones">
+        <item>netbird</item>
+    </string-array>
+</resources>

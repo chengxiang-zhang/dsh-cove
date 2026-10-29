@@ -1,0 +1,109 @@
+# Replace __MACHINE__ with the NetBird machine name, __NETBIRD_IP__ with the
+# machine's NetBird IPv4 address (machines.json) and __TLS_DIR__ with the
+# directory that holds the machine's certificate material (README.md, "TLS entry").
+#
+# This file declares the machine's two entries for one DSH instance, and both are
+# overlay-only listeners: binding the NetBird address keeps the ports off every
+# other interface, so the public internet, an office LAN and a home LAN cannot
+# reach either entry. Linux additionally needs the interface-scoped firewall rule
+# in README.md, because the kernel accepts packets addressed to a local address on
+# any interface: the bind narrows the listener, the firewall is what makes it
+# overlay-only.
+#
+# Port 80 is the plaintext entry. Port 443 is the same entry over TLS, and it is
+# what a browser needs for a capability that asks for a real permission: plaintext
+# HTTP is not a secure context, `navigator.mediaDevices` (microphone capture for
+# voice input) does not exist there, and no page-side shim can bring it back. Keep
+# the 80 entry serving rather than redirecting to 443: the mobile client's
+# GeckoView keeps its own root store and does not read the platform's user
+# certificates, so it stays on the plaintext entry.
+#
+# A machine that serves the plaintext entry without a browser password declares
+# authMode network-gate in machines.json; the audit verifies that gate.
+#
+# Keep the two server blocks in step: they are one entry, and a location added to
+# one of them only is how the TLS page starts behaving unlike the plaintext page.
+server {
+    listen __NETBIRD_IP__:80;
+    server_name dsh.__MACHINE__.netbird;
+
+    client_max_body_size 100m;
+
+    # Worker temp paths must stay outside every user home. nginx drops its worker
+    # to the compiled default user (nobody on macOS) while the master keeps the
+    # privilege it needs for port 80, and it creates each configured temp path as
+    # root at startup and then chowns it to that worker user. A path inside a
+    # home whose parents are not traversable for the worker can never be written:
+    # every request body larger than the in-memory client_body_buffer_size (two
+    # pages: 8 KiB on a 4 KiB-page host, far below any image attachment) then
+    # fails with a 500 and the error log shows
+    # `[crit] open() ".../client_body/0000000001" failed (13: Permission denied)`.
+    # nginx creates the leaf directories itself but never their parent, and a
+    # missing parent is a fatal mkdir() at startup, so create the parent once:
+    #
+    #   sudo install -d -m 0755 -o root -g wheel /var/tmp/dsh-nginx
+    client_body_temp_path /var/tmp/dsh-nginx/client_body;
+    proxy_temp_path       /var/tmp/dsh-nginx/proxy;
+    fastcgi_temp_path     /var/tmp/dsh-nginx/fastcgi;
+    uwsgi_temp_path       /var/tmp/dsh-nginx/uwsgi;
+    scgi_temp_path        /var/tmp/dsh-nginx/scgi;
+
+    location / {
+        proxy_pass http://127.0.0.1:3080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+
+        # Mandatory for large DSH and plugin JavaScript bundles. Do not spool
+        # upstream responses into a worker temp path under a user's home.
+        proxy_buffering off;
+    }
+}
+
+# The TLS entry. It is the same virtual host on the other port, with the leaf
+# certificate the fleet CA issued for exactly this canonical name: one leaf per
+# machine keeps a compromised key from being a fleet-wide key.
+#
+# A master that cannot bind 443 (see README.md, "TLS entry") fails the whole
+# configuration load, so a machine without that ability must not carry this block.
+server {
+    listen __NETBIRD_IP__:443 ssl;
+    server_name dsh.__MACHINE__.netbird;
+
+    client_max_body_size 100m;
+
+    ssl_certificate     __TLS_DIR__/dsh.__MACHINE__.netbird.crt;
+    ssl_certificate_key __TLS_DIR__/dsh.__MACHINE__.netbird.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:dsh_tls:10m;
+    ssl_session_timeout 1d;
+
+    # Same reason as the plaintext block; see the comment there.
+    client_body_temp_path /var/tmp/dsh-nginx/client_body;
+    proxy_temp_path       /var/tmp/dsh-nginx/proxy;
+    fastcgi_temp_path     /var/tmp/dsh-nginx/fastcgi;
+    uwsgi_temp_path       /var/tmp/dsh-nginx/uwsgi;
+    scgi_temp_path        /var/tmp/dsh-nginx/scgi;
+
+    location / {
+        proxy_pass http://127.0.0.1:3080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+
+        proxy_buffering off;
+    }
+}

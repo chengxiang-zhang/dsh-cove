@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Launch background. The window background is painted before React Native
+  mounts its root view, so the brand mark is on screen from the first frame
+  instead of a blank white window. The RN root container paints an opaque
+  colour on mount, which covers this drawable.
+
+  The bitmap must be a real image resource: @mipmap/ic_launcher resolves to an
+  adaptive-icon XML on API 26+, and <bitmap android:src> cannot inflate that.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/splash_background" />
+    <item android:gravity="center">
+        <bitmap
+            android:src="@drawable/splash_logo"
+            android:gravity="center" />
+    </item>
+</layer-list>

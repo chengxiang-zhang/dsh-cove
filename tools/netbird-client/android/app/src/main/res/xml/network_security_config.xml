@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext policy for the system WebView (react-native-webview).
+
+  Background: the manifest used to declare
+  android:usesCleartextTraffic="${usesCleartextTraffic}", a placeholder that no
+  Gradle file ever defined. AGP therefore filled it per build type on its own
+  (debug=true, release=false), so the release build silently blocked every
+  http:// load - including the PKCE login callback on http://localhost:53000/
+  and the intranet DSH pages. A Network Security Config takes precedence over
+  that flag, so debug and release now behave identically.
+
+  Rule: deny cleartext by default (public http:// stays blocked), and allow it
+  only for the loopback callback/proxy and for the private NetBird namespaces
+  (the `netbird` DSH zone and the `vpn` peer namespace).
+
+  Keep the zone in sync with the "domain" fields of
+  tools/dsh-netbird/machines.json: every machine entry is dsh.<machine>.netbird,
+  served from the one shared NetBird zone named `netbird`, so that single zone
+  covers the whole fleet and adding a machine no longer means editing this file.
+
+  The update channel is NOT here: it lives on a public HTTPS origin
+  (anywhere.example.com, see src/fleetConfig.ts), so it needs no cleartext
+  exception at all. `vpn` is listed because the connect-time liveness probe and
+  the overlay bootstrap fallback address the network edge peer by its NetBird
+  name (tx.vpn), which only resolves inside the overlay.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+
+    <!-- PKCE login callback (native/sso.go: http://localhost:53000/) and the
+         loopback NetBird proxy that the system WebView is pointed at. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+
+    <!-- Private NetBird namespaces that serve intranet web services over http. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">netbird</domain>
+        <domain includeSubdomains="true">netbird.cloud</domain>
+        <domain includeSubdomains="true">vpn</domain>
+    </domain-config>
+</network-security-config>

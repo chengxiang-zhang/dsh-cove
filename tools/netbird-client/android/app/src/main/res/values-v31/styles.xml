@@ -1,0 +1,15 @@
+<resources>
+
+    <!--
+      Android 12+ draws its own splash screen. Point it at the same brand colour
+      and adaptive-icon foreground so the system splash and the window background
+      match. Everything else is inherited from AppTheme.Base, which resolves per
+      configuration - so the night variant of the system-bar flags still applies
+      on Android 12+.
+    -->
+    <style name="AppTheme" parent="AppTheme.Base">
+        <item name="android:windowSplashScreenBackground">@color/splash_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+    </style>
+
+</resources>

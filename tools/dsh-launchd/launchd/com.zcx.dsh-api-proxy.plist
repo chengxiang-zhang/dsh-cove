@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.zcx.dsh-api-proxy</string>
+	<key>UserName</key>
+	<string>__USER__</string>
+	<key>GroupName</key>
+	<string>staff</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>__HOME__</string>
+		<key>PATH</key>
+		<string>__HOME__/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__HOME__/.nvm/versions/node/v22.22.0/bin/node</string>
+		<string>__REPO_DIR__/tools/dsh-api-proxy/dist/index.js</string>
+		<string>--config=__REPO_DIR__/tools/dsh-api-proxy/config.yaml</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>WorkingDirectory</key>
+	<string>__REPO_DIR__/tools/dsh-api-proxy</string>
+	<key>StandardOutPath</key>
+	<string>__HOME__/.dsh/logs/dsh-api-proxy.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/.dsh/logs/dsh-api-proxy.err.log</string>
+</dict>
+</plist>

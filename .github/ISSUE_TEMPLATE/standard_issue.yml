@@ -1,0 +1,90 @@
+name: Feature request or question / 功能请求或问题
+description: Request a capability, a documentation change or ask about the project. / 请求新功能、更新文档或提出项目问题。
+title: "[Issue]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep this template complete and fill in every required part; an issue that removes or empties a required part is closed automatically. For a reproducible bug use the Bug report form, which also requires screenshot evidence.
+
+        This form is bilingual: field labels keep their Chinese anchors because repository automation matches them, while hints are given in English as well. Write your issue in the language you prefer.
+
+        提交前请先搜索确认没有重复：[搜索现有 Issue](https://github.com/chengxiang-zhang/dsh-cove/issues?q=is%3Aissue)
+  - type: checkboxes
+    id: duplicate-check
+    attributes:
+      label: 提交前查重
+      description: Search open and closed issues before submitting. / 提交前请先搜索确认没有重复的 Issue。
+      options:
+        - label: 我已搜索过 open/closed 的 Issue，确认本 Issue 没有重复。
+          required: true
+  - type: dropdown
+    id: plugin
+    attributes:
+      label: 涉及插件
+      description: Select the plugin or area the issue is about; choose "other" when unsure. / 选择问题涉及的插件或区域。
+      options:
+        - Web 运行时能力 (dsh-web-all)
+        - 社区插件索引 (dsh-community-plugins)
+        - 安装 / 插件管理
+        - 其他 / 不确定
+    validations:
+      required: true
+  - type: dropdown
+    id: issue-type
+    attributes:
+      label: Issue 类型
+      description: Select the closest category. / 选择最接近的分类。
+      options:
+        - 功能请求
+        - 文档
+        - 问题
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: 摘要
+      description: One or two sentences describing the problem or request. / 用一两句话描述问题或请求。
+      placeholder: What should change and why? / 问题或请求的变更是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: expected-outcome
+    attributes:
+      label: 预期结果
+      description: Describe the outcome you expect once the issue is resolved. / 描述问题解决后应达成的效果。
+      placeholder: What do you expect to happen? / 你期望的结果是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: details-reproduction
+    attributes:
+      label: 详情 / 复现步骤
+      description: For a bug, give reproduction steps; for a request, describe the use case and constraints. / 给出复现步骤或使用场景。
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: DSH version, browser, plugin name and version, operating system and relevant configuration. Use N/A when the issue is environment-independent. / DSH 版本、浏览器、插件版本、操作系统与关键配置。
+      placeholder: |
+        - DSH version / DSH 版本:
+        - Browser / 浏览器:
+        - Plugin and version / 插件名称与版本:
+        - OS / 操作系统:
+    validations:
+      required: true
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 补充信息
+      description: Screenshots, logs, links or any other context. / 截图、日志、链接或其他上下文。
+    validations:
+      required: false

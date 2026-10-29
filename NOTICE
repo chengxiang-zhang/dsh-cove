@@ -1,0 +1,20 @@
+dsh-cove
+Copyright 2026 dsh-cove contributors
+
+This product is licensed under the Apache License, Version 2.0. The full license
+text is in LICENSE.
+
+This product includes software developed by third parties. Third-party notices
+that apply to retained or adapted material are kept next to that material:
+
+- packages/dsh-web-all/presets/code-vibe/THIRD_PARTY_NOTICES.md
+- tools/anywhere-agent/THIRD_PARTY_NOTICES.md
+- tools/netbird-client/THIRD_PARTY_NOTICES.md
+
+Community plugins are not vendored here: each entry in
+packages/dsh-community-plugins/community.json links to the plugin author's own
+repository, which carries its own license and notices.
+
+The npm packages published from this repository declare their license in their
+package.json and ship the corresponding license file; dependencies resolved at
+install time carry their own licenses in the consumer's dependency tree.

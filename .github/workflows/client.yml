@@ -1,0 +1,87 @@
+name: Client
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'tools/anywhere-agent/**'
+      - 'tools/netbird-client/native/**'
+      - 'tools/dsh-netbird/client/install.ps1'
+      - 'scripts/dsh-netbird-brand.mjs'
+      - 'scripts/dsh-netbird-console-brand.mjs'
+      - '.github/workflows/client.yml'
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: Client tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # The client is not a pnpm workspace member, so it carries no dependencies and
+      # needs no install step: the tests run on the Node that is already here.
+      - name: Unit tests
+        run: node --test tools/anywhere-agent/test/*.test.mjs
+
+      # The gate that packaging runs on the payload, run on the sources: a relative
+      # import that does not resolve is a crash on launch, and the checkout can catch
+      # it in a second.
+      - name: Relative imports resolve
+        run: node tools/anywhere-agent/scripts/check-payload-imports.mjs tools/anywhere-agent
+
+      # The Windows onboarding script is the one client artefact nothing else here runs,
+      # and it is the piece that decides whether a Windows machine can join at all. Its
+      # -DryRun prints the whole plan and changes nothing, so the four facts that matter
+      # are asserted here, on a Linux runner, without a Windows host: it reaches for the
+      # Windows archive, it drives netbird.exe, it installs DSH, and it never hands over
+      # the POSIX one-liner.
+      - name: Windows installer plan
+        shell: pwsh
+        run: |
+          # Stop, not Continue: the script raises a terminating error when it cannot go on,
+          # and that has to fail this step rather than scroll past.
+          $ErrorActionPreference = 'Stop'
+          # `*>&1`: the script reports with Write-Host, which is the information stream,
+          # so a plain `2>&1` captures nothing and every assertion below would pass on an
+          # empty string.
+          $plan = & tools/dsh-netbird/client/install.ps1 -DryRun -ManagementUrl https://netbird.example.com:443 *>&1 | Out-String
+          $plan | Out-Host
+          if ($plan -notmatch 'dry run: nothing was changed') { throw 'the plan did not run to its end' }
+          if ($plan -notmatch '_windows_') { throw 'the plan does not name a Windows archive' }
+          if ($plan -notmatch 'netbird\.exe') { throw 'the plan does not run the Windows client' }
+          if ($plan -notmatch '@deepseek-ai/dsh') { throw 'the plan does not install DSH' }
+          if ($plan -match 'install\.sh') { throw 'the plan hands over the POSIX one-liner on Windows' }
+          if ($plan -notmatch 'schtasks /Create') { throw 'the plan does not keep DSH resident' }
+
+  engine:
+    name: Engine cross-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
+      # The engine is a single Go binary, so the platform a developer uses does not
+      # have to be the platform it ships to. This builds it for Linux from the same
+      # pinned engine the desktop app embeds, which is the cross-compile half of the
+      # packaging story; macOS packaging itself is a release-time step on macOS.
+      - name: Build the engine for Linux
+        run: GOOS=linux GOARCH=amd64 HELPER_VERSION=ci bash tools/anywhere-agent/scripts/build-tunnel.sh
+
+      - name: The binary answers on its protocol
+        run: |
+          echo '{"id":1,"cmd":"version"}' | "$HOME/.cache/anywhere-agent/bin/anywhere-tunnel"

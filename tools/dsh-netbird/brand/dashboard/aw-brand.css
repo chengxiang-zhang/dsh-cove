@@ -1,0 +1,185 @@
+/**
+ * Anywhere Work skin for the management console.
+ *
+ * The console is the vendor's dashboard image: a compiled Next.js static export.
+ * We do not fork it, so there is no source to edit and no theme hook to call.
+ * Its Tailwind palette is named after the vendor and compiled to literal rgb()
+ * values, which leaves exactly one surgical lever: override the accent utilities
+ * by class name.
+ *
+ * Every selector below was read out of the stylesheet the running console
+ * actually serves (`_next/static/chunks/*.css`), not guessed from the markup:
+ * there are 57 selectors mentioning the vendor accent, and each one is covered
+ * here. Vendor utility names are kept verbatim on the left so the mapping can be
+ * re-audited against a new console image with a single grep for `netbird`.
+ *
+ * The token region below is generated - run `node scripts/dsh-netbird-brand.mjs
+ * --write` after changing tools/dsh-netbird/brand/tokens.json.
+ *
+ * Not handled here: the wordmark (an <img> served from a hashed path, replaced at
+ * the edge so the console gets our file for that URL), copy, and anything that
+ * needs to react to client-side navigation (see aw-brand.js).
+ */
+
+:root {
+/* AW-TOKENS:START */
+  --aw-brand-fill: #2563EB;
+  --aw-brand-fill-hover: #1D4ED8;
+  --aw-brand-on-fill: #FFFFFF;
+  --aw-brand-text-on-dark: #60A5FA;
+  --aw-brand-text-on-light: #1D4ED8;
+  --aw-ladder-50: #EFF5FF;
+  --aw-ladder-100: #DCE8FE;
+  --aw-ladder-150: #C7DBFE;
+  --aw-ladder-200: #B3CEFD;
+  --aw-ladder-300: #8FB6FC;
+  --aw-ladder-400: #60A5FA;
+  --aw-ladder-500: #3B82F6;
+  --aw-ladder-600: #2563EB;
+  --aw-ladder-700: #1D4ED8;
+  --aw-ladder-900: #132B6B;
+  --aw-ladder-950: #0C1B45;
+  --aw-bg-dark: #080D17;
+  --aw-surface-dark: #111A2B;
+  --aw-surface-alt-dark: #1A2438;
+  --aw-border-dark: #253148;
+  --aw-text-dark: #E9EFF8;
+  --aw-text-muted-dark: #A3B3C9;
+  --aw-control-border-dark: #5B6E8C;
+  --aw-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Roboto, Helvetica, Arial, sans-serif;
+  --aw-radius-sm: 8px;
+  --aw-radius-md: 12px;
+  --aw-dur-fast: 160ms;
+  --aw-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+/* AW-TOKENS:END */
+}
+
+/* ------------------------------------------------------------------ type */
+
+body,
+button,
+input,
+select,
+textarea {
+  font-family: var(--aw-font-sans);
+}
+
+/* --------------------------------------------------- solid accent fills */
+
+/* White label on the filled accent: 5.17:1 in both schemes, so the pressed and
+   selected states keep the same value and only hover shifts. */
+.bg-netbird,
+.bg-netbird\/100,
+.enabled\:bg-netbird:enabled,
+.enabled\:dark\:bg-netbird:is(.dark *):enabled,
+.data-\[state\=checked\]\:bg-netbird[data-state=checked],
+.dark\:data-\[state\=checked\]\:bg-netbird[data-state=checked]:is(.dark *),
+.dark\:data-\[state\=indeterminate\]\:bg-netbird[data-state=indeterminate]:is(.dark *) {
+  background-color: var(--aw-brand-fill) !important;
+}
+
+.enabled\:hover\:bg-netbird-500:hover:enabled,
+.hover\:bg-netbird-500:hover {
+  background-color: var(--aw-brand-fill-hover) !important;
+}
+
+.enabled\:dark\:hover\:bg-netbird-500\/80:hover:is(.dark *):enabled {
+  background-color: color-mix(in srgb, var(--aw-brand-fill-hover) 80%, transparent) !important;
+}
+
+/* ------------------------------------------------------ translucent tints */
+
+.bg-netbird\/5 { background-color: color-mix(in srgb, var(--aw-ladder-600) 5%, transparent) !important; }
+.bg-netbird\/10,
+.bg-netbird-500\/10 { background-color: color-mix(in srgb, var(--aw-ladder-600) 10%, transparent) !important; }
+.bg-netbird\/20,
+.hover\:bg-netbird\/20:hover { background-color: color-mix(in srgb, var(--aw-ladder-600) 20%, transparent) !important; }
+.bg-netbird-100 { background-color: var(--aw-ladder-50) !important; }
+.bg-netbird-900 { background-color: var(--aw-ladder-900) !important; }
+.bg-netbird-950 { background-color: var(--aw-ladder-950) !important; }
+.hover\:bg-netbird-950\/50:hover { background-color: color-mix(in srgb, var(--aw-ladder-950) 50%, transparent) !important; }
+
+/* ---------------------------------------------------------- accent text */
+
+/* On the console's dark surfaces the pale end of the ladder carries the accent;
+   on its light surfaces the dark end does. Both ends are asserted in
+   tokens.json's contrast contract. */
+.text-netbird,
+.hover\:text-netbird:hover,
+.data-\[state\=active\]\:text-netbird[data-state=active],
+.group:hover .group-hover\:text-netbird,
+.group\/badge:hover .group-hover\/badge\:text-netbird,
+.group\/trigger[data-state=active] .group-data-\[state\=active\]\/trigger\:text-netbird {
+  color: var(--aw-brand-text-on-light) !important;
+}
+
+.dark\:text-netbird:is(.dark *),
+.dark\:data-\[state\=active\]\:text-netbird[data-state=active]:is(.dark *) {
+  color: var(--aw-brand-text-on-dark) !important;
+}
+
+.text-netbird-100,
+.text-netbird-150,
+.text-netbird-200,
+.\!text-netbird-200 { color: var(--aw-ladder-100) !important; }
+.text-netbird-300 { color: var(--aw-ladder-300) !important; }
+.text-netbird-400,
+.text-netbird-400\/80,
+.hover\:text-netbird-400:hover { color: var(--aw-ladder-400) !important; }
+.text-netbird-500,
+.\!text-netbird-500 { color: var(--aw-ladder-500) !important; }
+.text-netbird\/90 { color: color-mix(in srgb, var(--aw-ladder-400) 90%, transparent) !important; }
+.text-netbird-950 { color: var(--aw-ladder-950) !important; }
+
+/* ------------------------------------------------- borders, rings, fills */
+
+.border-netbird,
+.border-netbird-400,
+.border-netbird-500,
+.dark\:border-netbird:is(.dark *) {
+  border-color: var(--aw-ladder-600) !important;
+}
+.border-netbird\/30,
+.border-netbird-400\/20 { border-color: color-mix(in srgb, var(--aw-ladder-600) 20%, transparent) !important; }
+.border-netbird\/40,
+.border-netbird-400\/30 { border-color: color-mix(in srgb, var(--aw-ladder-600) 30%, transparent) !important; }
+.border-netbird\/60 { border-color: color-mix(in srgb, var(--aw-ladder-600) 60%, transparent) !important; }
+
+.outline-netbird { outline-color: var(--aw-ladder-600) !important; }
+
+.fill-netbird,
+.group\/trigger[data-state=active] .group-data-\[state\=active\]\/trigger\:fill-netbird {
+  fill: var(--aw-ladder-600) !important;
+}
+.dark .fill-netbird,
+.dark .group\/trigger[data-state=active] .group-data-\[state\=active\]\/trigger\:fill-netbird {
+  fill: var(--aw-ladder-400) !important;
+}
+
+.enabled\:focus\:ring-netbird-400\/50:focus:enabled,
+.dark\:focus\:ring-netbird-600\/50:focus:is(.dark *) {
+  --tw-ring-color: color-mix(in srgb, var(--aw-ladder-600) 50%, transparent) !important;
+}
+
+/* --------------------------------------------------------- gradients */
+
+.from-netbird { --tw-gradient-from: var(--aw-ladder-600) var(--tw-gradient-from-position) !important; --tw-gradient-to: rgb(37 99 235 / 0) var(--tw-gradient-to-position) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+.from-netbird-200 { --tw-gradient-from: var(--aw-ladder-200) var(--tw-gradient-from-position) !important; --tw-gradient-to: rgb(179 206 253 / 0) var(--tw-gradient-to-position) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+.from-netbird-500\/5 { --tw-gradient-from: color-mix(in srgb, var(--aw-ladder-500) 5%, transparent) var(--tw-gradient-from-position) !important; --tw-gradient-to: rgb(59 130 246 / 0) var(--tw-gradient-to-position) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+.to-netbird-100 { --tw-gradient-to: var(--aw-ladder-100) var(--tw-gradient-to-position) !important; }
+.to-netbird-300 { --tw-gradient-to: var(--aw-ladder-300) var(--tw-gradient-to-position) !important; }
+.to-netbird-400 { --tw-gradient-to: var(--aw-ladder-400) var(--tw-gradient-to-position) !important; }
+.to-netbird-500 { --tw-gradient-to: var(--aw-ladder-500) var(--tw-gradient-to-position) !important; }
+
+/* ------------------------------------------- vendor chrome we do not show */
+
+/* The console ships an upsell bar for the vendor's own MDM rollout, and a pill
+   advertising upstream releases. Neither belongs in our product: the bar is
+   hidden by aw-brand.js (which also sets data-aw-hidden, so the rule below is
+   what actually removes it), and the release pill is hidden outright. */
+[data-aw-hidden='true'] { display: none !important; }
+
+a[href='https://docs.netbird.io/selfhosted/maintenance/upgrade'] { display: none !important; }
+
+/* The console's own scrollbars and selection colour otherwise stay vendor-blue. */
+::selection { background: color-mix(in srgb, var(--aw-ladder-600) 26%, transparent); }

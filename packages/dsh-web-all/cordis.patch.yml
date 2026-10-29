@@ -1,0 +1,59 @@
+# dsh-web-all 实体插件：单行挂载。
+# 全家桶 25 个插件的代码已全部并入本包，按 dsh 注入位置组织；
+# 一个插件行 = 侧栏/设置/会话区/浮层全部位置 + host 全部服务。
+#
+# 本文件必须保持**只有一行 `- id:`**：capability-parity.spec.ts 断言
+# 「恰好一个 Cordis runtime row」，这是实体插件架构不变量。
+- insert:
+    - id: web-all
+      name: '@dsh-cove/dsh-web-all'
+
+# ──────────────────────────────────────────────────────────────────────────
+# web_fetch 的渲染后端需要一行 **profile 层** 的 pin（不在本文件里）
+#
+# web-all 的 web-render 服务域注册 fetch provider id `browser`，但它不会自动
+# 被选中：dsh-web-app bundle 已把 `web` 行的 `fetchProvider` pin 成 `http`，
+# 而 seam 在多 provider 可用时既不自动降级也不择优，只会报
+# WEB_PROVIDER_AMBIGUOUS。所以要在**使用该能力域的 profile** 的
+# cordis.patch.yml（用户层）里加：
+#
+#   - id: web
+#     name: '@deepseek-ai/dsh-web'
+#     config:
+#       fetchProvider: browser
+#
+# 放在 profile 层而不是这里的三个原因：
+#   1. 保持本文件单行不变量（parity spec 会失败）；
+#   2. 只有真正跑 web profile 的 host 才需要这个 pin，dispatch/ceo 等
+#      profile 不该被牵连；
+#   3. 回退只需删掉 profile 的那一段，包本身不动。
+#
+# 映射是双向的：provider 缺席会报 WEB_PROVIDER_CONFIGURED_MISSING。因此
+# web-render 只要 web 服务在就注册（见该域 index.ts 的注释），不会留下
+# 一个"pin 指向不存在 provider"的组合。
+#
+# ──────────────────────────────────────────────────────────────────────────
+# web_search 的检索后端同样需要 **profile 层** 的 pin
+#
+# web-all 的 web-search-anthropic 服务域注册 search provider id `anthropic-messages`：
+# 官方 web-search-deepseek provider 的请求侧通用、配置侧齐全，但解析侧写死
+# 「响应必须含 web_search_tool_result 块」；本域用**同一份配置**发同样的请求，
+# 额外接受只有 citation 的响应形状（Kaon/Bedrock 这类上游）。
+#
+# 本域**不新增配置面**：端点/模型/凭据引用读的就是官方 `web-search-deepseek`
+# 条目的活值（即官方 Web search 设置页那几项），所以用户换任何 Anthropic 兼容
+# 搜索 API 都只改原来那份配置，插件源码里没有任何厂商默认值。
+#
+# searchProvider 与 fetchProvider 是**同一个 config 对象**的两个键，而 patch
+# 整体替换 config，所以两者必须一起写：
+#
+#   - id: web
+#     name: '@deepseek-ai/dsh-web'
+#     config:
+#       searchProvider: anthropic-messages
+#       fetchProvider: browser
+#
+# 回退方式是把 searchProvider 改回 `deepseek-official`（配置不用动），而不是
+# 只删 web-search-anthropic 那一段——pin 指向不存在的 provider 会让 web_search
+# 整体以 WEB_PROVIDER_CONFIGURED_MISSING 失败。
+# ──────────────────────────────────────────────────────────────────────────

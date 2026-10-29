@@ -1,0 +1,298 @@
+name: iOS Release
+
+# The phone app is a first-party artifact of this repository, and the iOS half of it has
+# never been built anywhere: the Android APK is assembled on a runner by
+# android-release.yml while `ios/` was scaffolded and left there. This workflow builds the
+# same app for iOS from the same source, so a released tag carries a build for both phone
+# platforms.
+#
+# Two things make it different from the Android job, and both are deliberate:
+#
+#   * The native engine is built here rather than committed. Portal.xcframework is ~235 MB
+#     across device and simulator slices; committing it would double the repository for a
+#     binary that compiles from `native/*.go` in minutes, so the job builds it with
+#     scripts/build-xcframework.sh exactly as a developer does.
+#   * It cannot be signed from the repository. Android signs with a committed debug
+#     keystore; an Apple distribution certificate cannot be published and its private key
+#     cannot be recovered if it leaks, so the certificate and provisioning profile come from
+#     repository secrets. Without them the job still builds and archives the app for the
+#     simulator, which is what a fork can verify, and stops before the export.
+#
+# The artifact goes to TestFlight, not to the tag's release assets: an .ipa is not
+# installable by downloading it, and Apple's rules leave no room for a competing update
+# channel.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  # The report is force-pushed to an orphan branch, which needs a write token; the
+  # workflow reads its own failed-step log, which needs actions: read.
+  contents: write
+  actions: read
+
+jobs:
+  ios-ipa:
+    name: Build the app, verify it in the simulator, and upload it when signing is configured
+    runs-on: macos-14
+    timeout-minutes: 120
+    env:
+      APP_DIR: tools/netbird-client
+      IOS_DIR: tools/netbird-client/ios
+      SCHEME: NetBirdPortal
+      # Signing is an external credential, so whether it exists decides which steps run.
+      AW_IOS_SIGNING: ${{ secrets.AW_IOS_SIGNING }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Full history: the build number is the commit count, the same number the macOS
+          # bundle puts in CFBundleVersion and the APK in versionCode.
+          fetch-depth: 0
+
+      # Releases are cut from main. A tag event carries no branch information, so the tag's
+      # commit is checked against main instead. This job is also runnable by hand for a
+      # branch build, where the gate would be wrong.
+      - name: Require the tag to be on main
+        if: github.event_name == 'push'
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main; cut releases from main"
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME is on main"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
+      - name: Select the newest Xcode the runner has
+        run: |
+          # The project builds with whatever Xcode the image carries, but xcode-select on a
+          # runner can still point at the Command Line Tools, where the iOS SDK is missing.
+          sudo xcode-select -switch "$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort -V | tail -1)/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install JavaScript dependencies
+        working-directory: ${{ env.APP_DIR }}
+        run: npm ci --no-audit --no-fund
+
+      # The engine is the same Go source the desktop helper and the Android AAR are built
+      # from, bound for iOS instead. Caching the staged NetBird tree and the Go build cache
+      # keeps this step to minutes instead of a from-scratch compile.
+      - name: Cache the engine build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/netbird-client-xcframework
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+          key: xcframework-${{ runner.os }}-${{ hashFiles('tools/netbird-client/native/*.go', 'tools/netbird-client/scripts/build-xcframework.sh') }}
+
+      - name: Build Portal.xcframework
+        working-directory: ${{ env.APP_DIR }}
+        run: bash scripts/build-xcframework.sh 2>&1 | tee "$RUNNER_TEMP/xcframework.log"
+
+      - name: Install CocoaPods
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          bundle config set --local path vendor/bundle
+          bundle install --jobs 4
+
+      - name: Install pods
+        working-directory: ${{ env.APP_DIR }}
+        run: bundle exec pod install --project-directory=ios 2>&1 | tee "$RUNNER_TEMP/pod.log"
+
+      # The address a fresh install enrolls against is a build input, exactly as it is for
+      # the APK (`-PawManagementUrl`): the source carries the documentation placeholder and
+      # the release substitutes the fleet's own control plane. With no repository variable
+      # the build keeps the placeholder and has to be told an address inside the app, which
+      # the release notes say out loud instead of shipping an address nobody can reach.
+      - name: Point the build at the fleet's control plane
+        env:
+          AW_MANAGEMENT_URL: ${{ vars.AW_MANAGEMENT_URL }}
+        run: |
+          if [ -z "$AW_MANAGEMENT_URL" ]; then
+            echo "AW_MANAGEMENT_URL is not set: the app keeps the placeholder and asks for an address in the app"
+            exit 0
+          fi
+          /usr/libexec/PlistBuddy -c "Set :AWManagementURL $AW_MANAGEMENT_URL" ios/NetBirdPortal/Info.plist
+          /usr/libexec/PlistBuddy -c "Print :AWManagementURL" ios/NetBirdPortal/Info.plist
+
+      # The version gate reads the numbers back out of the built artifact, like the APK job
+      # does with aapt2: the tag, the manifest and the bundle must agree, and the build
+      # number must be the commit count both platforms carry.
+      - name: Build for the simulator and check the version the bundle carries
+        env:
+          VERSION: ${{ github.ref_name }}
+          AW_MANAGEMENT_URL: ${{ vars.AW_MANAGEMENT_URL }}
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          set -o pipefail
+          export VERSION="${VERSION#v}"
+          BUILD="$(git rev-list --count HEAD)"
+          xcodebuild \
+            -workspace "ios/$SCHEME.xcworkspace" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee "$RUNNER_TEMP/xcodebuild.log" | tail -5
+          APP="$RUNNER_TEMP/dd/Build/Products/Release-iphonesimulator/$SCHEME.app"
+          test -d "$APP"
+          SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")"
+          BUNDLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")"
+          echo "bundle says $SHORT ($BUNDLE)"
+          test "$SHORT" = "$VERSION" || { echo "::error::the bundle says $SHORT, the tag says $VERSION"; exit 1; }
+          test "$BUNDLE" = "$BUILD" || { echo "::error::the bundle's build number is $BUNDLE, the commit count is $BUILD"; exit 1; }
+          URL="$(/usr/libexec/PlistBuddy -c 'Print :AWManagementURL' "$APP/Info.plist")"
+          echo "control plane: $URL"
+          if [ -n "$AW_MANAGEMENT_URL" ]; then
+            test "$URL" = "$AW_MANAGEMENT_URL" || { echo "::error::the app carries $URL, the fleet variable says $AW_MANAGEMENT_URL"; exit 1; }
+          fi
+          # The engine has to be inside the app: a framework that did not link is the
+          # difference between an app that reaches the network and one that cannot.
+          # Portal is a static framework, so a linked engine shows up as its symbols
+          # inside the app binary rather than as a copied framework directory.
+          nm -gU "$APP/$SCHEME" | grep -q PortalStart \
+            || { echo "::error::the Go engine is not linked into the app"; exit 1; }
+
+      - name: Keep the build log as an artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-logs
+          path: |
+            ${{ runner.temp }}/*.log
+          if-no-files-found: warn
+
+      # Signing is external by construction. Until the secrets exist this step is skipped
+      # with a note in the log rather than failing a build that has already done its work.
+      - name: Sign, archive and upload to TestFlight
+        if: env.AW_IOS_SIGNING == 'true'
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.AW_IOS_KEYCHAIN_PASSWORD }}
+          CERTIFICATE_P12: ${{ secrets.AW_IOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.AW_IOS_CERTIFICATE_PASSWORD }}
+          PROVISIONING_PROFILE: ${{ secrets.AW_IOS_PROVISIONING_PROFILE }}
+          APP_STORE_CONNECT_KEY: ${{ secrets.AW_APP_STORE_CONNECT_KEY }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.AW_APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.AW_APP_STORE_CONNECT_ISSUER_ID }}
+          TEAM_ID: ${{ secrets.AW_IOS_TEAM_ID }}
+          VERSION: ${{ github.ref_name }}
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          set -o pipefail
+          export VERSION="${VERSION#v}"
+          BUILD="$(git rev-list --count HEAD)"
+          KEYCHAIN="$RUNNER_TEMP/aw-signing.keychain-db"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          echo "$CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$PROVISIONING_PROFILE" | base64 --decode \
+            > "$HOME/Library/MobileDevice/Provisioning Profiles/aw.mobileprovision"
+
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>uploadSymbols</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild \
+            -workspace "ios/$SCHEME.xcworkspace" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/$SCHEME.xcarchive" \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            archive 2>&1 | tee "$RUNNER_TEMP/archive.log" | tail -5
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/$SCHEME.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" 2>&1 | tee "$RUNNER_TEMP/export.log" | tail -5
+
+          echo "$APP_STORE_CONNECT_KEY" | base64 --decode > "$RUNNER_TEMP/asc-key.p8"
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$RUNNER_TEMP/export/$SCHEME.ipa" \
+            --apiKey "$APP_STORE_CONNECT_KEY_ID" \
+            --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID" \
+            --verbose 2>&1 | tee "$RUNNER_TEMP/upload.log"
+
+          security delete-keychain "$KEYCHAIN" || true
+
+      - name: Say what was and was not done
+        if: always()
+        run: |
+          if [ "${AW_IOS_SIGNING}" != "true" ]; then
+            echo "signing is not configured: the app was built and its version verified, and no .ipa was produced."
+            echo "to enable the upload, add AW_IOS_SIGNING, AW_IOS_KEYCHAIN_PASSWORD, AW_IOS_CERTIFICATE_P12,"
+            echo "AW_IOS_CERTIFICATE_PASSWORD, AW_IOS_PROVISIONING_PROFILE, AW_IOS_TEAM_ID and the App Store Connect key."
+          fi
+        env:
+          AW_IOS_SIGNING: ${{ secrets.AW_IOS_SIGNING }}
+
+      - name: Report the outcome to the ci-status-ios branch
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          OUTCOME="${{ job.status }}"
+          mkdir -p "$RUNNER_TEMP/report"
+          {
+            echo "workflow: ios-release"
+            echo "tag: $GITHUB_REF_NAME"
+            echo "commit: $GITHUB_SHA"
+            echo "outcome: $OUTCOME"
+            echo "run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "--- logs present ---"
+            ls -1 "$RUNNER_TEMP"/*.log 2>/dev/null || echo "(none)"
+            echo
+            for log in "$RUNNER_TEMP"/*.log; do
+              [ -f "$log" ] || continue
+              echo "--- $(basename "$log") (tail) ---"
+              tail -25 "$log"
+              echo
+            done
+          } > "$RUNNER_TEMP/report/ios-release.txt"
+
+          git config user.name "dsh-cove ci"
+          git config user.email "ci@users.noreply.github.com"
+          git checkout --orphan ci-status-ios
+          git rm -rf . >/dev/null 2>&1 || true
+          cp "$RUNNER_TEMP/report/ios-release.txt" ios-release.txt
+          git add ios-release.txt
+          git commit -m "ci(ios-release): $GITHUB_REF_NAME $OUTCOME"
+          git push --force origin ci-status-ios
