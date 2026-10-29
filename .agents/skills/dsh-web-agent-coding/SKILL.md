@@ -30,7 +30,7 @@ This skill is guidance, not a replacement for repository instructions. [AGENTS.m
 - Use [dsh-web-pre-push-checks](../dsh-web-pre-push-checks/SKILL.md) before a push, a pull request, or a claim that checks pass.
 - Use [dsh-web-documentation](../dsh-web-documentation/SKILL.md) for README, docs, or instruction changes.
 - Use [dsh-web-web-qa](../dsh-web-web-qa/SKILL.md) for client-facing behavior that needs live GUI verification.
-- For a community-plugin registration or a release, load the dedicated installed skill for that task instead of recreating its process here.
+- For a release, load the dedicated installed skill for that task instead of recreating its process here.
 
 ## Finish
 

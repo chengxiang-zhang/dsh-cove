@@ -5,7 +5,6 @@
 ## 包形态
 
 - **唯一运行时实体（dsh-web-all）**：全家桶所有 first-party host/browser 能力共享 `web-all` 这一条 Cordis 生命周期，按 dsh 注入位置组织（见其 AGENTS.md）。独立 preset patch 可以声明 Agent 预设，但不得新增第二个功能实体行。新增能力直接进入本包。
-- **源/数据包**：`dsh-community-plugins` 只承载 `community.json` 数据。它可以发布 npm 产物供索引消费方使用，但不得携带 `cordis.patch.yml` 或声明 runtime bundle/client 行。
 - **host / client 半区分层**：`dsh-web-all/src/index.ts` 是 host 装配入口，`src/host/services/` 按服务域组织，`src/client/` 按 sidebar / settings / conversation 注入位置组织，`src/core/` 是两侧共享的纯逻辑。新增运行时代码必须落到这些 owner 之一。
 - **exports 约定**：运行时实体的 `exports` 提供 `.`（host）、`./client`（浏览器半区）、必要时 `./invariant`；`./src/*` 用于测试引用。源/数据包只导出其脚本、契约或数据消费者需要的入口，不得把旧 runtime 入口重新暴露为独立插件。
 

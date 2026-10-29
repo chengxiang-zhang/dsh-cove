@@ -7,7 +7,7 @@ This document records how dsh-cove is maintained and how decisions are made. It 
 | Role | Expectations |
 | --- | --- |
 | User | Installs the plugin, reports bugs and requests capabilities through the issue forms |
-| Contributor | Submits a community plugin index registration or improves the project through issues; follows [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) |
+| Contributor | Improves the project through issues, reproductions and patches on accepted work; follows [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) |
 | Maintainer | Owns release authority, reviews and merges contributions, triages issues, keeps documentation current and guards the single-entity architecture |
 | Security responder | Triages private vulnerability reports under [SECURITY.md](SECURITY.md); normally the maintainer |
 
@@ -28,7 +28,7 @@ The maintainer list is the authoritative record. Review routing, required checks
 
 ## Contribution scope
 
-The runtime is a single entity plugin. First-party capabilities are added inside `packages/dsh-web-all`; the project does not accept independent first-party plugin packages or a second runtime row. External contributions are limited to community plugin index registrations, as defined in [CONTRIBUTING.md](CONTRIBUTING.md). This is a maintainability decision, not a statement about the value of a contribution.
+The runtime is a single entity plugin. First-party capabilities are added inside `packages/dsh-web-all`; the project does not accept independent first-party plugin packages or a second runtime row. External contributions start as issues, as defined in [CONTRIBUTING.md](CONTRIBUTING.md); plugin development happens in the author's own repository. This is a maintainability decision, not a statement about the value of a contribution.
 
 ## Becoming a maintainer
 

@@ -21,7 +21,6 @@ This page is the map of the repository's long-lived documentation. Each document
 | Area | Documents |
 | --- | --- |
 | Runtime and feature contract | [packages/dsh-web-all/README.md](../packages/dsh-web-all/README.md), [packages/dsh-web-all/README.zh.md](../packages/dsh-web-all/README.zh.md) |
-| Community plugin index | [packages/dsh-community-plugins/README.md](../packages/dsh-community-plugins/README.md), [docs/plugins.md](plugins.md) |
 | Development workflow | [docs/development.md](development.md), [docs/i18n.md](i18n.md) |
 | Remote and self-hosted deployment | [docs/remote-access.md](remote-access.md), [tools/dsh-netbird/README.md](../tools/dsh-netbird/README.md) |
 | Release and client packaging | [docs/publish-prep.md](publish-prep.md), [docs/client-release.md](client-release.md) |

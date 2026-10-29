@@ -72,7 +72,6 @@ If no compatibility handoff is required, run the CI-equivalent gate sequence dir
 
 ~~~sh
 pnpm typecheck
-pnpm community:check
 pnpm build
 pnpm test
 pnpm test:scripts

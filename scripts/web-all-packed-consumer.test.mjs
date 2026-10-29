@@ -9,7 +9,6 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const packages = {
   '@dsh-cove/dsh-web-all': { dir: 'packages/dsh-web-all', exports: ['.', './client', './invariant'] },
-  '@dsh-cove/dsh-client-ui-community-plugins': { dir: 'packages/dsh-community-plugins', exports: ['./community.json'] },
 }
 
 test('runtime and compiled source-package contract exports survive npm packing', async () => {

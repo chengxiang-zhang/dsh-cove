@@ -27,7 +27,7 @@ pnpm test:scripts
 pnpm docs:check
 ```
 
-按 diff 追加 `pnpm runtime-deps:check` 或 `pnpm community:check`。
+按 diff 追加 `pnpm runtime-deps:check`。
 
 ## 在 dsh-web-all 增加能力
 
@@ -58,12 +58,6 @@ pnpm runtime-deps:check
 pnpm sync-shared
 pnpm sync-shared:check
 ```
-
-## 修改源/数据包
-
-- `packages/dsh-community-plugins/`：社区插件索引。
-
-该包不提供 profile 功能行，也不携带 `cordis.patch.yml`。社区索引变更运行 `node scripts/community-index` 与 `pnpm community:check`。
 
 ## 本地验证
 

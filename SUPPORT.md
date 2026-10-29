@@ -10,7 +10,7 @@ This document explains where to get help and what to include, so every request c
 | Reproducible bug | [Bug report form](https://github.com/chengxiang-zhang/dsh-cove/issues/new/choose); it attaches the `bug` label automatically |
 | Feature request or design discussion | [Issue with the request form](https://github.com/chengxiang-zhang/dsh-cove/issues/new/choose) |
 | Security vulnerability | [Private advisory](https://github.com/chengxiang-zhang/dsh-cove/security/advisories/new), never a public issue; see [SECURITY.md](SECURITY.md) |
-| Community plugin author question | Register the plugin through the index process in [docs/plugins.md](docs/plugins.md) |
+| Plugin development question | The plugin lives in its author's own repository; this project only ships the runtime entity |
 | Documentation gap or wrong statement | Issue with the request form; documentation pull requests follow the contribution policy in [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Before asking
@@ -31,10 +31,10 @@ This document explains where to get help and what to include, so every request c
 
 - This is a developer-preview project maintained in maintainer time. Responses are best effort; security reports follow the targets in [SECURITY.md](SECURITY.md).
 - Issues are triaged against [ISSUE_TRIAGE.md](ISSUE_TRIAGE.md). Requests that need a product decision stay open until a maintainer records a decision.
-- The repository accepts one class of external pull request, a community plugin index registration. A fix you propose for the runtime still starts as an issue.
+- The repository does not accept external pull requests directly; a fix you propose starts as an issue that a maintainer decides on.
 
 ## Out of scope
 
 - DeepSeek Harness itself: report to the DSH project.
-- Third-party community plugins: contact their authors; the index only links to them.
+- Third-party DSH plugins: contact their authors.
 - A deliberately misconfigured deployment that removes a documented guard, for example `noBrowserAuth` exposed on the public internet.

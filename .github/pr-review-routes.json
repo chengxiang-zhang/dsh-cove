@@ -27,21 +27,6 @@
       ]
     },
     {
-      "name": "community-plugins",
-      "label": "社区插件索引",
-      "types": [
-        "社区插件索引"
-      ],
-      "prAllowed": true,
-      "ai": false,
-      "reviewers": [
-        "chengxiang-zhang"
-      ],
-      "assignees": [
-        "chengxiang-zhang"
-      ]
-    },
-    {
       "name": "maintenance",
       "label": "维护 / 其他",
       "types": [

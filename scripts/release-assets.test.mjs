@@ -15,7 +15,7 @@ test('packageFiles: selects only the tagged web-all runtime release package', ()
   try {
     for (const pkg of [
       'packages/dsh-web-all/package.json',
-      'packages/dsh-community-plugins/package.json',
+      'packages/not-a-release/package.json',
     ]) {
       mkdirSync(join(dir, pkg, '..'), { recursive: true })
       writeFileSync(join(dir, pkg), JSON.stringify({ name: 'x', version: '0.4.0' }))
@@ -48,7 +48,7 @@ test('packOne: rejects when npm pack reports no filename', () => {
 test('publishablePackages: drops private packages', () => {
   const out = publishablePackages([
     { name: '@dsh-cove/dsh-web-all', version: '0.4.0' },
-    { name: '@dsh-cove/dsh-client-ui-community-plugins', version: '0.4.0', private: true },
+    { name: '@dsh-cove/example-private', version: '0.4.0', private: true },
   ])
   assert.deepEqual(out, [{ name: '@dsh-cove/dsh-web-all', version: '0.4.0' }])
 })
@@ -57,17 +57,17 @@ test('waitForPublished: polls until every package version is readable', () => {
   const attempts = []
   const fakeView = (name) => {
     attempts.push(name)
-    if (name.includes('community-plugins') && attempts.filter(n => n === name).length < 3) {
+    if (name === '@dsh-cove/example-late' && attempts.filter(n => n === name).length < 3) {
       throw Object.assign(new Error('not found'), { code: 'E404' })
     }
   }
   waitForPublished(
-    [{ name: '@dsh-cove/dsh-web-all' }, { name: '@dsh-cove/dsh-client-ui-community-plugins' }],
+    [{ name: '@dsh-cove/dsh-web-all' }, { name: '@dsh-cove/example-late' }],
     '0.4.0',
     fakeView,
     { attempts: 5, delayMs: 0 },
   )
-  assert.equal(attempts.filter(n => n.includes('community-plugins')).length, 3)
+  assert.equal(attempts.filter(n => n === '@dsh-cove/example-late').length, 3)
 })
 
 test('waitForPublished: throws after the attempt budget', () => {

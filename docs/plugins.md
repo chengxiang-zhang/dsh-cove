@@ -35,23 +35,9 @@
 
 组件 props 使用官方 `PropsRuntime<'slot.name'>`；未发布的槽声明可以在位置模块本地 augmentation，但应在官方 SDK 补齐后移除。浏览器 bundle 中 `@deepseek-ai/*` 只做 type-only 导入，跨模块协作走 Cordis service 或位置模块传入的 props。
 
-## 数据源包
-
-以下目录可以保留为非实体源包，但不得声明运行时 bundle/client 行：
-
-- `packages/dsh-community-plugins/`：`community.json` 数据源。
-
-它不携带 `cordis.patch.yml`，profile 只挂载 `@dsh-cove/dsh-web-all`。
-
 ## 社区代码
 
 社区实现只作为行为和协议参考。重新实现时保留许可证和作者归属，不把旧插件入口、slot 注入器或包级生命周期复制到实体插件。无许可证或版权不明的代码不收编。
-
-第三方插件目录仍登记在 `packages/dsh-community-plugins/community.json`。更新后运行：
-
-```sh
-node scripts/community-index
-```
 
 ## 测试与真实运行时验证
 

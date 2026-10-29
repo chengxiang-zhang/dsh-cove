@@ -33,7 +33,7 @@ English | [中文](README.zh.md)
 
 ## What it is
 
-dsh-cove is an extension suite for the DeepSeek Harness (DSH) Web GUI. SSH operations, the memory panel, the Git workbench, Feishu intake, run-finished notifications and browser automation live in one runtime entity plugin, `@dsh-cove/dsh-web-all`. Browser code is organized by DSH injection position with exactly one module owning each position, and host capabilities are service domains under the same plugin lifecycle. A DSH profile mounts this single package and never patches DSH source. Community plugins are listed in the repository index and stay in their authors' own repositories.
+dsh-cove is an extension suite for the DeepSeek Harness (DSH) Web GUI. SSH operations, the memory panel, the Git workbench, Feishu intake, run-finished notifications and browser automation live in one runtime entity plugin, `@dsh-cove/dsh-web-all`. Browser code is organized by DSH injection position with exactly one module owning each position, and host capabilities are service domains under the same plugin lifecycle. A DSH profile mounts this single package and never patches DSH source.
 
 The project is a developer preview: interfaces, configuration keys and internal contracts can change between releases. See [Versioning and releases](#versioning-and-releases).
 
@@ -124,7 +124,6 @@ A profile runtime mounts `@deepseek-ai/dsh-base`, `@deepseek-ai/dsh-web-app` and
 | npm package | Shape |
 | --- | --- |
 | [@dsh-cove/dsh-web-all](https://www.npmjs.com/package/@dsh-cove/dsh-web-all) | The only runtime entity; owns every host service domain and browser position module |
-| [@dsh-cove/dsh-client-ui-community-plugins](https://www.npmjs.com/package/@dsh-cove/dsh-client-ui-community-plugins) | Community plugin index data source; no runtime row |
 
 ### Verify and uninstall
 
@@ -174,14 +173,13 @@ The plugin exposes privileged local capabilities, so its security model is part 
 
 - Questions, feature requests and reproducible bugs: use the [issue forms](https://github.com/chengxiang-zhang/dsh-cove/issues/new/choose); triage policy is in [ISSUE_TRIAGE.md](ISSUE_TRIAGE.md).
 - Installation and usage help: read [docs/README.md](docs/README.md) and [SUPPORT.md](SUPPORT.md) first.
-- Community plugins: the index lives in [packages/dsh-community-plugins/community.json](packages/dsh-community-plugins/community.json); register a plugin by pull request and see [docs/plugins.md](docs/plugins.md) for the contract.
 - Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md); decision making and maintainer roles are in [GOVERNANCE.md](GOVERNANCE.md).
 
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. In short:
 
-- The repository accepts one class of external pull request, a community plugin index registration; every other change starts as an issue so maintainers can keep the single-entity architecture coherent.
+- Every change starts as an issue so maintainers can keep the single-entity architecture coherent.
 - Commit messages follow Conventional Commits; emoji are rejected across code, documentation and commit messages.
 - README changes update both language versions and re-record the pairing file.
 - Before a pull request, run at least `pnpm typecheck && pnpm test && pnpm docs:check`.
@@ -192,4 +190,4 @@ A `vX.Y.Z` tag is the only version source. Tags are cut from `main` after `dev` 
 
 ## License and third-party notices
 
-The repository is licensed under [Apache-2.0](LICENSE); the community plugin index package uses [BSD-3-Clause](packages/dsh-community-plugins/LICENSE). Retained third-party code keeps its original license and attribution, indexed by [NOTICE](NOTICE) and the per-directory third-party notices files. Contributions are accepted under the inbound license of the file they touch; see [CONTRIBUTING.md](CONTRIBUTING.md).
+The repository is licensed under [Apache-2.0](LICENSE). Retained third-party code keeps its original license and attribution, indexed by [NOTICE](NOTICE) and the per-directory third-party notices files. Contributions are accepted under the inbound license of the file they touch; see [CONTRIBUTING.md](CONTRIBUTING.md).

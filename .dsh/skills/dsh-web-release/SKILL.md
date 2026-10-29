@@ -10,8 +10,8 @@ whenToUse: The user asks to release, publish, bump a version, create a tag, repa
 
 - Canonical repository: `chengxiang-zhang/dsh-cove`.
 - `dev` is the integration branch; tested changes reach `main` through maintainer integration. Release tags are cut from `main`.
-- `packages/dsh-web-all` is the only runtime entity. `dsh-community-plugins` is the only source/data package.
-- Tag `vX.Y.Z` versions `@dsh-cove/dsh-web-all` only; it is that package's version source of truth. Source/data packages version independently and are not republished by the tag.
+- `packages/dsh-web-all` is the only package the repository ships, and it is the only runtime entity.
+- Tag `vX.Y.Z` versions `@dsh-cove/dsh-web-all`, which is the repository's version source of truth.
 - GitHub Actions publishes with `NPM_TOKEN`; do not depend on local npm authentication.
 - Release history lives in GitHub Releases. `scripts/release-notes.mjs` generates the release body from Git history; do not create committed release-history snapshots.
 

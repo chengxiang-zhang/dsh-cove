@@ -51,9 +51,6 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Community index consistency
-        run: pnpm community:check
-
       - name: Build
         run: pnpm build
 

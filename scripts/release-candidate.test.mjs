@@ -8,7 +8,6 @@ import {
 } from './release-candidate.mjs'
 
 const NAME = '@dsh-cove/dsh-web-all'
-const COMMUNITY = '@dsh-cove/dsh-client-ui-community-plugins'
 const SPEC = `${NAME}@0.4.2`
 function npmError(code) {
   return Object.assign(new Error(`fake npm ${code}`), { stdout: JSON.stringify({ error: { code } }) })
@@ -73,18 +72,6 @@ test('publishCandidate verifies an existing immutable version without publishing
   const f = fixture(t)
   assert.deepEqual(publishCandidate(f.file, f.run), { spec: SPEC, published: false })
   assert.deepEqual(f.writes(), [])
-})
-
-test('both packages a release carries are release artifacts', t => {
-  // The source/data package travels the same three stages as the runtime entity, so the
-  // identity check has to accept it - and, as the invalid-manifest case below holds,
-  // nothing else.
-  const community = fixture(t, { name: COMMUNITY })
-  assert.deepEqual(publishCandidate(community.file, community.run), {
-    spec: `${COMMUNITY}@0.4.2`,
-    published: false,
-  })
-  assert.deepEqual(community.writes(), [])
 })
 
 test('publishCandidate rejects an existing artifact mismatch', t => {

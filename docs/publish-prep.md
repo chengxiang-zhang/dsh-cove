@@ -7,9 +7,8 @@
 | 目录 | npm 包 | 形态 |
 | --- | --- | --- |
 | `packages/dsh-web-all` | `@dsh-cove/dsh-web-all` | 唯一 Cordis/runtime client 实体 |
-| `packages/dsh-community-plugins` | `@dsh-cove/dsh-client-ui-community-plugins` | 社区索引数据源，无运行时行 |
 
-发布版本由 tag 驱动：`vX.Y.Z` tag 是仓库唯一的版本号来源，每个一方 manifest（`packages/dsh-web-all`、`packages/dsh-community-plugins`、`shared`、两个客户端）都声明它；`scripts/verify-version.mjs` 校验每个已发布包与 tag 一致，`scripts/version-doctrine.test.mjs` 校验全仓 manifest 一致，所以 `@dsh-cove/dsh-client-ui-community-plugins` 与运行时包同号发布。
+发布版本由 tag 驱动：`vX.Y.Z` tag 是仓库唯一的版本号来源，每个一方 manifest（`packages/dsh-web-all`、`shared`、两个客户端）都声明它；`scripts/verify-version.mjs` 校验已发布包与 tag 一致，`scripts/version-doctrine.test.mjs` 校验全仓 manifest 一致。
 
 ## 运行时边界
 
@@ -18,8 +17,6 @@ Profile 的运行时 bundles 仅为 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-
 浏览器位置由 web-all 的 sidebar/settings/conversation 模块唯一注入；host 能力在同包服务域中注册。BrowserAuth 绕过默认关闭，只能通过 web-all 的 `noBrowserAuth` 配置显式启用。Playwright 服务域独占 `mcp__playwright__*`，部署前必须移除全局 `mcp-playwright` 条目。
 
 ## 资产与来源边界
-
-社区索引源包不携带 `cordis.patch.yml`，package manifest 不声明 `dsh.bundle` 或 `dsh.client`；该包本身不进入 DSH runtime bundle 栈。
 
 第三方来源的许可证与作者归属继续随保留的资产或实体实现发布。
 
@@ -32,7 +29,6 @@ pnpm test
 pnpm test:scripts
 pnpm runtime-deps:check
 pnpm docs:check
-pnpm community:check
 pnpm build
 ```
 
@@ -40,14 +36,13 @@ pnpm build
 
 发布顺序为：完整门禁与本地 pack 的真实挂载验证，通过后仅以 `candidate` dist-tag 发布同一 tarball；再下载精确版本的 registry tarball，核验 SHA512 完全一致并运行消费者挂载与浏览器 smoke，通过后才推进 `latest`。已存在版本不可覆盖：重跑时必须核验不可变 registry 字节与已门禁 tarball 一致，否则停止。发布工作流共用一个跨 tag 并发组，且推广前检查 registry 当前 `latest`；相同或更旧版本重跑不得使 `latest` 倒退。此约束不是 npm 的 compare-and-swap，仓库外的人工推广仍需协调；此流程只控制推广，不提供对 npm 发布的事务回滚。
 
-npm 发布是按需开启的：`release.yml` 的 registry 路径（`candidate`、`verify-release`）只在仓库变量 `NPM_PUBLISH` 为 `true` 时运行，开启前必须先配好 npm Trusted Publisher 或 `NPM_TOKEN` secret，否则该路径只会停在认证失败。Trusted Publisher 必须同时具备 `npm publish` 与 `npm dist-tag` 两项权限：`npm trust github --allow-publish` 只授予前者，`npm dist-tag` 只能在 npmjs.com 的 Trusted Publisher 设置里勾选，缺这项时 candidate 能发布成功，但推进 `latest` 会被 403 拒绝。无论是否发布到 npm，每个 tag 都由 `github-release` job 产出 GitHub Release，挂上已门禁的两个包 tarball 与生成的发布说明；桌面端、Android 与 iOS 安装包由各自工作流挂到同一个 tag，因此 tag 的交付物不依赖 npm 账号。
+npm 发布是按需开启的：`release.yml` 的 registry 路径（`candidate`、`verify-release`）只在仓库变量 `NPM_PUBLISH` 为 `true` 时运行，开启前必须先配好 npm Trusted Publisher 或 `NPM_TOKEN` secret，否则该路径只会停在认证失败。Trusted Publisher 必须同时具备 `npm publish` 与 `npm dist-tag` 两项权限：`npm trust github --allow-publish` 只授予前者，`npm dist-tag` 只能在 npmjs.com 的 Trusted Publisher 设置里勾选，缺这项时 candidate 能发布成功，但推进 `latest` 会被 403 拒绝。无论是否发布到 npm，每个 tag 都由 `github-release` job 产出 GitHub Release，挂上已门禁的 tarball 与生成的发布说明；桌面端、Android 与 iOS 安装包由各自工作流挂到同一个 tag，因此 tag 的交付物不依赖 npm 账号。
 
 ## 发布检查
 
 发布前确认：
 
 - `packages/dsh-web-all/cordis.patch.yml` 只有 `web-all` 一行；
-- 其他保留源包不携带 patch；
 - package tarball 包含 `lib/index.js`、`lib/client.js` 和类型声明；
 - 每个已发布 manifest 带 `repository`、`homepage`、`bugs`、`license` 与英文 `description`，npm 页面能指向本仓库；
 - `pnpm-lock.yaml` 与 manifest 一致；
@@ -55,4 +50,4 @@ npm 发布是按需开启的：`release.yml` 的 registry 路径（`candidate`�
 - `SECURITY.md`、`NOTICE` 与各目录的第三方声明覆盖本次发布的全部资产；
 - 未提交 token、私钥、测试 profile 或隔离运行目录。
 
-发布只覆盖上表两个包；其他 npm 身份只做 deprecate，不重新引入运行时依赖。
+发布只覆盖上表这一个包；其他 npm 身份只做 deprecate，不重新引入运行时依赖。

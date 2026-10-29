@@ -1,6 +1,6 @@
 > 提 PR 前请阅读 [CONTRIBUTING.md](../CONTRIBUTING.md) 与 [AGENTS.md](../AGENTS.md)；
 > 提交信息用 Conventional Commits（`type(scope): subject`），禁止 emoji。
-> 本仓库只接受一类内容贡献：插件申请（社区插件索引登记）。其余改动（修复 / 增强 / 全新功能 / 文档 / 测试 / 维护）不接受直接 PR，请先提 Issue 讨论；仓库所有者、机器人与拥有写权限的协作者（维护者）不受此限制，可直接提交任意改动。
+> 本仓库不接受外部直接 PR：修复 / 增强 / 全新功能 / 文档 / 测试 / 维护一律先提 Issue 讨论；插件开发请在作者自己的仓库完成，本仓库不再登记社区插件索引。仓库所有者、机器人与拥有写权限的协作者（维护者）不受此限制，可直接提交任意改动。
 > 仅文档类 PR（标题以 `docs:` 开头或勾选「仅文档」）不接受，会被自动关闭；文档改动请先提 Issue 讨论（仓库所有者、机器人与拥有写权限的协作者不受此限制）。
 >
 > English contributors: section headings and checkbox labels stay in Chinese because repository automation matches those exact strings. Fill in the checkboxes unchanged; the guidance comments under each section explain what is required, and [CONTRIBUTING.md](../CONTRIBUTING.md) has the full English rules.
@@ -13,15 +13,13 @@
 <!-- 勾选本次改动涉及的包；仅脚本改动（维护类）可全部不勾选并说明。 -->
 
 - [ ] Web 运行时能力 `packages/dsh-web-all`
-- [ ] 社区插件索引 `packages/dsh-community-plugins`
 - [ ] 自动化 / 其他（请说明）
 
 ## PR 类别（PR Category）
 
-<!-- 必填。勾选本 PR 最贴近的类别（可多选），用于机器人按类别自动分派给协作者。插件申请勾「社区插件索引」；其余运行时功能改动、维护 / 其他不在公开内容贡献范围，会被自动关闭，请改提 Issue；仓库所有者与拥有写权限的协作者（维护者）不受此限制。 / Required: select the closest category. Only the community plugin index category is accepted from external contributors; other changes start as an issue. -->
+<!-- 必填。勾选本 PR 最贴近的类别（可多选），用于机器人按类别自动分派给协作者。外部贡献一律先提 Issue，直接 PR 会被自动关闭；仓库所有者与拥有写权限的协作者（维护者）不受此限制。 / Required: select the closest category. External changes start as an issue; direct pull requests are closed automatically. -->
 
 - [ ] Web 运行时能力（侧栏 / 设置 / 会话区 / Host 服务）
-- [ ] 社区插件索引
 - [ ] 维护 / 其他
 
 ## PR 类型（PR Type）
@@ -89,22 +87,6 @@
 ## 贡献者版权声明（Contributor Copyright）
 
 <!-- 可选。若本 PR 贡献的是插件，可在项目 README 末尾「来源与版权」的版权表中追加一行声明你自己的版权（包 / 来源 / 版权三列，格式参考表中现有行）；不声明则维持现有版权归属。 -->
-
-## 社区插件索引登记（Community Plugin Index）
-
-<!-- 仅当本 PR 新增接入一个社区插件时必填；其余改动可跳过本节。新接入的社区插件对下述要求逐项确认。 -->
-
-插件 GitHub 仓库链接：
-
-<!-- 必填。提供插件源码的公开 GitHub 仓库链接，供协作者评审参考。 -->
-
-插件详细说明：
-
-<!-- 必填。提供插件的功能、用途、依赖、已知限制等详细说明，供协作者评审参考。 -->
-
-- [ ] 已按 [docs/plugins.md](../docs/plugins.md) 的登记说明在 `packages/dsh-community-plugins/community.json` 追加条目，并运行 `pnpm community:check` 校验索引。
-- [ ] 已确认插件与 dsh-cove 插件体系兼容：遵循官方 cordis bundle 独立标准（package.json 声明 `dsh.bundle.patch` 指向 `cordis.patch.yml`、`dsh.client` 浏览器半区），类型仅基于官方 `@deepseek-ai/*` NPM SDK，未修改 DSH 源码；已在本仓库最新代码上验证插件可被 `dsh web` 挂载并正常运行。
-- [ ] 承诺负责后续更新跟进：插件与 DSH / dsh-cove 生态保持同步，生态升级导致不兼容时主动跟进修复；条目信息（description / npm 等）变动或插件停更时，及时更新索引登记或提交移除。
 
 ## 本地验证（Local Validation）
 

@@ -38,7 +38,6 @@ test('every first-party manifest declares the released version', () => {
   // number beside the release is a second answer to "which version is this", and it goes
   // stale the moment the release moves. The tag bumps them together.
   for (const [path, what] of [
-    ['packages/dsh-community-plugins/package.json', 'the source/data package published beside the runtime'],
     ['shared/package.json', 'the shared modules inlined into every bundle'],
     ['tools/anywhere-agent/package.json', 'the macOS app'],
     ['tools/netbird-client/package.json', 'the Android app'],

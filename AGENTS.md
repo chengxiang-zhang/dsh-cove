@@ -8,8 +8,6 @@ Before changing `packages/`, read [packages/AGENTS.md](packages/AGENTS.md). Befo
 
 `packages/dsh-web-all/` is the only runtime entity. Add first-party capabilities there by DSH injection position; no other package may create a first-party functional row.
 
-`packages/dsh-community-plugins/` is a source/data package, not a runtime entity. It owns the community plugin index and provides no runtime behavior.
-
 `shared/tsdown.client.ts` is the only shared client build preset. `shared/web-platform.ts` defines the browser platform seed table. `shared/` contains repository-wide runtime and tooling helpers. Generated package copies, when declared by `sync-shared.mjs`, must not be edited manually.
 
 `scripts/` contains repository maintenance tools and `docs/` contains current long-lived documentation (indexed by [docs/README.md](docs/README.md)).
@@ -28,12 +26,12 @@ pnpm dsh-local:audit
 pnpm docs:check
 ```
 
-Before merging, run at least `pnpm typecheck && pnpm test && pnpm docs:check`. Run `pnpm community:check` when the community index changes.
+Before merging, run at least `pnpm typecheck && pnpm test && pnpm docs:check`.
 
 ## Repository Rules
 
 - Mount first-party runtime behavior only through `packages/dsh-web-all/cordis.patch.yml` and profiles. Source/data packages must not declare functional runtime rows. TypeScript configuration must not reference a DSH checkout; use official `@deepseek-ai/*` SDK packages from `node_modules`.
-- New first-party capabilities go into `dsh-web-all`. External community plugins remain independent repositories indexed through `packages/dsh-community-plugins/community.json`.
+- New first-party capabilities go into `dsh-web-all`; there is no second runtime entity and no source/data package beside it.
 - Published packages use the `@dsh-cove/dsh-*` scope, with `@dsh-cove/dsh-client-ui-*` reserved for client UI/data packages where applicable.
 - Use `shared/tsdown.client.ts`; do not copy the build preset into a package.
 - Keep `NPM_TOKEN` in the environment. Store token configuration in the user `~/.npmrc`; the project `.npmrc` should contain only scope mappings.

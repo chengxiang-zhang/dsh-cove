@@ -12,14 +12,13 @@ export const REGISTRY = 'https://registry.npmjs.org/'
 /**
  * The packages a release publishes, at the one version its tag names.
  *
- * The runtime entity and the source/data package beside it travel together, so both go
- * through the same three stages: the candidate tag first, the immutable registry bytes
- * verified afterwards, and `latest` only once that verification passed. Restricting this
- * list is what stops a stray tarball from being published by a release run.
+ * The runtime entity is the only one, and it goes through three stages: the candidate tag
+ * first, the immutable registry bytes verified afterwards, and `latest` only once that
+ * verification passed. Restricting this list is what stops a stray tarball from being
+ * published by a release run.
  */
 export const RELEASE_PACKAGE_NAMES = [
   '@dsh-cove/dsh-web-all',
-  '@dsh-cove/dsh-client-ui-community-plugins',
 ]
 const runDefault = (file, args, options = {}) => execFileSync(file, args, { encoding: 'utf8', ...options })
 export function integrity(file) {

@@ -20,35 +20,10 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const readSection = (label) => {
-              const heading = escapeRegExp(label);
-              const pattern = new RegExp(`(?:^|\\n)##\\s+${heading}\\s*\\n+([\\s\\S]*?)(?=\\n##\\s+|$)`, 'i');
-              const match = body.match(pattern);
-              return match ? match[1].replace(/<!--[\s\S]*?-->/g, '').trim() : '';
-            };
-
-            const isBlank = (value) => {
-              const normalized = value.replace(/\s+/g, ' ').trim().toLowerCase();
-              return normalized === '' || normalized === 'no response' || normalized === '_no response_';
-            };
-
-            const hasCheckedLine = (value, label) => {
-              const pattern = new RegExp(`^-\\s*\\[[xX]\\]\\s*${escapeRegExp(label)}\\s*$`, 'm');
-              return pattern.test(value);
-            };
             const pr = context.payload.pull_request;
             const body = pr.body || '';
             
-            const prCategory = readSection('PR 类别（PR Category）');
-            const prType = readSection('PR 类型（PR Type）');
-            
-            // 唯一接受的内容贡献：插件申请（社区插件索引 类别）。
-            const isPluginApplicationPR = hasCheckedLine(prCategory, '社区插件索引');
-            if (isPluginApplicationPR) {
-              console.log('PR #' + pr.number + ': declared accepted content type, keeping open.');
-              return;
-            }
+            // 本仓库不接受外部内容贡献：所有非维护者 PR 都先走 Issue。
             
             // 仅文档类 PR 由 reject-docs-pr.yml 处理，避免重复评论 / 关闭。
             const isDocsTitle = /^docs\b/i.test(pr.title || '') || /^docs\s*\(/i.test(pr.title || '');
@@ -84,10 +59,10 @@ jobs:
             }
             
             const comment = [
-              '本仓库只接受一类内容贡献（插件申请），本 PR 不在接受范围内，已被自动关闭。',
+              '本仓库不接受外部直接 PR，本 PR 已被自动关闭。',
               '',
-              '请在 PR 描述中勾选「社区插件索引」类别后重新打开。',
-              '其余改动（bug 修复、功能增强、全新功能、文档、测试、维护等）请先到 [Issues](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/issues) 提 issue 讨论，确认后由维护者处理。',
+              '修复、功能增强、全新功能、文档、测试、维护等改动请先到 [Issues](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/issues) 提 issue 讨论，确认后由维护者处理。',
+              '插件开发请在作者自己的仓库完成，本仓库不再登记社区插件索引。',
             ].join('\n');
             
             await github.rest.issues.createComment({

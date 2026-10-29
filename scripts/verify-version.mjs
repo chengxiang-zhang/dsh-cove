@@ -2,12 +2,11 @@
 /**
  * Verify that every package a release publishes declares the version the tag names.
  *
- * The repository has one version number. A tag names it, the runtime entity carries it,
- * and the source/data package published beside it carries the same number: one release,
- * one version, whether the thing a person holds is the runtime, the installer or the
- * community plugin index. Private workspace packages are not published, so they are
- * not this gate's business - the repository-wide invariant that they too declare the
- * released version lives in `scripts/version-doctrine.test.mjs`.
+ * The repository has one version number. A tag names it and the runtime entity carries
+ * it: one release, one version, whether the thing a person holds is the runtime or the
+ * installer built from the same tag. Private workspace packages are not published, so
+ * they are not this gate's business - the repository-wide invariant that they too
+ * declare the released version lives in `scripts/version-doctrine.test.mjs`.
  *
  * Prints GitHub error annotations (::error file=...) on mismatch and exits
  * non-zero; the release workflow runs this right before publishing.

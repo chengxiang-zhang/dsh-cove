@@ -38,14 +38,13 @@ This maintainer policy is maintained in Chinese. Contribution rules and the revi
 | name | 分类 | 类别勾选 | 负责人 / 审批者 |
 | --- | --- | --- | --- |
 | `plugins` | Web 运行时能力（侧栏 / 设置 / 会话区 / Host 服务） | Web 运行时能力（侧栏 / 设置 / 会话区 / Host 服务） | chengxiang-zhang |
-| `community-plugins` | 社区插件索引 | 社区插件索引 | chengxiang-zhang |
 | `maintenance` | 维护 / 其他 | 维护 / 其他 | chengxiang-zhang |
 | `defaultRoute` | 未匹配任何分类时的兜底 | 无 | chengxiang-zhang |
 
 新增分类：在 `routes` 追加条目并同步本表格；纯按标题路由可只写 `title`，
-例如 `{"name": "community", "title": "^社区", "reviewers": ["chengxiang-zhang"]}`；
+例如 `{"name": "docs", "title": "^docs", "reviewers": ["chengxiang-zhang"]}`；
 按类别路由可只写 `types`，值为 PR 描述「PR 类别」勾选项的完整标签（须与模板一致），例如
-`{"name": "community-plugins", "types": ["社区插件索引"], "assignees": ["chengxiang-zhang"], "reviewers": ["chengxiang-zhang"]}`；
+`{"name": "plugins", "types": ["Web 运行时能力（侧栏 / 设置 / 会话区 / Host 服务）"], "assignees": ["chengxiang-zhang"], "reviewers": ["chengxiang-zhang"]}`；
 按作者转交可只写 `authors`：`{"name": "maintainer", "authors": ["chengxiang-zhang"], "reviewers": ["chengxiang-zhang"]}`。
 
 ## 自动化行为

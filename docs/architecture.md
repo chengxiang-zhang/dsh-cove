@@ -9,7 +9,6 @@ dsh-cove is an extension suite for the DeepSeek Harness (DSH) Web GUI. It is pac
 | Path | Responsibility |
 | --- | --- |
 | `packages/dsh-web-all/` | The only runtime entity: host service domains, browser position modules and bundled presets |
-| `packages/dsh-community-plugins/` | Community plugin index data source; no runtime row |
 | `shared/` | Cross-package runtime and tooling helpers, including the single client build preset |
 | `scripts/` | Repository maintenance, audit, release and generation scripts |
 | `config/` | Committed templates for machine values; real values stay untracked |

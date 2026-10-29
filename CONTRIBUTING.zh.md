@@ -14,11 +14,7 @@
 
 ## 贡献范围
 
-运行时是一个实体插件，first-party 能力必须落在 `packages/dsh-web-all` 内，因此本仓库不接受独立 first-party 插件包、第二条运行时行，也不接受对实体插件的大范围顺手重构。外部贡献走以下两条路径之一。
-
-### 社区插件登记
-
-这是仓库唯一接受的外部 PR 类型。插件在你自己的仓库按官方 cordis bundle 契约实现，再登记到 `packages/dsh-community-plugins/community.json` 并提交 PR。
+运行时是一个实体插件，first-party 能力必须落在 `packages/dsh-web-all` 内，因此本仓库不接受独立 first-party 插件包、第二条运行时行，也不接受对实体插件的大范围顺手重构。外部贡献统一从 Issue 开始。
 
 ### First-party 改动
 
@@ -54,7 +50,7 @@ pnpm typecheck && pnpm test && pnpm docs:check
 
 ## PR 检查清单
 
-1. 必需检查全绿：`pnpm typecheck`、`pnpm test`、`pnpm test:scripts`、`pnpm docs:check`；改动涉及对应区域时另跑 `pnpm runtime-deps:check` 或 `pnpm community:check`。
+1. 必需检查全绿：`pnpm typecheck`、`pnpm test`、`pnpm test:scripts`、`pnpm docs:check`；改动涉及运行时依赖时另跑 `pnpm runtime-deps:check`。
 2. 文档同步：改 README 必须同时更新中英两侧并重录配对记录：
 
 ```sh
@@ -66,13 +62,6 @@ pnpm docs:write-pair <目录或根标签>
 5. 证明已同步上游：rebase 到 `origin/dev` 后重新跑通测试并附结果。
 6. PR 模板填写完整，包含类别、类型与 AI 编码披露；不完整的 PR 会被自动关闭。
 7. 一次性验证证据放在 PR 或 Issue 里，不要写进长期文档树。
-
-## 社区插件登记步骤
-
-1. 在插件仓库遵循官方 cordis bundle 契约：`package.json` 声明 `dsh.bundle.patch` 指向 `cordis.patch.yml`，声明 `dsh.client` 浏览器半区，类型只使用官方 `@deepseek-ai/*` SDK。
-2. 在 `packages/dsh-community-plugins/community.json` 追加条目，必填 `id`、`name`、`nameEn`、`author`、`repo`，可选字段见 [docs/plugins.md](docs/plugins.md)。
-3. 运行 `node scripts/community-index` 与 `pnpm community:check`。
-4. 向 `dev` 提 PR，勾选社区插件索引类别，并确认你会随生态升级持续维护该插件。
 
 ## 文档
 

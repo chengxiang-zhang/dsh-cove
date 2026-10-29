@@ -16,7 +16,6 @@ test('pairSets declares the root entry documents before package READMEs', () => 
   const labels = pairSets(repoRoot).map((set) => set.label)
   assert.deepEqual(labels.slice(0, 2), ['root', 'CONTRIBUTING'])
   assert.ok(labels.includes('packages/dsh-web-all'))
-  assert.ok(labels.includes('packages/dsh-community-plugins'))
 })
 
 test('every declared pair names two distinct Markdown sides and one record', () => {

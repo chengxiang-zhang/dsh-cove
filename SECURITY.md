@@ -52,7 +52,7 @@ In scope:
 Out of scope:
 
 - Vulnerabilities in DeepSeek Harness itself. Report them to the DSH project.
-- Third-party community plugins listed in the index; each belongs to its author. We will help route a report when the target is unclear.
+- Third-party DSH plugins; each belongs to its author. We will help route a report when the target is unclear.
 - Deliberate configuration that removes a documented guard, for example exposing a `noBrowserAuth` instance on the public internet or serving plaintext HTTP outside a trusted network.
 - Missing hardening that the documentation already lists as a known limitation, unless the impact is worse than documented.
 - Social engineering, physical access and denial of service from unbounded local resource use.

@@ -33,7 +33,7 @@
 
 ## 是什么
 
-dsh-cove 是 DeepSeek Harness（DSH）Web GUI 的一体化扩展套件：SSH 运维、记忆面板、Git 工作台、飞书接入、运行结束通知与浏览器自动化等能力统一收进一个运行时实体插件 `@dsh-cove/dsh-web-all`。浏览器代码按 DSH 注入位置组织，同一位置只有一个模块负责注册与编排；host 能力是同一插件生命周期下的服务域。Profile 只挂载这一个包，不修改 DSH 源码。社区插件登记在仓库索引中，保留在各自作者自己的仓库里。
+dsh-cove 是 DeepSeek Harness（DSH）Web GUI 的一体化扩展套件：SSH 运维、记忆面板、Git 工作台、飞书接入、运行结束通知与浏览器自动化等能力统一收进一个运行时实体插件 `@dsh-cove/dsh-web-all`。浏览器代码按 DSH 注入位置组织，同一位置只有一个模块负责注册与编排；host 能力是同一插件生命周期下的服务域。Profile 只挂载这一个包，不修改 DSH 源码。
 
 项目处于开发者预览阶段：接口、配置键与内部契约可能随版本变化，见[版本与发布](#版本与发布)。
 
@@ -124,7 +124,6 @@ Profile 运行时挂载 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app` 与
 | npm 包 | 形态 |
 | --- | --- |
 | [@dsh-cove/dsh-web-all](https://www.npmjs.com/package/@dsh-cove/dsh-web-all) | 唯一运行时实体，承载全部 host 服务域与 browser 位置模块 |
-| [@dsh-cove/dsh-client-ui-community-plugins](https://www.npmjs.com/package/@dsh-cove/dsh-client-ui-community-plugins) | 社区插件索引数据源，无运行时行 |
 
 ### 验证与卸载
 
@@ -174,14 +173,13 @@ Profile 运行时挂载 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app` 与
 
 - 提问、功能请求与可复现 Bug：使用 [Issue 表单](https://github.com/chengxiang-zhang/dsh-cove/issues/new/choose)；分类标准见 [ISSUE_TRIAGE.md](ISSUE_TRIAGE.md)。
 - 安装与使用求助：先读 [docs/README.md](docs/README.md) 与 [SUPPORT.md](SUPPORT.md)。
-- 社区插件：索引在 [packages/dsh-community-plugins/community.json](packages/dsh-community-plugins/community.json)；按 PR 登记插件，索引契约见 [docs/plugins.md](docs/plugins.md)。
 - 参与行为受[行为准则](CODE_OF_CONDUCT.md)约束；决策方式与维护者角色见 [GOVERNANCE.md](GOVERNANCE.md)。
 
 ## 参与贡献
 
 提 PR 前请先读 [CONTRIBUTING.md](CONTRIBUTING.md)。要点：
 
-- 仓库只接受一类外部 PR：社区插件索引登记；其余改动一律先提 Issue，由维护者保持单实体架构的一致性。
+- 所有改动一律先提 Issue，由维护者保持单实体架构的一致性。
 - 提交信息遵循 Conventional Commits；代码、文档与提交信息全程禁止 emoji。
 - 改 README 必须同步中英两侧并重录配对记录。
 - 提 PR 前至少运行 `pnpm typecheck && pnpm test && pnpm docs:check`。
@@ -192,4 +190,4 @@ Profile 运行时挂载 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app` 与
 
 ## 许可证与第三方声明
 
-本仓库以 [Apache-2.0](LICENSE) 授权；社区插件索引包使用 [BSD-3-Clause](packages/dsh-community-plugins/LICENSE)。迁入的第三方代码保留原有许可证与署名，汇总在 [NOTICE](NOTICE) 与各目录的第三方声明文件中。贡献按所改文件的入站许可证接受，见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+本仓库以 [Apache-2.0](LICENSE) 授权。迁入的第三方代码保留原有许可证与署名，汇总在 [NOTICE](NOTICE) 与各目录的第三方声明文件中。贡献按所改文件的入站许可证接受，见 [CONTRIBUTING.md](CONTRIBUTING.md)。

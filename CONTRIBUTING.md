@@ -14,11 +14,7 @@ Do not open a public issue for a vulnerability. Use [GitHub private vulnerabilit
 
 ## Contribution scope
 
-The runtime is one entity plugin. First-party capabilities belong inside `packages/dsh-web-all`, so the project does not accept independent first-party plugin packages, a second runtime row, or drive-by refactors of the entity. External contributions follow one of two tracks.
-
-### Community plugin registration
-
-This is the only class of external pull request the repository accepts. Build the plugin in your own repository against the official cordis bundle contract, then register it in `packages/dsh-community-plugins/community.json` and open a pull request.
+The runtime is one entity plugin. First-party capabilities belong inside `packages/dsh-web-all`, so the project does not accept independent first-party plugin packages, a second runtime row, or drive-by refactors of the entity. External contributions start as an issue.
 
 ### First-party changes
 
@@ -54,7 +50,7 @@ Use Conventional Commits: `type(scope): subject`, where type is one of `feat`, `
 
 ## Pull request checklist
 
-1. Required checks are green: `pnpm typecheck`, `pnpm test`, `pnpm test:scripts` and `pnpm docs:check`. Add `pnpm runtime-deps:check` or `pnpm community:check` when the diff touches those areas.
+1. Required checks are green: `pnpm typecheck`, `pnpm test`, `pnpm test:scripts` and `pnpm docs:check`. Add `pnpm runtime-deps:check` when the diff touches runtime dependencies.
 2. Documentation is current. A README change updates both language versions and re-records the pair:
 
 ```sh
@@ -66,13 +62,6 @@ pnpm docs:write-pair <directory-or-root-label>
 5. Upstream sync is proven: rebase on `origin/dev` and show a passing run after the rebase.
 6. The pull request template is complete, including category, type and AI coding disclosure. Incomplete pull requests are closed automatically.
 7. One-time evidence belongs in the pull request or issue, not in the long-lived documentation tree.
-
-## Community plugin registration steps
-
-1. In the plugin repository, follow the official cordis bundle contract: `package.json` declares `dsh.bundle.patch` pointing at `cordis.patch.yml` and a `dsh.client` browser half, and the code uses only official `@deepseek-ai/*` SDK types.
-2. Append the entry to `packages/dsh-community-plugins/community.json` with `id`, `name`, `nameEn`, `author` and `repo`; optional fields are documented in [docs/plugins.md](docs/plugins.md).
-3. Run `node scripts/community-index` and `pnpm community:check`.
-4. Open the pull request against `dev`, select the community plugin index category, and confirm you will maintain the plugin as the ecosystem moves.
 
 ## Documentation
 

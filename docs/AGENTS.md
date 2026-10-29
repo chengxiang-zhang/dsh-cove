@@ -46,14 +46,11 @@
 - 是否有手抄的清单/目录，而源码或生成器才是权威？
 - 是否有一个自然段承载多条规则？（拆开或降级到归属层）
 - 是否引用了不存在的历史目录、旧仓库地址、命令或脚手架？
-- 是否把 `dsh-community-plugins` 误写成运行时实体？
 - 是否用了 emoji、机翻痕迹或占位符？
 
 ## 当前架构术语
 
 - **runtime entity**：profile 挂载并拥有 Cordis 生命周期的实体；本仓库只有 `packages/dsh-web-all`。
-- **source/data package**：可发布、可被构建脚本消费，但不在 profile 中提供功能行的包；当前为 `dsh-community-plugins`。
-- **external community plugin**：在贡献者自己的仓库维护的独立官方 Cordis bundle；本仓库只登记元数据。
 - **capability/service domain**：`dsh-web-all` 内部功能模块，不是独立插件。
 
 文档或技能变更至少运行 `git diff --check` 与 `pnpm docs:check`。用户限定修改路径时，不得让生成器、格式化器或全仓替换写入范围外文件。文档任务不重启正在运行的 DSH 服务。

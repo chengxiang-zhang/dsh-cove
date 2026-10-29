@@ -76,12 +76,11 @@ jobs:
       - name: Install Playwright Chromium
         timeout-minutes: 10
         run: pnpm exec playwright install chromium
-      - name: Pack the release candidates once
-        # Both packages the release publishes, packed from this commit so every later stage
-        # verifies the bytes this run gates rather than rebuilding them.
+      - name: Pack the release candidate once
+        # The single package the release publishes, packed from this commit so every later
+        # stage verifies the bytes this run gates rather than rebuilding them.
         run: |
           pnpm --filter @dsh-cove/dsh-web-all pack --out "$RUNNER_TEMP/runtime.tgz"
-          pnpm --filter @dsh-cove/dsh-client-ui-community-plugins pack --out "$RUNNER_TEMP/community.tgz"
       # The packed artifact's own gate: it is mounted into a scratch profile through the
       # real CLI and the UI renders. That is what the published bytes must prove.
       - name: Pre-publish real pack mount + headless-render smoke
@@ -122,7 +121,6 @@ jobs:
           name: gated-release
           path: |
             ${{ runner.temp }}/runtime.tgz
-            ${{ runner.temp }}/community.tgz
             ${{ runner.temp }}/release-notes.md
           if-no-files-found: error
 
@@ -164,7 +162,6 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           node scripts/release-candidate.mjs publish "$RUNNER_TEMP/gated-release/runtime.tgz"
-          node scripts/release-candidate.mjs publish "$RUNNER_TEMP/gated-release/community.tgz"
 
   verify-release:
     name: Exact registry smoke and promote latest
@@ -213,22 +210,17 @@ jobs:
         with:
           name: gated-release
           path: ${{ runner.temp }}/gated-release
-      - name: Download and verify the exact registry artifacts
-        # Each verified path is captured here: two packages in one job would otherwise
-        # overwrite a single variable, and the promote step must name the downloaded bytes.
+      - name: Download and verify the exact registry artifact
         run: |
           WEB_ALL_TARBALL="$(node scripts/release-candidate.mjs download "$RUNNER_TEMP/gated-release/runtime.tgz" "$RUNNER_TEMP/release-assets")"
-          COMMUNITY_TARBALL="$(node scripts/release-candidate.mjs download "$RUNNER_TEMP/gated-release/community.tgz" "$RUNNER_TEMP/release-assets")"
           echo "WEB_ALL_TARBALL=$WEB_ALL_TARBALL" >> "$GITHUB_ENV"
-          echo "COMMUNITY_TARBALL=$COMMUNITY_TARBALL" >> "$GITHUB_ENV"
       - name: Registry mount + headless-render smoke
         run: bash scripts/e2e-mount.sh
-      - name: Promote verified artifacts to latest
+      - name: Promote the verified artifact to latest
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           node scripts/release-candidate.mjs promote "$WEB_ALL_TARBALL"
-          node scripts/release-candidate.mjs promote "$COMMUNITY_TARBALL"
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -238,8 +230,8 @@ jobs:
             playwright-report/
             test-results/
           if-no-files-found: ignore
-      - name: Record gated tarball checksums
-        run: sha512sum "$RUNNER_TEMP/gated-release/runtime.tgz" "$RUNNER_TEMP/gated-release/community.tgz"
+      - name: Record gated tarball checksum
+        run: sha512sum "$RUNNER_TEMP/gated-release/runtime.tgz"
 
   # A tag always produces a release, whether or not a registry publisher exists: the gated
   # tarballs and the generated notes are attached here, and the client workflows attach
@@ -259,12 +251,11 @@ jobs:
         with:
           name: gated-release
           path: ${{ runner.temp }}/gated-release
-      - name: Name the tarballs after the packages they carry
+      - name: Name the tarball after the package it carries
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           mv "$RUNNER_TEMP/gated-release/runtime.tgz" "$RUNNER_TEMP/gated-release/dsh-cove-dsh-web-all-$version.tgz"
-          mv "$RUNNER_TEMP/gated-release/community.tgz" "$RUNNER_TEMP/gated-release/dsh-cove-dsh-client-ui-community-plugins-$version.tgz"
       - name: Create or reconcile the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
