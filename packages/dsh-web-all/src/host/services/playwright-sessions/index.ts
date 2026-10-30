@@ -39,6 +39,9 @@ function output(rawName: string): ToolDefinition['output'] {
 
 export async function register(ctx: Context, input: PlaywrightSessionsConfig = {}, ownerSignal?: AbortSignal): Promise<() => Promise<void>> {
   const config = resolvePlaywrightSessionsConfig(input)
+  if (config.mode === 'cdp' && config.cdpEndpoint === '') {
+    throw new Error('playwright-sessions: mode "cdp" requires a cdpEndpoint (for example http://127.0.0.1:9222)')
+  }
   const require = createRequire(import.meta.url)
   const root = sessionsRoot(config.sessionsRoot)
   mkdirSync(root, { recursive: true })
@@ -49,6 +52,7 @@ export async function register(ctx: Context, input: PlaywrightSessionsConfig = {
     sessionsRoot: root,
     env: { ...scrubbedParentEnv(), PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? browsersPath() },
     mode: config.mode,
+    cdpEndpoint: config.cdpEndpoint,
     headless: config.headless,
     browserChannel: config.browserChannel,
     executablePath: config.executablePath,

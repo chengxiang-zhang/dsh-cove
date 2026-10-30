@@ -37,6 +37,8 @@ export interface SessionBrowserOptions {
   /** Environment for the child; PLAYWRIGHT_BROWSERS_PATH is expected here. */
   env: Record<string, string>
   mode: PlaywrightConnectionMode
+  /** Required when mode is `cdp`: endpoint of the user-started browser. */
+  cdpEndpoint: string
   headless: boolean
   browserChannel: 'chrome' | 'msedge'
   executablePath: string
@@ -109,15 +111,23 @@ export async function waitForCdpEndpoint(profileDir: string, timeoutMs = CDP_POR
   throw new Error(`CDP port file did not appear within ${timeoutMs}ms` + (lastError !== undefined ? ` (${String(lastError)})` : ''))
 }
 
-export async function createSessionBrowser(options: SessionBrowserOptions): Promise<SessionBrowser> {
-  const profileDir = join(options.sessionsRoot, sanitizePlaywrightSessionKey(options.sessionId))
-  const outputDir = join(profileDir, 'output')
-  mkdirSync(outputDir, { recursive: true })
-
-  // Dual-owner mode: the host owns the persistent Chromium, the MCP child
-  // connects to it over the CDP endpoint. The context handle is kept for the
-  // live-view screencast.
-  let hostedContext: BrowserContext | null = null
+/**
+ * Build the `@playwright/mcp` arguments for one session browser.
+ *
+ * Pure so the three connection modes stay directly testable:
+ * - `extension` attaches through the official extension (per-connection consent).
+ * - `cdp` attaches to a browser the user started with remote debugging; no
+ *   extension and no consent step, and the user's persistent profile keeps its
+ *   logins (requires a non-default `--user-data-dir` since Chrome 136).
+ * - `launch` starts its own browser: host-owned when `hostedEndpoint` is given
+ *   (live view dual-owner), otherwise a per-session headless/headed Chrome.
+ */
+export function sessionBrowserArgs(
+  options: SessionBrowserOptions,
+  profileDir: string,
+  outputDir: string,
+  hostedEndpoint?: string,
+): string[] {
   const args = [
     options.cliPath,
     '--allowed-hosts',
@@ -133,20 +143,41 @@ export async function createSessionBrowser(options: SessionBrowserOptions): Prom
     // client. The external browser remains owned by the user.
     args.push('--extension', '--browser', options.browserChannel)
     if (options.executablePath !== '') args.push('--executable-path', options.executablePath)
-  } else {
-    if (options.headless) args.push('--headless')
-    if (options.liveView === true) {
-      hostedContext = await playwrightChromium.launchPersistentContext(profileDir, {
-        headless: options.headless,
-        args: ['--remote-debugging-port=0'],
-        env: options.env,
-      })
-      const endpoint = await waitForCdpEndpoint(profileDir)
-      args.push('--cdp-endpoint', endpoint)
-    } else {
-      args.push('--user-data-dir', profileDir)
-    }
+    return args
   }
+  if (options.mode === 'cdp') {
+    if (options.cdpEndpoint === '') throw new Error('playwright-sessions: mode "cdp" requires a cdpEndpoint (for example http://127.0.0.1:9222)')
+    args.push('--cdp-endpoint', options.cdpEndpoint)
+    return args
+  }
+  if (hostedEndpoint !== undefined) {
+    args.push('--cdp-endpoint', hostedEndpoint)
+    return args
+  }
+  if (options.headless) args.push('--headless')
+  args.push('--user-data-dir', profileDir)
+  return args
+}
+
+export async function createSessionBrowser(options: SessionBrowserOptions): Promise<SessionBrowser> {
+  const profileDir = join(options.sessionsRoot, sanitizePlaywrightSessionKey(options.sessionId))
+  const outputDir = join(profileDir, 'output')
+  mkdirSync(outputDir, { recursive: true })
+
+  // Dual-owner mode: the host owns the persistent Chromium, the MCP child
+  // connects to it over the CDP endpoint. The context handle is kept for the
+  // live-view screencast.
+  let hostedContext: BrowserContext | null = null
+  let hostedEndpoint: string | undefined
+  if (options.mode === 'launch' && options.liveView === true) {
+    hostedContext = await playwrightChromium.launchPersistentContext(profileDir, {
+      headless: options.headless,
+      args: ['--remote-debugging-port=0'],
+      env: options.env,
+    })
+    hostedEndpoint = await waitForCdpEndpoint(profileDir)
+  }
+  const args = sessionBrowserArgs(options, profileDir, outputDir, hostedEndpoint)
 
   const childEnv = options.env
 

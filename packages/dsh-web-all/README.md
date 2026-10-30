@@ -16,7 +16,7 @@ English | [中文](README.zh.md)
 - **Automation run target**: native automation tasks deliver into the conversation that created them; this capability lets each task run in a fresh session every time instead, keeping the original conversation clean. There is no settings UI for it: it is chosen in natural language when the task is created, and the agent applies it with `schedule_mode_set`.
 - **Wish Programming preset**: a bundled `code-vibe` preset with its curated skills and native coding tools appears as an additional session mode; Standard remains the default.
 
-The web profile runtime stack is `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app` + `@dsh-cove/dsh-web-all`. The community-plugin index package is a source/data package rather than a profile entry.
+The web profile runtime stack is `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app` + `@dsh-cove/dsh-web-all`.
 
 ## Install
 
@@ -65,7 +65,7 @@ The `web-all` row accepts these plugin-level options:
 | `dshHome` | `$DSH_HOME` or the current user's DSH home | Overrides the DSH data root used by service domains that accept the central value. |
 | `agentsHome` | `$DSH_AGENTS_HOME` or the resolved DSH home | Overrides the user agents and skills root. |
 | `noBrowserAuth` | `false` | Skips BrowserAuth token and cookie validation only when explicitly set to `true`; see [Security model](#security-model). |
-| `playwright` | `{ mode: launch, … }` | Selects isolated browser launch or attended attachment to selected tabs in the user's Chrome/Edge. |
+| `playwright` | `{ mode: launch, … }` | Selects isolated browser launch, attended attachment to selected tabs in the user's Chrome/Edge, or CDP attachment to a browser the operator already started. |
 
 Example profile override:
 
@@ -83,7 +83,7 @@ The `remote-web-ui` namespace enables integrated DSH-origin authentication by de
 
 Generic OIDC providers use Authorization Code with PKCE S256 plus state and nonce validation. Configure an `issuer`, `clientId`, `clientSecret`, and a stable allowlist (`allowedSubjects` and/or `allowedEmailDomains`). Feishu uses `appId`, `appSecret`, and `allowedOpenIds`. External sign-in cannot create the first account: bootstrap a local administrator first. Empty provider allowlists then enable just-in-time binding for additional accounts, so production deployments should normally set an explicit allowlist and keep that local break-glass administrator.
 
-The Playwright service domain is the sole owner of public tool names under `mcp__playwright__*`. Remove any global `mcp-playwright` row before starting this plugin; duplicate tool ownership makes Playwright registration fail. Its default `launch` mode keeps browser processes isolated by DSH session, limits them to two concurrent browsers, and reclaims idle sessions. `extension` mode instead gives one attended DSH session an exclusive lease on tabs selected through the official [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm): open **Agent Browser** in that session's right pane, connect, approve the extension prompt, and assign tabs. The external Chrome remains open after disconnect. The control plane uses the plugin's shared host access fence — a loopback request, or a Host authority the deployment declares through `ctx.webRuntime.trustedHosts` (`--trusted-host`) carrying an authenticated DSH browser session; unsafe code execution is hidden by default, and `approvalPolicy: mutations` asks through DSH before every non-read-only browser action.
+The Playwright service domain is the sole owner of public tool names under `mcp__playwright__*`. Remove any global `mcp-playwright` row before starting this plugin; duplicate tool ownership makes Playwright registration fail. Its default `launch` mode keeps browser processes isolated by DSH session, limits them to two concurrent browsers, and reclaims idle sessions. `extension` mode instead gives one attended DSH session an exclusive lease on tabs selected through the official [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm): open **Agent Browser** in that session's right pane, connect, approve the extension prompt, and assign tabs. The external Chrome remains open after disconnect. `cdp` mode attaches to a browser the operator already started with `--remote-debugging-port`: point `cdpEndpoint` at it and the session drives that browser directly, with no extension and no consent prompt, while the browser's persistent profile keeps its sign-ins (Chrome 136 and later only honor remote debugging together with a non-default `--user-data-dir`, so keep a dedicated automation profile and sign in there once). The control plane uses the plugin's shared host access fence — a loopback request, or a Host authority the deployment declares through `ctx.webRuntime.trustedHosts` (`--trusted-host`) carrying an authenticated DSH browser session. Only `extension` mode is gated: unsafe code execution is hidden there by default, and `approvalPolicy: mutations` asks through DSH before every non-read-only browser action.
 
 ```yaml
 - id: web-all
@@ -93,6 +93,16 @@ The Playwright service domain is the sole owner of public tool names under `mcp_
       browserChannel: chrome
       approvalPolicy: mutations
       allowedOrigins: ['https://example.com']
+```
+
+Attach to a browser the operator started instead (no extension and no consent prompt):
+
+```yaml
+- id: web-all
+  config:
+    playwright:
+      mode: cdp
+      cdpEndpoint: http://127.0.0.1:9222
 ```
 
 `allowedOrigins` and `blockedOrigins` are Playwright navigation guardrails rather than complete authorization boundaries: redirects and page content remain untrusted. Extension mode intentionally has no mirrored screencast because the user already sees the attached Chrome window; `liveView` remains available only for launched browsers.

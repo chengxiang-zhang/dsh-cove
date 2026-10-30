@@ -124,6 +124,8 @@ export const rightPaneZh = {
   'agentBrowser.installHint': '连接前，请先在 Chrome 或 Edge 中安装官方 Playwright Extension。',
   'agentBrowser.security': '写操作会经过 DSH 的一次性审批；任意代码工具默认不向本机 Chrome 开放。',
   'agentBrowser.denied': '无法连接本机 Chrome：请确认已通过宿主机部署的规范地址登录，再重试。',
+  'agentBrowser.cdp': '已直连本机 Chrome（CDP，无需授权）',
+  'agentBrowser.cdpHint': '浏览器由你启动并带调试端口；本会话直接接管，不会再弹授权页。',
 } as const
 
 export type RightPaneLocaleKey = keyof typeof rightPaneZh
@@ -240,4 +242,6 @@ export const rightPaneEn: Record<RightPaneLocaleKey, string> = {
   'agentBrowser.installHint': 'Install the official Playwright Extension in Chrome or Edge before connecting.',
   'agentBrowser.security': 'Mutations pass through one-shot DSH approval; arbitrary-code tools are hidden from local Chrome by default.',
   'agentBrowser.denied': 'Cannot attach to the host\'s local Chrome: sign in through the host\'s canonical deployment address and retry.',
+  'agentBrowser.cdp': 'Attached to local Chrome over CDP (no consent step)',
+  'agentBrowser.cdpHint': 'You start the browser with a debugging port; this session attaches directly and no approval page appears.',
 }

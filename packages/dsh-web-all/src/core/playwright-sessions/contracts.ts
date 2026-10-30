@@ -1,11 +1,21 @@
 /** Pure contracts and defaults for the per-session Playwright capability. */
 
-export type PlaywrightConnectionMode = 'launch' | 'extension'
+export type PlaywrightConnectionMode = 'launch' | 'extension' | 'cdp'
 export type PlaywrightApprovalPolicy = 'never' | 'unsafe' | 'mutations'
 
 export interface PlaywrightSessionsConfig {
-  /** Start an isolated browser, or attach to selected tabs in the user's Chrome through the official extension. */
+  /**
+   * How the per-session browser is obtained:
+   * - `launch`: isolated browser with a per-session user-data-dir (default).
+   * - `extension`: attach to tabs the user shares through the official extension.
+   * - `cdp`: attach to a browser the user already started with remote debugging.
+   */
   mode?: PlaywrightConnectionMode
+  /**
+   * CDP endpoint of the user-started browser for `mode: 'cdp'`,
+   * e.g. `http://127.0.0.1:9222`. No extension, no per-connection consent.
+   */
+  cdpEndpoint?: string
   headless?: boolean
   /** Chrome/Edge channel used by extension mode. */
   browserChannel?: 'chrome' | 'msedge'
@@ -38,6 +48,7 @@ export interface PlaywrightSessionsConfig {
 
 export interface ResolvedPlaywrightSessionsConfig {
   mode: PlaywrightConnectionMode
+  cdpEndpoint: string
   headless: boolean
   browserChannel: 'chrome' | 'msedge'
   executablePath: string
@@ -68,6 +79,7 @@ export const UNSCOPED_PLAYWRIGHT_SESSION = 'unscoped'
 
 export const PLAYWRIGHT_SESSIONS_DEFAULTS = Object.freeze({
   mode: 'launch' as PlaywrightConnectionMode,
+  cdpEndpoint: '',
   headless: true,
   browserChannel: 'chrome' as const,
   executablePath: '',
@@ -92,14 +104,17 @@ export function resolvePlaywrightSessionsConfig(
   const liveView = mode === 'launch' && (config.liveView ?? PLAYWRIGHT_SESSIONS_DEFAULTS.liveView)
   return {
     mode,
+    cdpEndpoint: config.cdpEndpoint ?? PLAYWRIGHT_SESSIONS_DEFAULTS.cdpEndpoint,
     headless: config.headless ?? PLAYWRIGHT_SESSIONS_DEFAULTS.headless,
     browserChannel: config.browserChannel ?? PLAYWRIGHT_SESSIONS_DEFAULTS.browserChannel,
     executablePath: config.executablePath ?? PLAYWRIGHT_SESSIONS_DEFAULTS.executablePath,
     allowedHosts: [...(config.allowedHosts ?? PLAYWRIGHT_SESSIONS_DEFAULTS.allowedHosts)],
     allowedOrigins: [...(config.allowedOrigins ?? PLAYWRIGHT_SESSIONS_DEFAULTS.allowedOrigins)],
     blockedOrigins: [...(config.blockedOrigins ?? PLAYWRIGHT_SESSIONS_DEFAULTS.blockedOrigins)],
-    approvalPolicy: config.approvalPolicy ?? (mode === 'extension' ? 'mutations' : PLAYWRIGHT_SESSIONS_DEFAULTS.approvalPolicy),
-    unsafeTools: config.unsafeTools ?? mode === 'launch',
+    // Only extension mode is gated by DSH approvals: the CDP and launch modes
+    // drive a browser this deployment owns, so they never ask per action.
+    approvalPolicy: config.approvalPolicy ?? (mode === 'extension' ? 'mutations' : mode === 'cdp' ? 'never' : PLAYWRIGHT_SESSIONS_DEFAULTS.approvalPolicy),
+    unsafeTools: config.unsafeTools ?? (mode === 'launch' || mode === 'cdp'),
     sessionsRoot: config.sessionsRoot,
     toolCallTimeoutMs: config.toolCallTimeoutMs ?? PLAYWRIGHT_SESSIONS_DEFAULTS.toolCallTimeoutMs,
     idleTimeoutMs: config.idleTimeoutMs ?? PLAYWRIGHT_SESSIONS_DEFAULTS.idleTimeoutMs,

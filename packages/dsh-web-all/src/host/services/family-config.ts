@@ -53,7 +53,8 @@ const CORE_FIELDS = {
   noBrowserAuth: z.boolean().default(false),
   codexProxyDir: z.string(),
   playwright: z.object({
-    mode: z.union(['launch', 'extension'] as const).default('launch'),
+    mode: z.union(['launch', 'extension', 'cdp'] as const).default('launch'),
+    cdpEndpoint: z.string().default(''),
     headless: z.boolean().default(true),
     browserChannel: z.union(['chrome', 'msedge'] as const).default('chrome'),
     executablePath: z.string().default(''),

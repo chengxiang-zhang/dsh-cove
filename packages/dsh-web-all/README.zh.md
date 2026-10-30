@@ -16,7 +16,7 @@
 - **自动化任务运行目标**：原生自动化任务默认投递回创建它的会话；本能力让每条任务可选「每次新会话」——每次运行开一条全新会话，原对话只保留任务定义。**没有单独的设置界面**：在创建任务时说清楚（自然语言）即可，agent 用 `schedule_mode_set` 一次设好。
 - **许愿式编程预设**：内置 `code-vibe` 预设及其精选 skills 与原生编码工具，作为额外会话模式显示；标准模式仍为默认。
 
-Web profile 的运行时栈是 `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app` + `@dsh-cove/dsh-web-all`。社区插件索引包是数据源包，不是 profile 条目。
+Web profile 的运行时栈是 `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app` + `@dsh-cove/dsh-web-all`。
 
 ## 安装
 
@@ -64,7 +64,7 @@ dsh plugin --profile web remove @dsh-cove/dsh-web-all
 | `dshHome` | `$DSH_HOME` 或当前用户的 DSH 主目录 | 覆写接受中央值的服务域所使用的 DSH 数据根目录。 |
 | `agentsHome` | `$DSH_AGENTS_HOME` 或解析后的 DSH 主目录 | 覆写用户 agents 与 skills 根目录。 |
 | `noBrowserAuth` | `false` | 仅在显式设为 `true` 时跳过 BrowserAuth token 与 cookie 校验；参见[安全模型](#安全模型)。 |
-| `playwright` | `{ mode: launch, … }` | 选择启动隔离浏览器，或在用户确认后连接其 Chrome/Edge 中选定的标签页。 |
+| `playwright` | `{ mode: launch, … }` | 选择启动隔离浏览器、在用户确认后连接其 Chrome/Edge 中选定的标签页，或直连操作者已启动的浏览器（CDP）。 |
 
 Profile 覆写示例：
 
@@ -82,7 +82,7 @@ Profile 覆写示例：
 
 通用 OIDC 使用 Authorization Code、PKCE S256、state 与 nonce 校验。请配置 `issuer`、`clientId`、`clientSecret`，以及基于稳定身份的 `allowedSubjects` 和/或 `allowedEmailDomains`。飞书使用 `appId`、`appSecret` 与 `allowedOpenIds`。外部登录不能创建首个账户，必须先引导创建本地管理员；此后空 Provider 准入列表才会允许其他账户即时绑定，因此生产部署通常应设置显式准入列表，并保留该本地应急管理员。
 
-Playwright 服务域是 `mcp__playwright__*` 公共工具名的唯一所有者。启动本插件前必须移除全局 `mcp-playwright` 行；工具名重复会导致 Playwright 注册失败。默认 `launch` 模式按 DSH 会话隔离浏览器进程，最多并发两个，并回收空闲会话。`extension` 模式则把官方 [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm) 中选定的标签页独占租给一条由人确认的 DSH 会话：在该会话右栏打开「Agent 浏览器」，点连接，在扩展中批准并分配标签页。断开后外部 Chrome 继续运行。控制面走插件共享的宿主访问围栏——loopback 请求，或请求 Host 属于部署通过 `ctx.webRuntime.trustedHosts`（`--trusted-host`）声明且携带有效 DSH 浏览器会话的 authority；任意代码工具默认隐藏，`approvalPolicy: mutations` 会在每个非只读浏览器动作前走 DSH 一次性审批。
+Playwright 服务域是 `mcp__playwright__*` 公共工具名的唯一所有者。启动本插件前必须移除全局 `mcp-playwright` 行；工具名重复会导致 Playwright 注册失败。默认 `launch` 模式按 DSH 会话隔离浏览器进程，最多并发两个，并回收空闲会话。`extension` 模式则把官方 [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm) 中选定的标签页独占租给一条由人确认的 DSH 会话：在该会话右栏打开「Agent 浏览器」，点连接，在扩展中批准并分配标签页。断开后外部 Chrome 继续运行。`cdp` 模式直连操作者已用 `--remote-debugging-port` 启动的浏览器：把 `cdpEndpoint` 指向它，该会话就直接驱动这个浏览器，不需要扩展、也不再有任何授权弹窗，而浏览器自己的持久 profile 会保留登录态（Chrome 136 及以后只认配合非默认 `--user-data-dir` 的远程调试，因此请保留一个专用自动化 profile 并在其中登录一次）。控制面走插件共享的宿主访问围栏——loopback 请求，或请求 Host 属于部署通过 `ctx.webRuntime.trustedHosts`（`--trusted-host`）声明且携带有效 DSH 浏览器会话的 authority。只有 `extension` 模式受审批门限制：其中任意代码工具默认隐藏，`approvalPolicy: mutations` 会在每个非只读浏览器动作前走 DSH 一次性审批。
 
 ```yaml
 - id: web-all
@@ -92,6 +92,16 @@ Playwright 服务域是 `mcp__playwright__*` 公共工具名的唯一所有者�
       browserChannel: chrome
       approvalPolicy: mutations
       allowedOrigins: ['https://example.com']
+```
+
+改为直连操作者已启动的浏览器（不需要扩展，也没有授权弹窗）：
+
+```yaml
+- id: web-all
+  config:
+    playwright:
+      mode: cdp
+      cdpEndpoint: http://127.0.0.1:9222
 ```
 
 `allowedOrigins` 与 `blockedOrigins` 是 Playwright 导航护栏，并非完整的授权边界：重定向和页面内容仍是不可信输入。扩展模式不重复投放实时画面，因为用户已经能看到被连接的 Chrome 窗口；`liveView` 只用于启动的浏览器。

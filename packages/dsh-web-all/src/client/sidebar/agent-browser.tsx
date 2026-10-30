@@ -75,6 +75,7 @@ export function AgentBrowserPanel({ sessionId, visible = true, signal, t }: { se
     finally { setWorking(false) }
   }
 
+  const cdp = status?.mode === 'cdp'
   const unavailable = status?.mode !== 'extension'
   const connected = status?.ownedByThisSession && status.state === 'connected'
   /** A refused control-plane call (403 from the host access fence) is an
@@ -82,8 +83,9 @@ export function AgentBrowserPanel({ sessionId, visible = true, signal, t }: { se
   const denied = errorStatus === 403
   const message = !sessionId ? t('agentBrowser.noSession')
     : error !== '' ? (denied ? t('agentBrowser.denied') : t('agentBrowser.error'))
-      : status?.busy ? t('agentBrowser.busy')
-        : unavailable ? t('agentBrowser.notEnabled')
+      : cdp ? t('agentBrowser.cdp')
+        : status?.busy ? t('agentBrowser.busy')
+          : unavailable ? t('agentBrowser.notEnabled')
           : status?.state === 'connecting' ? t('agentBrowser.connecting')
             : connected ? t('agentBrowser.live')
               : t('agentBrowser.closed')
@@ -99,14 +101,14 @@ export function AgentBrowserPanel({ sessionId, visible = true, signal, t }: { se
     </header>
     <div className={css.agentBrowserBody}>
       <div className={css.agentBrowserGraphic} aria-hidden="true"><span/><span/><span/></div>
-      <p>{t('agentBrowser.hint')}</p>
+      <p>{cdp ? t('agentBrowser.cdpHint') : t('agentBrowser.hint')}</p>
       {!connected && !unavailable && <p>{t('agentBrowser.installHint')} <a href={EXTENSION_URL} target="_blank" rel="noreferrer">{t('agentBrowser.install')}</a></p>}
-      <p className={css.agentBrowserSecurity}>{t('agentBrowser.security')}</p>
+      {!cdp && <p className={css.agentBrowserSecurity}>{t('agentBrowser.security')}</p>}
       {failure !== undefined && failure !== '' && <div className={css.agentBrowserError} role="alert">{failure}</div>}
     </div>
     <footer className={css.agentBrowserActions}>
       <button type="button" onClick={() => void refresh()} disabled={!sessionId || working}>{t('agentBrowser.refresh')}</button>
-      {connected
+      {cdp ? null : connected
         ? <button type="button" className={css.agentBrowserPrimary} onClick={() => void act('disconnect')} disabled={working}>{t('agentBrowser.disconnect')}</button>
         : <button type="button" className={css.agentBrowserPrimary} onClick={() => void act('connect')} disabled={!sessionId || unavailable || status?.busy || working}>{t('agentBrowser.connect')}</button>}
     </footer>
