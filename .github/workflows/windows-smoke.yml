@@ -9,6 +9,11 @@ name: Windows Smoke
 # Manual only. It publishes nothing and touches no release; the artifacts are the point.
 
 on:
+  # Dispatch needs the file on the default branch; a push on this branch does not, which is
+  # what lets the workflow be tried before it is merged anywhere.
+  push:
+    branches:
+      - 'ci/windows-smoke'
   workflow_dispatch: {}
 
 permissions:
