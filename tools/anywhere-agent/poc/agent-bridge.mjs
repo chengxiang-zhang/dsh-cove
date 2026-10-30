@@ -138,6 +138,20 @@ try {
   // Without the token, nothing. The window is not a public remote control.
   check('a client without the token is refused', (await call('/state', undefined, 'wrong')).status, 401);
 
+  // From here on the checks go through the shipped client (bin/anywhere-agent-bridge.mjs),
+  // not through hand-written fetch calls: what is verified is the pair a person would use.
+  const cli = async (argv) => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const run = promisify(execFile);
+    try {
+      const { stdout } = await run(process.execPath, [join(HERE, '..', 'bin', 'anywhere-agent-bridge.mjs'), ...argv, '--dir', stateDir]);
+      return { code: 0, out: stdout };
+    } catch (error) {
+      return { code: error.code ?? 1, out: `${error.stdout ?? ''}${error.stderr ?? ''}` };
+    }
+  };
+
   // A tab the agent can drive: open the web service the way a person would.
   await page.click('.card[data-service-id="web:finance"]');
   await page.waitForFunction(() => document.querySelectorAll('.tab').length === 2, null, { timeout: 20_000 });
@@ -149,17 +163,22 @@ try {
   check('nothing is claimed yet', tab?.agent, null);
 
   // Claim it read-only: the window has to say so.
-  const claimed = await call('/claim', { tabId: tab.id, by: 'poc-agent', tier: 'read-only' });
-  check('the claim is accepted', claimed.status, 200);
-  check('the tier is read-only by default', claimed.body.claim.tier, 'read-only');
+  const listedByCli = await cli(['state']);
+  check('the CLI can read the window', listedByCli.code, 0);
+  check('the CLI sees both tabs', listedByCli.out.trim().split('\n').length, 2);
+
+  const claimed = await cli(['claim', tab.id, '--by', 'poc-agent']);
+  check('the shipped CLI can claim the tab', claimed.code, 0);
+  check('the tier is read-only by default', JSON.parse(claimed.out).claim.tier, 'read-only');
   await page.waitForTimeout(600);
   check('the tab wears the A badge', await page.locator('.tab-agent').count(), 1);
   check('the operating bar is on screen', await page.locator('#agent-bar').isVisible(), true);
   check('the bar says what the agent may do', await page.locator('#agent-tier').innerText(), '只读');
   check('the bar names the tab it is driving', /财报面板/.test(await page.locator('#agent-text').innerText()), true);
 
-  const claimedAgain = await call('/claim', { tabId: tab.id, by: 'someone-else' });
-  check('a second agent cannot take the same tab', claimedAgain.status, 409);
+  const claimedAgain = await cli(['claim', tab.id, '--by', 'someone-else']);
+  check('a second agent cannot take the same tab', claimedAgain.code, 1);
+  check('and the refusal names the holder', /poc-agent/.test(claimedAgain.out), true);
 
   // A client drives the page, and the way it does that is CDP. Chromium writes the port it
   // chose into the profile, so the check can look for the tab the claim named.
@@ -191,8 +210,9 @@ try {
 
   // Letting go is what makes the badge disappear; a claim that outlives its agent would
   // leave a window that looks busy forever.
-  const released = await call('/release', { tabId: tab.id, by: 'poc-agent' });
-  check('the release is accepted', released.body.released, true);
+  const released = await cli(['release', tab.id, '--by', 'poc-agent']);
+  check('the shipped CLI can release it', released.code, 0);
+  check('the release is recorded', JSON.parse(released.out).released, true);
   await page.waitForTimeout(600);
   check('the badge is gone', await page.locator('.tab-agent').count(), 0);
   check('the bar is gone', await page.locator('#agent-bar').isHidden(), true);

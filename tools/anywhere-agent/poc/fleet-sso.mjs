@@ -37,10 +37,15 @@ const DEFAULT_IDENTITY = join(homedir(), 'Library', 'Application Support', 'anyw
 const STATE_DIR = join(HERE, 'evidence', 'fleet-sso');
 
 function parseArgs(argv) {
-  const args = { identity: DEFAULT_IDENTITY, awaitLoginMs: 900_000, open: false };
+  const args = { identity: DEFAULT_IDENTITY, awaitLoginMs: 900_000, open: false, issueOnly: false };
   const values = { '--identity': 'identity', '--await-login-seconds': 'awaitLoginMs' };
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === '--open') {
+    if (argv[i] === '--issue-only') {
+      // The half that does not need a person: the app-scoped link must mint a hand-off for
+      // this deployment and say so, instead of failing or dialling on its own. Completing
+      // it needs a browser; that half stays with `--open` and a human.
+      args.issueOnly = true;
+    } else if (argv[i] === '--open') {
       args.open = true;
       continue;
     }
@@ -115,6 +120,24 @@ try {
   const begun = await supervisor.begin();
   out(`after begin   state=${begun.state}${begun.loginUrl ? ' (hand-off minted)' : ''}`);
 
+  if (args.issueOnly) {
+    check('the app-scoped link asks for a sign-in', begun.state, 'login-required');
+    check('it minted a hand-off', typeof begun.loginUrl === 'string' && begun.loginUrl.startsWith('http'), true);
+    if (typeof begun.loginUrl === 'string' && begun.loginUrl !== '') {
+      const mintedHost = (() => {
+        try {
+          return new URL(begun.loginUrl).host;
+        } catch {
+          return '';
+        }
+      })();
+      check('the hand-off points at this deployment', managementUrl === '' || mintedHost === new URL(managementUrl).host, true);
+      out(`minted host   ${mintedHost}`);
+    }
+    out('issue-only: stopping at the hand-off (completing it needs a browser and a person)');
+    throw { stop: true };
+  }
+
   if (begun.state === 'login-required') {
     url = begun.loginUrl;
     out(`LOGIN_URL=${url}`);
@@ -145,8 +168,10 @@ try {
     out(`  the link settled on ${settled.state}: ${settled.detail}`);
   }
 } catch (error) {
-  failures += 1;
-  out(`run failed: ${error?.message ?? error}`);
+  if (!error?.stop) {
+    failures += 1;
+    out(`run failed: ${error?.message ?? error}`);
+  }
 } finally {
   await supervisor.stop().catch(() => undefined);
   // The identity copy is not evidence and must not outlive the run.

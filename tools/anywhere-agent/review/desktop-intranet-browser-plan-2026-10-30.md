@@ -211,7 +211,10 @@
   - `poc/local-first-run.mjs` 已迁到页签形态并**真机跑通**：本机一台、无账号、未自动开工作区、徽标数 = 宿主自报数（实测 5）、首次读取是基线不是新闻（水位 31）、点卡片开出第二个页签且 workspace seam 有 host、设置页带诊断。
   - `poc/fleet-run.mjs` 已迁移并**真机跑通**（`--netbird` 走本机引擎）：实测 17 台可达 → 17 张卡片、无横幅、无聚合文案、点另一台机器开出第二个页签且 `workspace.host` 与卡片一致（`dsh.android-192-23.netbird`）。
   - ⌘1–9 键盘模型已进断言：逐位验证「⌘N 选中第 N 个页签」；无对应页签时按 ⌘9 不变（静默跳转比不响应更糟）。
-  - 仍未迁移：`fleet-sso`（需人工在浏览器登录）、`packaged-ui`（需先产出 .app/.dmg）、`endpoint-run`（需真实管理端点）；`make-dmg` 与打包门禁需在正常终端运行（本会话沙箱拒绝 `hdiutil`）。
+  - `poc/packaged-ui.mjs` 已在真产物上跑通：`ELECTRON_DIST=/tmp/electron-extract/Electron.app bash scripts/package-mac.sh` 产出 `Anywhere Work.app`（ad-hoc 签名、Gatekeeper 拒绝属预期），随后断言 bundle 版本/构建号、页签壳、本机卡片与角标、徽标=宿主自报、打开工作区页签、设置页版本——**全部通过**。
+  - `poc/endpoint-run.mjs` 已收敛为**无人工可跑**的部分并跑通：连接入口在设置里、进入“需要登录”、横幅给出登录动作、地址字段可就地拒绝不合规值；**SSO 完成需要人**，这一半交给 `poc/fleet-sso.mjs`，不再假装能断言。
+  - `poc/fleet-sso.mjs --issue-only` 跑通：app 自链路进入 `login-required` 并签发指向 `netbird.zhangchengxiang.com` 的 hand-off；完成登录仍需人（`--open`）。
+  - 仅剩两件环境项：`make-dmg`（本会话沙箱拒绝 `hdiutil`，`hdiutil create` 实测报“操作不被允许”）与 Windows 真机。
 - **用户走查已完成**（`node poc/user-walkthrough.mjs`，真窗口 + 真页面）：首启 → 开本机 DSH（页面真的加载了 `http://127.0.0.1:3080/`）→ 回首页开内网服务 → 键盘切页签 → 拖拽排序 → ⌘K 面板 → 设置五个分组 → 打不开的服务落错误页 → 关到最后回首页 → 640 窄窗无溢出。截图与原生页面截图在 `poc/evidence/walkthrough/`。
 - **首页分组按"这是什么"命名**（2026-10-30 晚，两轮反馈后定稿）：分组为「DSH 工作区」与「内网系统」，两者互相独立、不靠"其他"定义；计数都用「个」；当前这台电脑只加「本机」角标；卡片副标题是服务地址；跟随文案一并改（空态「还没有别的工作区」、底部「点卡片即开页签」、副标题「每张卡片开一个页签」）。三条门禁（`shell-states` / `local-first-run` / `fleet-run`）已按新结构更新并复跑通过。
 - **走查中发现并修掉的三处**：① ⌘K 面板原来像浮在内容上的下拉（无遮罩、位置漂移）→ 改为居中模态 + 遮罩，点遮罩可关；② 错误页直接显示 Chromium 的英文原文（`ERR_UNSAFE_PORT (-312) loading ...`）→ 改为中文句子 + 一行小号错误码；③ 页签只能看不能排 → 补拖拽排序（`tabs:reorder` 落库）。

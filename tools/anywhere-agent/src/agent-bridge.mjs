@@ -164,7 +164,12 @@ export function startAgentBridge(options) {
       claims.prune(known.map((tab) => tab.id));
       json(response, 200, {
         ok: true,
-        tabs: known.map((tab) => ({ ...tab, agent: claims.get(tab.id) ? { tier: claims.get(tab.id).tier, since: claims.get(tab.id).since } : null })),
+        tabs: known.map((tab) => {
+          const claim = claims.get(tab.id);
+          // Who is driving travels with the tier: a person looking at the window and an
+          // agent reading the state should both be able to say whose hands these are.
+          return { ...tab, agent: claim ? { tier: claim.tier, by: claim.by, since: claim.since } : null };
+        }),
       });
       return;
     }

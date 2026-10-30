@@ -185,7 +185,9 @@ try {
   await page.click('#open-settings');
   await page.waitForFunction(() => !document.getElementById('settings')?.hidden, null, { timeout: 10_000 });
   const facts = await page.locator('#settings .row .value').allInnerTexts();
-  check('the version in the settings tab is the manifest version', facts[0], manifest.version);
+  // The row carries version and build together, because two builds of one version have to
+  // be distinguishable; the version is what has to match the manifest.
+  check('the version in the settings tab is the manifest version', String(facts[0] ?? '').startsWith(manifest.version), true);
   check('the settings tab reports the host', facts.some((line) => /常驻|外部托管/.test(line)), true);
 } catch (error) {
   failures += 1;
