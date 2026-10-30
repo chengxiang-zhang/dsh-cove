@@ -214,7 +214,8 @@
   - `poc/packaged-ui.mjs` 已在真产物上跑通：`ELECTRON_DIST=/tmp/electron-extract/Electron.app bash scripts/package-mac.sh` 产出 `Anywhere Work.app`（ad-hoc 签名、Gatekeeper 拒绝属预期），随后断言 bundle 版本/构建号、页签壳、本机卡片与角标、徽标=宿主自报、打开工作区页签、设置页版本——**全部通过**。
   - `poc/endpoint-run.mjs` 已收敛为**无人工可跑**的部分并跑通：连接入口在设置里、进入“需要登录”、横幅给出登录动作、地址字段可就地拒绝不合规值；**SSO 完成需要人**，这一半交给 `poc/fleet-sso.mjs`，不再假装能断言。
   - `poc/fleet-sso.mjs --issue-only` 跑通：app 自链路进入 `login-required` 并签发指向 `netbird.zhangchengxiang.com` 的 hand-off；完成登录仍需人（`--open`）。
-  - 仅剩两件环境项：`make-dmg`（本会话沙箱拒绝 `hdiutil`，`hdiutil create` 实测报“操作不被允许”）与 Windows 真机。
+  - **打包与安装已在 macOS 上端到端验完**（2026-10-30 夜）：`package-mac.sh --dmg` 产出 `Anywhere Work-0.4.10-16.dmg`（144M），`hdiutil attach` 后卷内为 app + `/Applications` 快捷方式 + 中英安装说明 + 背景；`ditto` 装到 `/Applications` 后 `codesign --verify --deep --strict` 通过；对**已安装**的 app 跑 `poc/packaged-ui.mjs` 17 条断言全绿；`open -a "Anywhere Work"` 走 LaunchServices 启动成功；经 CDP 连上已安装实例读到：单页签「首页」、无横幅、「DSH 工作区 1 个」、卡片 `leodemacbook-pro` + 「本机」角标、点卡片开出第二个页签且目标列表里出现 `DeepSeek Harness | http://127.0.0.1:3080/`；`make-dmg.test.mjs` 亦为绿（3/3）。
+  - 仅剩一件环境项：Windows 真机（本机是 macOS）。
 - **用户走查已完成**（`node poc/user-walkthrough.mjs`，真窗口 + 真页面）：首启 → 开本机 DSH（页面真的加载了 `http://127.0.0.1:3080/`）→ 回首页开内网服务 → 键盘切页签 → 拖拽排序 → ⌘K 面板 → 设置五个分组 → 打不开的服务落错误页 → 关到最后回首页 → 640 窄窗无溢出。截图与原生页面截图在 `poc/evidence/walkthrough/`。
 - **首页分组按"这是什么"命名**（2026-10-30 晚，两轮反馈后定稿）：分组为「DSH 工作区」与「内网系统」，两者互相独立、不靠"其他"定义；计数都用「个」；当前这台电脑只加「本机」角标；卡片副标题是服务地址；跟随文案一并改（空态「还没有别的工作区」、底部「点卡片即开页签」、副标题「每张卡片开一个页签」）。三条门禁（`shell-states` / `local-first-run` / `fleet-run`）已按新结构更新并复跑通过。
 - **走查中发现并修掉的三处**：① ⌘K 面板原来像浮在内容上的下拉（无遮罩、位置漂移）→ 改为居中模态 + 遮罩，点遮罩可关；② 错误页直接显示 Chromium 的英文原文（`ERR_UNSAFE_PORT (-312) loading ...`）→ 改为中文句子 + 一行小号错误码；③ 页签只能看不能排 → 补拖拽排序（`tabs:reorder` 落库）。
