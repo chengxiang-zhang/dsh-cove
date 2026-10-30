@@ -90,7 +90,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = Get-ChildItem -Path tools/anywhere-agent/build -Filter '*-setup.exe' -Recurse | Select-Object -First 1
+          # The packager writes "<product>-<version>-<build>.exe" at the top of build/; the
+          # staged tree below it also holds an .exe, which is not the installer.
+          $installer = Get-ChildItem -Path 'tools/anywhere-agent/build' -Filter '*.exe' -File |
+            Where-Object { $_.Name -like 'Anywhere Work-*' } |
+            Select-Object -First 1
           if (-not $installer) { throw 'no installer was produced' }
           Write-Host "installer: $($installer.FullName) ($([math]::Round($installer.Length / 1MB)) MB)"
           $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
@@ -123,8 +127,12 @@ jobs:
           $problems = @()
           if (-not (Get-ChildItem -Path $dir -Filter '*.exe' | Where-Object { $_.Name -match 'uninstall' })) { $problems += 'no uninstaller' }
           if (-not (Test-Path (Join-Path $dir 'resources\app'))) { $problems += 'no resources\app payload' }
-          $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Anywhere Work.lnk'
+          # The installer creates a start-menu folder holding the app and its uninstaller,
+          # plus a desktop shortcut; the folder is what gets asserted.
+          $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Anywhere Work\Anywhere Work.lnk'
           if (-not (Test-Path $shortcut)) { $problems += "no start-menu shortcut at $shortcut" }
+          $desktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Anywhere Work.lnk'
+          if (-not (Test-Path $desktop)) { $problems += "no desktop shortcut at $desktop" }
           if ($problems.Count -gt 0) { throw ("install incomplete: " + ($problems -join '; ')) }
           Write-Host 'install layout ok: uninstaller, payload, start-menu shortcut'
 
