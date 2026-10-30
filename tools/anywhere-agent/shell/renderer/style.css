@@ -681,6 +681,11 @@ html[data-platform="darwin"] .traffic {
   background: var(--aw-accent, #4f46e5);
 }
 
+.agent-tier[data-tier="control"] {
+  color: var(--aw-warning, #b45309);
+  border-color: currentColor;
+}
+
 .agent-tier {
   margin-left: auto;
   padding: 0 6px;

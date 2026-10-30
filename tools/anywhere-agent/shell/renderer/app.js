@@ -36,6 +36,7 @@ const el = Object.fromEntries(
     'banner',
     'agent-bar',
     'agent-text',
+    'agent-tier',
     'banner-title',
     'banner-text',
     'banner-actions',
@@ -230,6 +231,8 @@ function applyPage(tab, services, tabs) {
   el['agent-bar'].hidden = !agentBusy;
   if (agentBusy) {
     el['agent-text'].textContent = `Agent 正在操作「${tab.title || tab.serviceId}」`;
+    el['agent-tier'].textContent = tab.agentTier === 'control' ? '可写' : '只读';
+    el['agent-tier'].dataset.tier = tab.agentTier === 'control' ? 'control' : 'read-only';
   }
 
   el.home.hidden = !isHome;

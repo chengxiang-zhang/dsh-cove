@@ -21,6 +21,7 @@ import { execFile, spawn, spawnSync } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +31,7 @@ import { KERNEL_PORT, createKernelSupervisor, machineLabel, trustedHost } from '
 import { buildRegistry } from '../src/discovery.mjs';
 import * as Tabs from '../src/tabs.mjs';
 import { parseServices } from '../src/services.mjs';
+import { createClaimState, startAgentBridge } from '../src/agent-bridge.mjs';
 import { isCloudZone } from '../src/netbird-names.mjs';
 import { DSH_ZONES } from '../src/generated/fleetConfig.mjs';
 import { createPeerResolver, parsePeers, parseSelfStatus } from '../src/netbird-status.mjs';
@@ -191,7 +193,7 @@ function parseArgs(argv) {
   // that also advanced the cursor swallowed its neighbour (`--engine --dir X`
   // lost the directory), which is a silent failure: the app keeps working, on the
   // wrong profile.
-  const valueFlags = new Set(['--proxy', '--netbird', '--dir', '--tunnel', '--states', '--setup-key', '--management-url', '--services']);
+  const valueFlags = new Set(['--proxy', '--netbird', '--dir', '--tunnel', '--states', '--setup-key', '--management-url', '--services', '--agent-port']);
   const args = { proxy: '', engine: true, acceptance: false, netbird: '', dir: '', tunnel: '', states: '', setupKey: '', managementUrl: '', fleet: false };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
@@ -1085,6 +1087,7 @@ function publish(snapshot) {
     void restoreTabs();
   }
   startIdleReclaim();
+  void startBridgeOnce();
   // A machine that leaves the list keeps its page for a while: a probe that timed out is
   // far more common than a machine that is gone, and destroying a page over a blip costs
   // the user their place. Only a sustained absence drops it.
@@ -1321,8 +1324,15 @@ const workspaceViews = new Map();
 let tabsState = Tabs.openHome(Tabs.createState()).state;
 /** The failure message per tab, so a dead page is a page, not a silent blank area. */
 const tabFailures = new Map();
-/** Tabs an agent is currently driving (filled by the agent bridge in T1). */
-const agentTabs = new Set();
+/**
+ * The agent contract: which tab an outside client is driving.
+ *
+ * A claim is the shell's only knowledge of an agent. It is not enforcement - a client
+ * attached over CDP can do anything the page can - it is visibility: the tab wears an A
+ * badge, the bar names the tier, and stopping the bridge stops the driving.
+ */
+const agentClaims = createClaimState();
+let agentBridge = null;
 let tabsRestored = false;
 /** One native view per web-service tab; machines keep their own resident view. */
 const webViews = new Map();
@@ -2132,9 +2142,10 @@ function tabsPayload() {
           title: tab.kind === 'service' ? service?.name ?? tab.title : tab.title,
           active: tab.id === tabsState.activeId,
           tone: failure ? 'error' : 'normal',
-          // The real bridge arrives with T1; a scripted state can mark one service so the
-          // bar and the badge are part of every interface check.
-          agent: agentTabs.has(tab.id) || (lastSnapshot?.agentServiceId ? tab.serviceId === lastSnapshot.agentServiceId : false),
+          // A scripted state can also mark one service, so the badge and the bar are part
+          // of every interface check rather than only of a live claim.
+          agent: Boolean(agentClaims.get(tab.id)) || (lastSnapshot?.agentServiceId ? tab.serviceId === lastSnapshot.agentServiceId : false),
+          agentTier: agentClaims.get(tab.id)?.tier ?? (lastSnapshot?.agentServiceId ? 'read-only' : ''),
           error: failure,
         };
       }),
@@ -2316,7 +2327,9 @@ async function closeTab(id) {
   }
   tabsState = state;
   tabFailures.delete(id);
-  agentTabs.delete(id);
+  if (agentClaims.get(id)) {
+    agentClaims.releaseAll(agentClaims.get(id).by);
+  }
   const webView = webViews.get(id);
   if (webView) {
     webViews.delete(id);
@@ -2335,6 +2348,42 @@ async function closeTab(id) {
   }
   await activateTab(tabsState.activeId);
   return { ok: true };
+}
+
+/**
+ * Starts the agent bridge once, and writes where to find it.
+ *
+ * The port and the token are written to a file beside the other state: a client on this
+ * machine reads it, and a client that cannot read the file cannot drive the window. The
+ * file is how the token travels without ever being printed in a log.
+ */
+async function startBridgeOnce() {
+  if (agentBridge !== null || (!args.agentPort && !process.env.AW_AGENT_BRIDGE)) {
+    return;
+  }
+  const token = randomUUID();
+  try {
+    agentBridge = await startAgentBridge({
+      claims: agentClaims,
+      tabs: () => tabsPayload().tabs.items,
+      port: Number(args.agentPort || 0),
+      token,
+      onChange: () => {
+        pushTabs();
+      },
+      log: (line) => process.stderr.write(`shell: agent ${line}\n`),
+    });
+  } catch (error) {
+    process.stderr.write(`shell: agent bridge not started (${error?.message ?? error})\n`);
+    return;
+  }
+  const file = join(args.dir, 'agent-bridge.json');
+  try {
+    writeFileSync(file, `${JSON.stringify({ url: agentBridge.url, port: agentBridge.port, token }, null, 2)}\n`, { mode: 0o600 });
+  } catch (error) {
+    process.stderr.write(`shell: agent bridge file not written (${error?.message ?? error})\n`);
+  }
+  process.stderr.write(`shell: agent bridge on ${agentBridge.url} (file ${file})\n`);
 }
 
 /** Restores the previous session's tabs once, on the first usable reading. */
