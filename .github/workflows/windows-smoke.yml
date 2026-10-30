@@ -1,0 +1,142 @@
+name: Windows Smoke
+
+# The desktop app's Windows installer is built by the release workflow, but "an installer
+# was produced" is a weaker claim than "the app opens on Windows". Nobody on this project
+# owns a Windows machine, so this workflow supplies one: it builds the installer, installs
+# it the way a person would, opens the installed app with Playwright and keeps the
+# screenshots as artifacts.
+#
+# Manual only. It publishes nothing and touches no release; the artifacts are the point.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Build, install and open the Windows app
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      ELECTRON_VERSION: '44.9.0'
+      # Same pin as the release workflow: two independent channels agreed on this hash and
+      # size for electron-v44.9.0-win32-x64.zip.
+      ELECTRON_WIN_ZIP_SHA256: '88e08039d0ef359bab9f674e8051fa103bd8628ea7c5a5e1daaa610a8a0c6931'
+      ELECTRON_WIN_ZIP_BYTES: '158625558'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
+      - name: Fetch the Electron runtime the packager expects
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = "electron-v$env:ELECTRON_VERSION-win32-x64.zip"
+          $url = "https://github.com/electron/electron/releases/download/v$env:ELECTRON_VERSION/$zip"
+          $runtime = Join-Path $env:RUNNER_TEMP 'electron-runtime'
+          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+          $archive = Join-Path $runtime $zip
+          Invoke-WebRequest -Uri $url -OutFile $archive -UseBasicParsing
+          $size = (Get-Item $archive).Length
+          if ("$size" -ne $env:ELECTRON_WIN_ZIP_BYTES) { throw "unexpected archive size: $size" }
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
+          if ($hash -ne $env:ELECTRON_WIN_ZIP_SHA256) { throw "sha256 mismatch: $hash" }
+          $unpacked = Join-Path $runtime 'unpacked'
+          Expand-Archive -Path $archive -DestinationPath $unpacked -Force
+          "ELECTRON_WIN_DIST=$unpacked" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build the engine for Windows
+        shell: bash
+        run: |
+          set -o pipefail
+          HELPER_VERSION="$(node -p 'require("./tools/anywhere-agent/packaging/version-contract.json").helper')"             GOOS=windows GOARCH=amd64 OUT="$RUNNER_TEMP/anywhere-tunnel.exe"             bash tools/anywhere-agent/scripts/build-tunnel.sh 2>&1 | tee "$RUNNER_TEMP/helper.log"
+          test -f "$RUNNER_TEMP/anywhere-tunnel.exe"
+
+      - name: Stage the app and write the installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $build = (git -C . rev-list --count HEAD).Trim()
+          node tools/anywhere-agent/scripts/package-windows.mjs `
+            --runtime $env:ELECTRON_WIN_DIST `
+            --helper (Join-Path $env:RUNNER_TEMP 'anywhere-tunnel.exe') `
+            --version '0.0.0-smoke' `
+            --build $build 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/package.log"
+
+      - name: Install it the way a person would
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem -Path tools/anywhere-agent/build -Filter '*-setup.exe' -Recurse | Select-Object -First 1
+          if (-not $installer) { throw 'no installer was produced' }
+          Write-Host "installer: $($installer.FullName) ($([math]::Round($installer.Length / 1MB)) MB)"
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "installer exited $($process.ExitCode)" }
+          "AW_INSTALLER=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Find the installed executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\Anywhere Work'),
+            (Join-Path $env:ProgramFiles 'Anywhere Work'),
+            (Join-Path ${env:ProgramFiles(x86)} 'Anywhere Work')
+          ) | Where-Object { $_ -and (Test-Path $_) }
+          if (-not $candidates) { throw 'the installer did not leave an application directory' }
+          $dir = $candidates[0]
+          Write-Host "installed into: $dir"
+          Get-ChildItem -Path $dir | Select-Object Name, Length | Format-Table | Out-String | Write-Host
+          $exe = Get-ChildItem -Path $dir -Filter '*.exe' | Where-Object { $_.Name -notmatch 'uninstall' } | Select-Object -First 1
+          if (-not $exe) { throw 'no executable in the installed directory' }
+          "AW_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "AW_INSTALL_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Assert the install left what it promised
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = $env:AW_INSTALL_DIR
+          $problems = @()
+          if (-not (Get-ChildItem -Path $dir -Filter '*.exe' | Where-Object { $_.Name -match 'uninstall' })) { $problems += 'no uninstaller' }
+          if (-not (Test-Path (Join-Path $dir 'resources\app'))) { $problems += 'no resources\app payload' }
+          $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Anywhere Work.lnk'
+          if (-not (Test-Path $shortcut)) { $problems += "no start-menu shortcut at $shortcut" }
+          if ($problems.Count -gt 0) { throw ("install incomplete: " + ($problems -join '; ')) }
+          Write-Host 'install layout ok: uninstaller, payload, start-menu shortcut'
+
+      - name: Open the installed app and read it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm install --no-audit --no-fund --no-save playwright@1.56.1 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/npm.log" | Select-Object -Last 3
+          node tools/anywhere-agent/poc/windows-smoke.mjs
+
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke
+          path: |
+            artifacts/**
+            ${{ runner.temp }}/package.log
+            ${{ runner.temp }}/helper.log
+          if-no-files-found: warn
