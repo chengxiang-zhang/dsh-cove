@@ -147,19 +147,18 @@ const local = await app.evaluate(async () => {
 });
 check('the local half is what decided the state', typeof local.state === 'string', true);
 
-await page.waitForFunction(() => document.getElementById('status-label')?.innerText === '本机可用', null, { timeout: 10_000 });
-check('status line', await page.locator('#status-label').innerText(), '本机可用');
-check('rows in the list', await page.locator('#groups .machine').count(), 1);
-check('group titles', (await page.locator('.group-title').allInnerTexts()).join('|'), '本机|其他机器');
-check('the account chip says nobody is signed in', await page.locator('#account-name').innerText(), '未登录');
-check('the network is still off', /连接其他机器/.test(await page.locator('#account-action').innerText()), true);
-
-// The window lands on the home: the front door names the machine a click would open, and
-// the rail says so. Nothing has opened a workspace on the user's behalf.
-check('the pane is the home', await page.locator('#state-panel').getAttribute('data-kind'), 'home');
-check('the home names the machine', /打开 .* 的工作区/.test(await page.locator('#state-actions button').first().innerText()), true);
-check('the rail marks the home', await page.locator('#rail-machines').getAttribute('data-active'), 'true');
-check('the new-session entry is available', await page.locator('#rail-session').isDisabled(), false);
+// The first run's promise, in the tab shell: this machine as the only service, the home
+// as the only tab, and nothing opened on the user's behalf.
+await page.waitForFunction(() => document.querySelectorAll('.card').length > 0, null, { timeout: 20_000 });
+check('the window opens on the home', await page.locator('#home').isVisible(), true);
+check('one tab, and it is the home', await page.locator('.tab .tab-title').first().innerText(), '首页');
+check('a healthy local state shows no banner', await page.locator('#banner').isHidden(), true);
+check('exactly one machine is offered', await page.locator('.card[data-service-id^="machine:"]').count(), 1);
+check(
+  'the card of this machine carries the local flag',
+  await page.locator('.card[data-service-id^="machine:"] .card-flag').first().innerText(),
+  '本机',
+);
 check('no workspace was opened unasked', (await snapshot())?.workspace ?? null, null);
 
 // The finished-run badge, against the host that is actually running. The count is
@@ -167,7 +166,7 @@ check('no workspace was opened unasked', (await snapshot())?.workspace ?? null, 
 // screen with the data path rather than with a fixture.
 const summary = await readLocalFeed(seed.watermark);
 process.stdout.write(`live feed: ${JSON.stringify(summary)}\n`);
-const badge = page.locator('#groups .machine-unread');
+const badge = page.locator('.card[data-service-id^="machine:"] .card-badge');
 if (summary.unread > 0) {
   check('the badge shows what the host reports', await badge.first().innerText(), String(summary.unread));
 } else {
@@ -178,35 +177,51 @@ if (summary.unread > 0) {
 // its history as work to come back for. The store is removed to make this process exactly
 // that client, and the refresh is what asks it to read again.
 rmSync(join(stateDir, 'notify.json'), { force: true });
-await page.keyboard.press('Meta+r');
-await page.waitForTimeout(1_500);
-const baselined = JSON.parse(readFileSync(join(stateDir, 'notify.json'), 'utf8'));
+// The refresh is the client's own read, not a keyboard shortcut: the same call the
+// toolbar and the menu make, so the check cannot pass because a shortcut happened to be
+// wired differently.
+await page.evaluate(() => window.anywhere.refresh());
+let baselined = null;
+for (let attempt = 0; attempt < 60; attempt += 1) {
+  try {
+    baselined = JSON.parse(readFileSync(join(stateDir, 'notify.json'), 'utf8'));
+    break;
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+check('the baseline was written back', baselined !== null, true);
+baselined = baselined ?? {};
 const baselineWatermark = Object.values(baselined)[0] ?? 0;
 check('the first read of a host is a baseline, not a badge', await badge.count(), 0);
 check('and it establishes where seen starts', baselineWatermark, (await readLocalFeed(0)).latest);
 process.stdout.write(`baseline watermark: ${baselineWatermark}\n`);
 
-// The screenshot is taken with the diagnostics folded, as a user first sees the window;
-// the machine's packaging facts and the workspace are then read, which is the evidence
-// that the host was already resident and that entering the machine works.
 await page.screenshot({ path: join(args.out, 'shell-local-first-run.png') });
 process.stdout.write(`screenshot: ${join(args.out, 'shell-local-first-run.png')}\n`);
 
-await page.locator('#state-actions button').first().click();
-await page.waitForFunction(() => document.getElementById('state-panel')?.hidden === true, null, { timeout: 15_000 });
+// Opening the machine is a click on its service, and the workspace is a tab of its own.
+await page.click('.card[data-service-id^="machine:"]');
+await page.waitForFunction(() => document.querySelectorAll('.tab').length === 2, null, { timeout: 25_000 });
+check('opening the machine adds one tab', await page.locator('.tab').count(), 2);
+check('the home stepped aside', await page.locator('#home').isHidden(), true);
 const opened = await snapshot();
-check('the home action opens this machine', opened?.workspace !== null && opened?.workspace !== undefined, true);
-check('the rail follows into the workspace', await page.locator('#rail-session').getAttribute('data-active'), 'true');
-// Inside the machine, its own finished work is work the user watched finish: the row
-// must stop carrying a count instead of piling up what happens while they are in there.
-check('the row carries no count once the machine is the one on screen', await page.locator('#groups .machine-unread').count(), 0);
-check('no row is marked unread either', await page.locator('#groups .machine[data-unread="true"]').count(), 0);
+check('the workspace seam names the machine', typeof opened?.workspace?.host === 'string', true);
 process.stdout.write(`workspace seam: ${JSON.stringify(opened?.workspace ?? null)}\n`);
 await page.screenshot({ path: join(args.out, 'shell-local-first-run-workspace.png') });
 
-await page.locator('#diagnostics-toggle').click();
-const rows = await page.locator('#diagnostics-rows dt, #diagnostics-rows dd').allInnerTexts();
-process.stdout.write(`diagnostics: ${JSON.stringify(rows)}\n`);
+// Coming back: the machine you are inside is one you watched finish its work, so its row
+// must not be carrying a count for what happened while you were in there.
+await page.click('.tab[data-tab-id="home"]');
+await page.waitForFunction(() => !document.getElementById('home')?.hidden, null, { timeout: 10_000 });
+check('inside the machine, its own finished work is not a badge', await badge.count(), 0);
+
+// The diagnostics that used to be scattered now live in the settings tab.
+await page.click('#open-settings');
+await page.waitForFunction(() => !document.getElementById('settings')?.hidden, null, { timeout: 10_000 });
+const rows = await page.locator('#settings .row .value').allInnerTexts();
+process.stdout.write(`settings facts: ${JSON.stringify(rows)}\n`);
+check('the settings page carries the diagnostics', rows.length > 3, true);
 check('the host reports itself', rows.some((line) => /常驻|外部托管/.test(line)), true);
 
 await app.close();

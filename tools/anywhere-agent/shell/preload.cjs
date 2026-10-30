@@ -41,6 +41,25 @@ contextBridge.exposeInMainWorld('anywhere', {
     ipcRenderer.on('scheme-changed', listener);
     return () => ipcRenderer.removeListener('scheme-changed', listener);
   },
+  // The tab strip: one window, one strip, and the main process owns which tab is up
+  // because it also owns the native page that covers the content area.
+  tabs: {
+    openService: (serviceId) => ipcRenderer.invoke('tabs:open-service', serviceId),
+    openHome: () => ipcRenderer.invoke('tabs:open-home'),
+    openSettings: () => ipcRenderer.invoke('tabs:open-settings'),
+    activate: (tabId) => ipcRenderer.invoke('tabs:activate', tabId),
+    close: (tabId) => ipcRenderer.invoke('tabs:close', tabId),
+    reload: (tabId) => ipcRenderer.invoke('tabs:reload', tabId),
+    reorder: (from, to) => ipcRenderer.invoke('tabs:reorder', from, to),
+  },
+  /** The tabs payload pushed whenever the strip changes (opening, closing, a retitle). */
+  onTabs: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('tabs', listener);
+    return () => ipcRenderer.removeListener('tabs', listener);
+  },
+  /** Copying the diagnostics is a command, not a page: the settings tab asks for it. */
+  copyDiagnostics: () => ipcRenderer.send('copy-diagnostics'),
   // The application menu drives these; the window is not the only place they live.
   onMenu: (name, callback) => {
     const listener = () => callback();

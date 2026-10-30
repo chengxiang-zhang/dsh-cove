@@ -164,8 +164,8 @@ try {
 
   check('the fleet link comes up', settled?.state, 'ready');
   if (settled?.state !== 'ready') {
-    const detail = await page.locator('#state-body').innerText().catch(() => '?');
-    process.stdout.write(`  panel says: ${JSON.stringify(detail)}\n`);
+    const detail = await page.locator('#banner-text').innerText().catch(() => '?');
+    process.stdout.write(`  banner says: ${JSON.stringify(detail)}\n`);
     throw new Error(`the run cannot assert a machine list in state ${settled?.state}`);
   }
 
@@ -173,38 +173,53 @@ try {
   check('more than one machine is reachable', (settled?.entries ?? 0) > 1, true);
   process.stdout.write(`  machines: ${settled?.entries} (registered ${settled?.registered})\n`);
 
-  await page.waitForFunction(() => document.getElementById('status-label')?.innerText === '已连接', null, { timeout: 20_000 });
-  check('status line reports the fleet', await page.locator('#status-label').innerText(), '已连接');
-  // The grouping is conditional on knowing which row is this machine. The app's own link
-  // knows (the fleet publishes a record for every machine, this one included), so the list
-  // splits into 本机 and 其他机器. A machine's own engine, by contrast, never lists itself
-  // as a peer - so in that mode there is no self row to group, and the honest reading is a
-  // single section. Both are asserted rather than assumed.
-  const groupTitles = (await page.locator('.group-title').allInnerTexts()).join('|');
-  check('group titles', groupTitles, ownEngine ? '其他机器' : '本机|其他机器');
-  const rows = page.locator('#groups .machine');
-  const total = await rows.count();
-  check('every reachable machine has a row', total, settled?.entries);
-  const others = await page.locator('#groups .machine[data-local="false"]').count();
-  check('at least one row is another machine', others > 0, true);
-  process.stdout.write(`  rows: ${total} (this machine ${total - others}, others ${others})\n`);
-  // The badge is data, not decoration: report how many rows the fleet says have finished
+  // A connected fleet is a healthy window: the home, no banner, and no aggregation text.
+  await page.waitForFunction(() => document.querySelectorAll('.card').length > 0, null, { timeout: 20_000 });
+  check('a connected fleet shows no banner', await page.locator('#banner').isHidden(), true);
+  check(
+    'the window still has no reachability aggregate',
+    /台可达|已连接 ·/.test(await page.locator('body').innerText()),
+    false,
+  );
+
+  // Every reachable machine is a card. The tab shell does not split 本机 / 其他机器 into
+  // two groups the way the old three-column layout did: it is one list, and the machine
+  // you are on says so in its own subtitle. That is the assertion now.
+  const cards = page.locator('.card[data-service-id^="machine:"]');
+  const total = await cards.count();
+  check('every reachable machine is a card', total, settled?.entries);
+  const localCards = await page.locator('.card[data-service-id^="machine:"] .card-flag').count();
+  const remoteCards = total - localCards;
+  process.stdout.write(`  cards: ${total} (this machine ${localCards}, others ${remoteCards})\n`);
+  if (!ownEngine) {
+    check('this machine is one of the cards', localCards, 1);
+  }
+  check('at least one card is another machine', remoteCards > 0, true);
+
+  // The badge is data, not decoration: report how many cards the fleet says have finished
   // work, without asserting a number that changes with other people's sessions.
-  const badged = await page.locator('#groups .machine[data-unread="true"]').count();
-  process.stdout.write(`  rows reporting finished work: ${badged}\n`);
+  const badged = await page.locator('.card-badge').count();
+  process.stdout.write(`  cards reporting finished work: ${badged}\n`);
 
   // Entering another machine is the whole point of the fleet, and the seam is how a
   // native view can be shown to have opened.
-  const remote = page.locator('#groups .machine[data-local="false"]').first();
-  const remoteHost = await remote.getAttribute('data-host');
+  const remote = cards.filter({ hasNot: page.locator('.card-flag') }).first();
+  const remoteId = await remote.getAttribute('data-service-id');
+  const remoteHost = String(remoteId ?? '').replace(/^machine:/, '');
   await remote.click();
   const openDeadline = Date.now() + 60_000;
   let workspace = null;
-  while (Date.now() < openDeadline && workspace === null) {
+  let tabs = 0;
+  while (Date.now() < openDeadline) {
     workspace = (await snapshot())?.workspace ?? null;
-    if (workspace === null) await new Promise((resolve) => setTimeout(resolve, 1_000));
+    tabs = await page.locator('.tab').count();
+    if (workspace !== null && tabs >= 2) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-  check('another machine opens in the pane', workspace?.host, remoteHost);
+  check('another machine opens as a tab', tabs >= 2, true);
+  check('the workspace seam names that machine', workspace?.host, remoteHost);
   process.stdout.write(`workspace seam: ${JSON.stringify(workspace)}\n`);
   await page.screenshot({ path: join(args.out, 'shell-fleet-run.png') });
   process.stdout.write(`screenshot: ${join(args.out, 'shell-fleet-run.png')}\n`);

@@ -99,8 +99,8 @@
         actions: ['login-open'],
       },
       empty: {
-        title: '没有看到其他机器',
-        body: '在别的电脑上登录同一个账号,它就会出现在这里。',
+        title: '还没有别的工作区',
+        body: '在另一台电脑上登录同一个账号,它就会出现在这里。',
         actions: ['retry'],
       },
       error: {

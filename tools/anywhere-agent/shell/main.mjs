@@ -28,6 +28,8 @@ import { fileURLToPath } from 'node:url';
 import { createSupervisor } from '../agent/supervisor.mjs';
 import { KERNEL_PORT, createKernelSupervisor, machineLabel, trustedHost } from '../agent/kernel.mjs';
 import { buildRegistry } from '../src/discovery.mjs';
+import * as Tabs from '../src/tabs.mjs';
+import { parseServices } from '../src/services.mjs';
 import { isCloudZone } from '../src/netbird-names.mjs';
 import { DSH_ZONES } from '../src/generated/fleetConfig.mjs';
 import { createPeerResolver, parsePeers, parseSelfStatus } from '../src/netbird-status.mjs';
@@ -189,7 +191,7 @@ function parseArgs(argv) {
   // that also advanced the cursor swallowed its neighbour (`--engine --dir X`
   // lost the directory), which is a silent failure: the app keeps working, on the
   // wrong profile.
-  const valueFlags = new Set(['--proxy', '--netbird', '--dir', '--tunnel', '--states', '--setup-key', '--management-url']);
+  const valueFlags = new Set(['--proxy', '--netbird', '--dir', '--tunnel', '--states', '--setup-key', '--management-url', '--services']);
   const args = { proxy: '', engine: true, acceptance: false, netbird: '', dir: '', tunnel: '', states: '', setupKey: '', managementUrl: '', fleet: false };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
@@ -259,6 +261,45 @@ function writeSeam() {
 
 /** The entries the window was last shown: a click acts on what the user saw. */
 let offeredEntries = [];
+/** The last non-empty list, kept so a disconnect does not empty the home page. */
+let lastEntries = [];
+/**
+ * How long a page may stay off screen before its memory is given back.
+ *
+ * A resident page is 150-230MB; five tabs is most of a gigabyte, and a person who
+ * wandered off to another tab an hour ago does not need that page still painting. The
+ * tab stays, its title stays, and the page is rebuilt from its address on return - the
+ * same thing a browser does when it discards a background tab.
+ */
+const IDLE_DISCARD_MS = 10 * 60 * 1000;
+let idleReclaim = null;
+
+/** Gives back the memory of every page that has been off screen long enough. */
+function reclaimIdleViews() {
+  const now = Date.now();
+  for (const [host, since] of workspaceHiddenSince) {
+    if (host === activeWorkspace || now - since < IDLE_DISCARD_MS) {
+      continue;
+    }
+    const tab = tabsState.tabs.find((candidate) => candidate.serviceId === `machine:${host}`);
+    if (!tab) {
+      // No tab refers to it any more; the tab lifecycle already dropped it.
+      continue;
+    }
+    process.stderr.write(`shell: reclaiming idle page ${host} (${Math.round((now - since) / 60000)} min off screen)\n`);
+    dropWorkspaceView(host);
+  }
+}
+
+function startIdleReclaim() {
+  if (idleReclaim !== null) {
+    return;
+  }
+  idleReclaim = setInterval(reclaimIdleViews, 60 * 1000);
+  if (typeof idleReclaim.unref === 'function') {
+    idleReclaim.unref();
+  }
+}
 /** The read in flight, so a heartbeat and a click share one probe instead of racing. */
 let snapshotRead = null;
 /** The last snapshot published, so opening a machine can clear its dot in place. */
@@ -1029,7 +1070,7 @@ function publish(snapshot) {
   };
   writeSeam();
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('snapshot', snapshot);
+    mainWindow.webContents.send('snapshot', { ...snapshot, ...tabsPayload() });
   }
   applyAgentProxy(snapshot.proxy);
   // The proxy belongs to the engine: a reading that offers none means the engine that
@@ -1038,6 +1079,12 @@ function publish(snapshot) {
   if (shouldClearProxy({ applied: appliedProxy, next: snapshot.proxy }) && snapshot.state !== 'ready') {
     clearAgentProxy();
   }
+  // The previous session's tabs come back once there is something to restore them
+  // against: the catalogue only exists after the first usable reading.
+  if (!tabsRestored && (snapshot.state === 'ready' || snapshot.state === 'local')) {
+    void restoreTabs();
+  }
+  startIdleReclaim();
   // A machine that leaves the list keeps its page for a while: a probe that timed out is
   // far more common than a machine that is gone, and destroying a page over a blip costs
   // the user their place. Only a sustained absence drops it.
@@ -1265,6 +1312,56 @@ async function resolveSnapshot(select) {
  */
 const workspaceViews = new Map();
 /**
+ * The tab strip's state.
+ *
+ * The views are keyed by machine (one resident page per machine); the tabs are keyed by
+ * service. A machine is one service, so the two stay in step - but the tab is what the
+ * user sees, and closing the last tab must leave a home, not an empty window.
+ */
+let tabsState = Tabs.openHome(Tabs.createState()).state;
+/** The failure message per tab, so a dead page is a page, not a silent blank area. */
+const tabFailures = new Map();
+/** Tabs an agent is currently driving (filled by the agent bridge in T1). */
+const agentTabs = new Set();
+let tabsRestored = false;
+/** One native view per web-service tab; machines keep their own resident view. */
+const webViews = new Map();
+/** The catalogue file, read once: `<userData>/services.json`. */
+let webCatalog = null;
+
+/**
+ * The web services this window offers.
+ *
+ * The transport already reaches them - the session proxy dials through NetBird, so any
+ * name NetBird's DNS answers works - so the only thing missing was a list. A deployment
+ * publishes `services.json`; an empty or broken file simply means "machines only".
+ */
+function webServices() {
+  if (webCatalog !== null) {
+    return webCatalog;
+  }
+  // `--services` lets an acceptance run point at its own catalogue; otherwise the file
+  // lives beside the app's other state.
+  const file = args.services || join(app.getPath('userData'), 'services.json');
+  try {
+    webCatalog = parseServices(readFileSync(file, 'utf8'));
+  } catch {
+    webCatalog = [];
+  }
+  process.stderr.write(`shell: services=${webCatalog.length} from ${file}\n`);
+  return webCatalog;
+}
+
+/** Hides every native page; the caller decides which one to show next. */
+function hideNativeViews() {
+  if (activeWorkspace !== '') {
+    workspaceViews.get(activeWorkspace)?.setVisible(false);
+  }
+  for (const view of webViews.values()) {
+    view.setVisible(false);
+  }
+}
+/**
  * When each machine's page last stopped being visible.
  *
  * A resident page keeps the snapshot it had when its update socket died, and
@@ -1298,13 +1395,24 @@ function workspaceViewFor(entry) {
 }
 
 function applyDetailBounds() {
-  if (activeWorkspace === '' || detailRect === null) {
+  if (detailRect !== null) {
+    for (const view of webViews.values()) {
+      view.setBounds(detailRect);
+    }
+  }
+  if (activeWorkspace === '') {
     return;
   }
   const view = workspaceViews.get(activeWorkspace);
-  if (view) {
-    view.setBounds(detailRect);
+  if (!view) {
+    return;
   }
+  if (detailRect === null || detailRect.width === 0 || detailRect.height === 0) {
+    view.setVisible(false);
+    return;
+  }
+  view.setBounds(detailRect);
+  view.setVisible(true);
 }
 
 /**
@@ -1953,7 +2061,308 @@ function startSupervisor() {
   });
 }
 
-ipcMain.handle('state', async () => currentSnapshot());
+/**
+ * The services this window can open.
+ *
+ * Machines come from the fleet reading: a machine is a service whose address is that
+ * machine's own DSH entry. The channel document may add named web services; those keep
+ * their own id so a machine and a service can never collide.
+ */
+function catalogOf(snapshot) {
+  // `empty` is a reading that succeeded and found nothing; it must empty the home, while
+  // a state that could not read at all keeps the last list.
+  const read = Boolean(snapshot) && ['ready', 'local', 'empty'].includes(snapshot.state);
+  const usable = Boolean(snapshot) && (snapshot.state === 'ready' || snapshot.state === 'local');
+  const fresh = usable && Array.isArray(snapshot.entries) && snapshot.entries.length > 0 ? snapshot.entries : null;
+  if (fresh) {
+    lastEntries = fresh;
+  }
+  // A fleet that drops off does not take the home page with it: the last list a person
+  // saw stays on screen, and opening one of its entries is where they learn the network
+  // is down. An empty home would look like the app lost everything.
+  const entries = fresh ?? (read ? [] : lastEntries);
+  const services = [];
+  for (const entry of entries) {
+    services.push({
+      id: `machine:${entry.host}`,
+      kind: 'machine',
+      name: String(entry.machine ?? entry.host ?? ''),
+      // The group says what these are (DSH services); the subtitle says which one, which
+      // is the address a person would recognise. "This is the machine you are on" is a
+      // corner flag, not a group of its own.
+      subtitle: String(entry.host ?? ''),
+      local: entry.local === true,
+      host: String(entry.host ?? ''),
+      unread: Number(entry.unread ?? 0) > 0 ? Number(entry.unread) : 0,
+      needsLogin: entry.statusCode === 302,
+    });
+  }
+  for (const service of webServices()) {
+    services.push({ ...service, unread: 0, needsLogin: false });
+  }
+  for (const service of Array.isArray(snapshot?.services) ? snapshot.services : []) {
+    services.push({
+      id: String(service.id ?? ''),
+      kind: 'web',
+      name: String(service.name ?? ''),
+      subtitle: String(service.subtitle ?? ''),
+      host: String(service.host ?? ''),
+      unread: 0,
+      needsLogin: false,
+    });
+  }
+  return services.filter((service) => service.id !== '' && service.name !== '');
+}
+
+
+/** The tab strip as the window draws it: ids, kinds, titles and the per-tab marks. */
+function tabsPayload() {
+  const services = catalogOf(lastSnapshot);
+  const byId = new Map(services.map((service) => [service.id, service]));
+  return {
+    tabs: {
+      activeId: tabsState.activeId,
+      items: tabsState.tabs.map((tab) => {
+        const service = tab.serviceId ? byId.get(tab.serviceId) : null;
+        const failure = tabFailures.get(tab.id) ?? null;
+        return {
+          id: tab.id,
+          kind: tab.kind,
+          serviceId: tab.serviceId,
+          title: tab.kind === 'service' ? service?.name ?? tab.title : tab.title,
+          active: tab.id === tabsState.activeId,
+          tone: failure ? 'error' : 'normal',
+          // The real bridge arrives with T1; a scripted state can mark one service so the
+          // bar and the badge are part of every interface check.
+          agent: agentTabs.has(tab.id) || (lastSnapshot?.agentServiceId ? tab.serviceId === lastSnapshot.agentServiceId : false),
+          error: failure,
+        };
+      }),
+    },
+    services,
+  };
+}
+
+function pushTabs() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('tabs', tabsPayload());
+  }
+  persistTabs();
+}
+
+/** The tabs file lives beside the app's other state; a failure to write is not fatal. */
+function tabsFile() {
+  return join(app.getPath('userData'), 'tabs.json');
+}
+
+function persistTabs() {
+  try {
+    writeFileSync(tabsFile(), JSON.stringify({ version: 1, items: Tabs.serialize(tabsState), activeId: tabsState.activeId }), 'utf8');
+  } catch (error) {
+    process.stderr.write(`shell: tabs not saved (${error?.message ?? error})\n`);
+  }
+}
+
+function readTabsFile() {
+  try {
+    const raw = readFileSync(tabsFile(), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (Number(parsed?.version) !== 1 || !Array.isArray(parsed?.items)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The native page for a web-service tab.
+ *
+ * A page that fails to load becomes the tab's error state rather than a blank area; the
+ * tab keeps its identity, so retry is a click on the same tab, not a hunt for the entry.
+ */
+function webViewFor(tabId, url) {
+  const existing = webViews.get(tabId);
+  if (existing) {
+    return existing;
+  }
+  const view = new WebContentsView({
+    webPreferences: { partition: PARTITION, contextIsolation: true, nodeIntegration: false },
+  });
+  view.setBackgroundColor(windowBackground());
+  view.webContents.on('did-fail-load', (_event, code, description, failedUrl) => {
+    if (code === -3) {
+      return;
+    }
+    process.stderr.write(`shell: web tab failed ${failedUrl} code=${code} ${description}\n`);
+    // Chromium's description is "ERR_UNSAFE_PORT (-312) loading 'http://...'": the name
+    // is the part worth keeping, and the renderer turns it into a sentence.
+    const name = /^ERR_[A-Z_]+/.exec(String(description ?? ''))?.[0] ?? '';
+    tabFailures.set(tabId, { reason: name === '' ? String(description ?? '') : '', code: name });
+    pushTabs();
+  });
+  view.webContents.on('page-title-updated', (_event, title) => {
+    const next = String(title ?? '').trim();
+    if (next !== '') {
+      tabsState = Tabs.retitle(tabsState, tabId, next);
+      pushTabs();
+    }
+  });
+  view.webContents.on('will-navigate', (event, target) => {
+    // A web tab stays inside the overlay: only http(s) to a name the engine can reach.
+    // Anything else is opened by the system browser instead of turning this window into
+    // a general browser.
+    if (!/^https?:\/\//i.test(target)) {
+      event.preventDefault();
+    }
+  });
+  view.webContents.loadURL(url).catch((error) => {
+    // `did-fail-load` already recorded a precise reason; this rejection only carries the
+    // generic "ERR_FAILED (-2)" wrapper and would replace it with something less useful.
+    if (!tabFailures.has(tabId)) {
+      tabFailures.set(tabId, { reason: String(error?.message ?? error), code: '' });
+      pushTabs();
+    }
+  });
+  webViews.set(tabId, view);
+  return view;
+}
+
+/** Shows one web page in the page area and hides whatever was there. */
+function showWebView(tabId, view) {
+  hideNativeViews();
+  activeWorkspace = '';
+  globalThis.__awWorkspace = null;
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.contentView.children.includes(view)) {
+    mainWindow.contentView.addChildView(view);
+  }
+  if (detailRect !== null && detailRect.width > 0 && detailRect.height > 0) {
+    view.setBounds(detailRect);
+  }
+  view.setVisible(true);
+  writeSeam();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const tab = tabsState.tabs.find((candidate) => candidate.id === tabId);
+    mainWindow.setTitle(tab?.title ? `${tab.title} · Anywhere Work` : 'Anywhere Work');
+  }
+  globalThis.__awWorkspace = view;
+}
+
+/** Opens a service, or switches to the tab that already has it. */
+async function openServiceTab(serviceId) {
+  const service = catalogOf(lastSnapshot).find((candidate) => candidate.id === serviceId);
+  if (!service) {
+    return { ok: false, reason: '这个服务已经不在目录里了' };
+  }
+  const opened = Tabs.openService(tabsState, service.id, service.name);
+  tabsState = opened.state;
+  if (service.kind === 'machine') {
+    const result = await showWorkspace(service.host);
+    if (result && result.ok === false) {
+      tabFailures.set(opened.id, { reason: result.reason ?? '这台机器现在没有应答', code: '' });
+    } else {
+      tabFailures.delete(opened.id);
+    }
+  } else {
+    const view = webViewFor(opened.id, service.url);
+    showWebView(opened.id, view);
+    tabFailures.delete(opened.id);
+  }
+  pushTabs();
+  return { ok: true, id: opened.id };
+}
+
+/** Switches to a tab, which for a machine means showing its resident page. */
+async function activateTab(id) {
+  const tab = tabsState.tabs.find((candidate) => candidate.id === id);
+  if (!tab) {
+    return { ok: false };
+  }
+  tabsState = Tabs.activate(tabsState, id);
+  if (tab.kind === 'service') {
+    const service = catalogOf(lastSnapshot).find((candidate) => candidate.id === tab.serviceId);
+    if (service && service.kind === 'machine') {
+      for (const view of webViews.values()) {
+        view.setVisible(false);
+      }
+      const result = await showWorkspace(service.host);
+      if (result && result.ok === false) {
+        tabFailures.set(tab.id, { reason: result.reason ?? '这台机器现在没有应答', code: '' });
+      } else {
+        tabFailures.delete(tab.id);
+      }
+    } else if (service) {
+      showWebView(tab.id, webViewFor(tab.id, service.url));
+      tabFailures.delete(tab.id);
+    }
+  } else {
+    hideNativeViews();
+    hideWorkspace();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setTitle(`Anywhere Work`);
+    }
+  }
+  pushTabs();
+  return { ok: true };
+}
+
+/** Closes a tab, dropping its page when it was the last tab that used that machine. */
+async function closeTab(id) {
+  const closing = tabsState.tabs.find((candidate) => candidate.id === id);
+  const { state, closed } = Tabs.close(tabsState, id);
+  if (!closed) {
+    return { ok: false };
+  }
+  tabsState = state;
+  tabFailures.delete(id);
+  agentTabs.delete(id);
+  const webView = webViews.get(id);
+  if (webView) {
+    webViews.delete(id);
+    try {
+      mainWindow?.contentView.removeChildView(webView);
+      webView.webContents.close();
+    } catch (error) {
+      process.stderr.write(`shell: web view not destroyed (${error?.message ?? error})\n`);
+    }
+  }
+  if (closing && closing.kind === 'service' && !tabsState.tabs.some((tab) => tab.serviceId === closing.serviceId)) {
+    const service = catalogOf(lastSnapshot).find((candidate) => candidate.id === closing.serviceId);
+    if (service && service.kind === 'machine') {
+      dropWorkspaceView(service.host);
+    }
+  }
+  await activateTab(tabsState.activeId);
+  return { ok: true };
+}
+
+/** Restores the previous session's tabs once, on the first usable reading. */
+async function restoreTabs() {
+  if (tabsRestored) {
+    return;
+  }
+  tabsRestored = true;
+  const saved = readTabsFile();
+  if (!saved) {
+    pushTabs();
+    return;
+  }
+  const known = new Set(catalogOf(lastSnapshot).map((service) => service.id));
+  tabsState = Tabs.restore(saved.items, { known: (id) => known.has(id), activeId: saved.activeId });
+  pushTabs();
+  const active = tabsState.tabs.find((tab) => tab.id === tabsState.activeId);
+  if (active && active.kind === 'service') {
+    await activateTab(active.id);
+  } else {
+    await activateTab(tabsState.activeId);
+  }
+}
+
+ipcMain.handle('state', async () => {
+  const snapshot = await currentSnapshot();
+  return { ...snapshot, ...tabsPayload() };
+});
 ipcMain.handle('refresh', async (_event, select) => {
   const snapshot = await refreshAgent(select);
   // A plain refresh means "bring this screen up to date". It is not a connection
@@ -1994,12 +2403,52 @@ ipcMain.handle('set-server', async (_event, value) => applyServerAddress(value))
 
 ipcMain.handle('select-machine', async (_event, host) => showWorkspace(String(host ?? '')));
 // The rail's new-session entry: the same machine, loaded at its own front door.
-ipcMain.handle('new-session', async (_event, host) => showWorkspace(String(host ?? ''), { fresh: true }));
+ipcMain.handle('tabs:open-service', async (_event, serviceId) => openServiceTab(String(serviceId ?? '')));
+ipcMain.handle('tabs:open-home', async () => {
+  tabsState = Tabs.openHome(tabsState).state;
+  await activateTab(tabsState.activeId);
+  return { ok: true };
+});
+ipcMain.handle('tabs:open-settings', async () => {
+  tabsState = Tabs.openSettings(tabsState).state;
+  await activateTab(tabsState.activeId);
+  return { ok: true };
+});
+ipcMain.handle('tabs:activate', async (_event, id) => activateTab(String(id ?? '')));
+ipcMain.handle('tabs:close', async (_event, id) => closeTab(String(id ?? '')));
+ipcMain.handle('tabs:reload', async (_event, id) => {
+  const tab = tabsState.tabs.find((candidate) => candidate.id === String(id ?? ''));
+  if (!tab || tab.kind !== 'service') {
+    return { ok: false };
+  }
+  tabFailures.delete(tab.id);
+  const service = catalogOf(lastSnapshot).find((candidate) => candidate.id === tab.serviceId);
+  if (service && service.kind === 'machine') {
+    const result = await showWorkspace(service.host);
+    if (result && result.ok === false) {
+      tabFailures.set(tab.id, { reason: result.reason ?? '这台机器现在没有应答', code: '' });
+    }
+  }
+  pushTabs();
+  return { ok: true };
+});
+ipcMain.handle('tabs:reorder', async (_event, from, to) => {
+  tabsState = Tabs.reorder(tabsState, Number(from), Number(to));
+  pushTabs();
+  return { ok: true };
+});
 // The one place a missing runtime is answered: a command in the person's own terminal.
 ipcMain.handle('run-installer', () => runInstallerInTerminal(localCommand));
 
 // The renderer owns the layout, so it reports where the detail pane is; the native
 // view is placed there and re-placed whenever that changes.
+ipcMain.on('copy-diagnostics', () => {
+  const snapshot = lastSnapshot;
+  clipboard.writeText(
+    JSON.stringify({ state: snapshot?.state, detail: snapshot?.detail, local: snapshot?.local, fleet: snapshot?.fleet, proxy: snapshot?.proxy, kernel: kernelStatus, tabs: tabsPayload() }, null, 2),
+  );
+});
+
 ipcMain.on('detail-bounds', (_event, rect) => {
   if (!rect || typeof rect !== 'object') {
     return;
@@ -2046,6 +2495,22 @@ ipcMain.handle('open-external', async (_event, value) => {
   return { opened: true };
 });
 ipcMain.handle('scheme', () => ({ scheme: schemeChoice === 'system' ? '' : schemeChoice, label: schemeLabel() }));
+/**
+ * The operating system can change appearance while the window is open. The renderer
+ * follows `prefers-color-scheme` on its own, but a fixed choice has to be re-sent, and
+ * the window background has to be repainted or a dark window shows a light flash.
+ */
+nativeTheme.on('updated', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  mainWindow.setBackgroundColor(windowBackground());
+  mainWindow.webContents.send('scheme-changed', {
+    scheme: schemeChoice === 'system' ? '' : schemeChoice,
+    label: schemeLabel(),
+  });
+});
+
 ipcMain.on('appearance-menu', () => {
   const menu = Menu.buildFromTemplate(
     [

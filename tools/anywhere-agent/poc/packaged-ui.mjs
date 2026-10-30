@@ -149,31 +149,44 @@ try {
   check('the running window reports the manifest version', settled?.version, manifest.version);
   check('the running window reports the git build number', settled?.build, String(manifest.build));
 
-  await page.waitForFunction(() => document.getElementById('status-label')?.innerText === '本机可用', null, { timeout: 15_000 });
-  check('status line', await page.locator('#status-label').innerText(), '本机可用');
-  // The rail and the home are this build's screen; a bundle taken before them would show
-  // the old two-pane shell with no rail and a workspace covering the pane.
-  check('the rail shipped', await page.locator('.rail .rail-button').count(), 4);
-  check('the rail marks the home', await page.locator('#rail-machines').getAttribute('data-active'), 'true');
-  check('the front door shipped', await page.locator('#state-panel').getAttribute('data-kind'), 'home');
-  check('the home names the machine', /打开 .* 的工作区/.test(await page.locator('#state-actions button').first().innerText()), true);
-  check('this machine has a row', await page.locator('#groups .machine').count(), 1);
+  // The screen this build ships: a tab strip with the home in it, one card for this
+  // machine, and the settings tab carrying the diagnostics. A bundle taken before the tab
+  // shell would have none of these and a workspace covering the pane.
+  await page.waitForFunction(() => document.querySelectorAll('.tab').length > 0, null, { timeout: 20_000 });
+  check('the tab strip shipped', await page.locator('.tab').count(), 1);
+  check('the tab is the home', await page.locator('.tab[data-active="true"] .tab-title').innerText(), '首页');
+  check('the home shipped', await page.locator('#home').isVisible(), true);
+  check('a healthy packaged client shows no banner', await page.locator('#banner').isHidden(), true);
+  check('this machine has a card', await page.locator('.card[data-service-id^="machine:"]').count(), 1);
+  check(
+    'the card carries the local flag',
+    await page.locator('.card[data-service-id^="machine:"] .card-flag').first().innerText(),
+    '本机',
+  );
 
   const unread = await readLocalFeed(watermark);
-  const badge = page.locator('#groups .machine-unread');
+  const badge = page.locator('.card[data-service-id^="machine:"] .card-badge');
   if (unread > 0) {
     check('the badge matches the running host', await badge.first().innerText(), String(unread));
   } else {
     check('no badge when the host reports nothing', await badge.count(), 0);
   }
 
-  await page.locator('#state-actions button').first().click();
-  await page.waitForFunction(() => document.getElementById('state-panel')?.hidden === true, null, { timeout: 20_000 });
+  await page.click('.card[data-service-id^="machine:"]');
+  await page.waitForFunction(() => document.querySelectorAll('.tab').length === 2, null, { timeout: 25_000 });
   const opened = await snapshot();
-  check('the packaged app opens a workspace', opened?.workspace !== null && opened?.workspace !== undefined, true);
-  check('the rail follows into the workspace', await page.locator('#rail-session').getAttribute('data-active'), 'true');
+  check('the packaged app opens a workspace tab', opened?.workspace !== null && opened?.workspace !== undefined, true);
+  check('the workspace tab is active', await page.locator('.tab[data-active="true"] .tab-title').innerText() !== '首页', true);
   await page.screenshot({ path: join(args.out, 'packaged-ui.png') });
   process.stdout.write(`screenshot: ${join(args.out, 'packaged-ui.png')}\n`);
+
+  // The diagnostics travel with the bundle: the settings tab is where a person reads
+  // which build they are looking at.
+  await page.click('#open-settings');
+  await page.waitForFunction(() => !document.getElementById('settings')?.hidden, null, { timeout: 10_000 });
+  const facts = await page.locator('#settings .row .value').allInnerTexts();
+  check('the version in the settings tab is the manifest version', facts[0], manifest.version);
+  check('the settings tab reports the host', facts.some((line) => /常驻|外部托管/.test(line)), true);
 } catch (error) {
   failures += 1;
   process.stdout.write(`run failed: ${error?.message ?? error}\n`);

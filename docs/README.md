@@ -24,6 +24,7 @@ This page is the map of the repository's long-lived documentation. Each document
 | Development workflow | [docs/development.md](development.md), [docs/i18n.md](i18n.md) |
 | Remote and self-hosted deployment | [docs/remote-access.md](remote-access.md), [tools/dsh-netbird/README.md](../tools/dsh-netbird/README.md) |
 | Release and client packaging | [docs/publish-prep.md](publish-prep.md), [docs/client-release.md](client-release.md) |
+| Desktop client design and delivery | [tools/anywhere-agent/DESIGN.md](../tools/anywhere-agent/DESIGN.md), [product design spec](../tools/anywhere-agent/review/desktop-product-design-spec-2026-10-30.md), [delivery plan](../tools/anywhere-agent/review/desktop-intranet-browser-plan-2026-10-30.md) |
 | Issue and pull request policy | [ISSUE_TRIAGE.md](../ISSUE_TRIAGE.md), [PR_TRIAGE.md](../PR_TRIAGE.md) |
 
 ## Language policy
