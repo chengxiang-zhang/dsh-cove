@@ -1,7 +1,7 @@
 {
   "name": "@dsh-cove/dsh-web-all",
   "description": "The single runtime entity for the dsh-cove DSH Web GUI extension suite: one entity row hosting sidebar, settings, conversation and right-pane modules plus every host service domain.",
-  "version": "0.4.10",
+  "version": "0.5.0",
   "type": "module",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
