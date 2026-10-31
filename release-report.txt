@@ -1,0 +1,89 @@
+workflow: release
+tag: v0.5.0
+commit: 4555fb8debb9c447f39a83b5e4c47759bf625ebf
+smoke: success
+release: success
+candidate: success
+verify: success
+run: https://github.com/chengxiang-zhang/dsh-cove/actions/runs/41156956547
+
+--- jobs ---
+Build, gates and real packed-artifact smoke: completed/success
+GitHub Release with the gated tarballs: completed/success
+Publish candidate (or verify existing immutable version): completed/success
+Exact registry smoke and promote latest: completed/success
+Report the outcome to the ci-status-release branch: in_progress/
+
+--- steps ---
+Build, gates and real packed-artifact smoke :: Set up job: success
+Build, gates and real packed-artifact smoke :: Pull rhysd/actionlint:latest: success
+Build, gates and real packed-artifact smoke :: Checkout: success
+Build, gates and real packed-artifact smoke :: Require the tag to be on main: success
+Build, gates and real packed-artifact smoke :: Lint GitHub Actions workflows: success
+Build, gates and real packed-artifact smoke :: Setup pnpm: success
+Build, gates and real packed-artifact smoke :: Setup Node.js: success
+Build, gates and real packed-artifact smoke :: Install dependencies: success
+Build, gates and real packed-artifact smoke :: Verify package versions match the tag: success
+Build, gates and real packed-artifact smoke :: Typecheck: success
+Build, gates and real packed-artifact smoke :: Build: success
+Build, gates and real packed-artifact smoke :: Tests: success
+Build, gates and real packed-artifact smoke :: Script tests: success
+Build, gates and real packed-artifact smoke :: Runtime dependency guard: success
+Build, gates and real packed-artifact smoke :: Generate release notes: success
+Build, gates and real packed-artifact smoke :: Install dsh CLI (runtime host floor): success
+Build, gates and real packed-artifact smoke :: Cache Playwright browsers: success
+Build, gates and real packed-artifact smoke :: Install Playwright Chromium: success
+Build, gates and real packed-artifact smoke :: Pack the release candidate once: success
+Build, gates and real packed-artifact smoke :: Pre-publish real pack mount + headless-render smoke: success
+Build, gates and real packed-artifact smoke :: Report the smoke output: success
+Build, gates and real packed-artifact smoke :: Upload gated release inputs: success
+Build, gates and real packed-artifact smoke :: Post Cache Playwright browsers: success
+Build, gates and real packed-artifact smoke :: Post Setup Node.js: success
+Build, gates and real packed-artifact smoke :: Post Setup pnpm: success
+Build, gates and real packed-artifact smoke :: Post Checkout: success
+Build, gates and real packed-artifact smoke :: Complete job: success
+GitHub Release with the gated tarballs :: Set up job: success
+GitHub Release with the gated tarballs :: Checkout: success
+GitHub Release with the gated tarballs :: Download gated release inputs: success
+GitHub Release with the gated tarballs :: Name the tarball after the package it carries: success
+GitHub Release with the gated tarballs :: Create or reconcile the GitHub Release: success
+GitHub Release with the gated tarballs :: Post Checkout: success
+GitHub Release with the gated tarballs :: Complete job: success
+Publish candidate (or verify existing immutable version) :: Set up job: success
+Publish candidate (or verify existing immutable version) :: Checkout: success
+Publish candidate (or verify existing immutable version) :: Setup Node.js: success
+Publish candidate (or verify existing immutable version) :: Use an npm that speaks trusted publishing: success
+Publish candidate (or verify existing immutable version) :: Download gated release inputs: success
+Publish candidate (or verify existing immutable version) :: Publish candidates without changing latest: success
+Publish candidate (or verify existing immutable version) :: Post Setup Node.js: success
+Publish candidate (or verify existing immutable version) :: Post Checkout: success
+Publish candidate (or verify existing immutable version) :: Complete job: success
+Exact registry smoke and promote latest :: Set up job: success
+Exact registry smoke and promote latest :: Checkout: success
+Exact registry smoke and promote latest :: Setup pnpm: success
+Exact registry smoke and promote latest :: Setup Node.js: success
+Exact registry smoke and promote latest :: Use an npm that speaks trusted publishing: success
+Exact registry smoke and promote latest :: Install dependencies: success
+Exact registry smoke and promote latest :: Install dsh CLI (runtime host floor): success
+Exact registry smoke and promote latest :: Cache Playwright browsers: success
+Exact registry smoke and promote latest :: Install Playwright Chromium: success
+Exact registry smoke and promote latest :: Download gated release inputs: success
+Exact registry smoke and promote latest :: Download and verify the exact registry artifact: success
+Exact registry smoke and promote latest :: Registry mount + headless-render smoke: success
+Exact registry smoke and promote latest :: Promote the verified artifact to latest: success
+Exact registry smoke and promote latest :: Report a promotion npm did not allow: skipped
+Exact registry smoke and promote latest :: Upload Playwright report on failure: skipped
+Exact registry smoke and promote latest :: Record gated tarball checksum: success
+Exact registry smoke and promote latest :: Post Cache Playwright browsers: success
+Exact registry smoke and promote latest :: Post Setup Node.js: success
+Exact registry smoke and promote latest :: Post Setup pnpm: success
+Exact registry smoke and promote latest :: Post Checkout: success
+Exact registry smoke and promote latest :: Complete job: success
+Report the outcome to the ci-status-release branch :: Set up job: success
+Report the outcome to the ci-status-release branch :: Checkout: success
+Report the outcome to the ci-status-release branch :: Write and push the report: 
+Report the outcome to the ci-status-release branch :: Post Checkout: 
+
+--- release assets ---
+AnywhereWork-0.5.0.apk
+dsh-cove-dsh-web-all-0.5.0.tgz
