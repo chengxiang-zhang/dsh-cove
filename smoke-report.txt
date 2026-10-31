@@ -1,0 +1,86 @@
+tag: v0.5.0
+commit: 4555fb8debb9c447f39a83b5e4c47759bf625ebf
+mount lane: success
+run: https://github.com/chengxiang-zhang/dsh-cove/actions/runs/41156956547
+
+--- smoke.log (tail) ---
+node_modules/cpu-features install: rm -f Release/obj.target/deps/cpu_features/cpu_features.a Release/obj.target/deps/cpu_features/cpu_features.a.ar-file-list; mkdir -p `dirname Release/obj.target/deps/cpu_features/cpu_features.a`
+node_modules/cpu-features install: ar crs Release/obj.target/deps/cpu_features/cpu_features.a @Release/obj.target/deps/cpu_features/cpu_features.a.ar-file-list
+node_modules/cpu-features install:   COPY Release/cpu_features.a
+node_modules/cpu-features install:   CXX(target) Release/obj.target/cpufeatures/src/binding.o
+node_modules/cpu-features install: In file included from ../src/binding.cc:1:
+node_modules/cpu-features install: /home/runner/.cache/node-gyp/22.23.4/include/node/node.h:1243:7: warning: cast between incompatible function types from ‘void (*)(Nan::ADDON_REGISTER_FUNCTION_ARGS_TYPE)’ {aka ‘void (*)(v8::Local<v8::Object>)’} to ‘node::addon_register_func’ {aka ‘void (*)(v8::Local<v8::Object>, v8::Local<v8::Value>, void*)’} [-Wcast-function-type]
+node_modules/cpu-features install:  1243 |       (node::addon_register_func) (regfunc),                          \
+node_modules/cpu-features install:       |       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+node_modules/cpu-features install: /home/runner/.cache/node-gyp/22.23.4/include/node/node.h:1277:3: note: in expansion of macro ‘NODE_MODULE_X’
+node_modules/cpu-features install:  1277 |   NODE_MODULE_X(modname, regfunc, NULL, 0)  // NOLINT (readability/null_usage)
+node_modules/cpu-features install:       |   ^~~~~~~~~~~~~
+node_modules/cpu-features install: ../src/binding.cc:151:1: note: in expansion of macro ‘NODE_MODULE’
+node_modules/cpu-features install:   151 | NODE_MODULE(cpufeatures, init)
+node_modules/cpu-features install:       | ^~~~~~~~~~~
+node_modules/cpu-features install:   SOLINK_MODULE(target) Release/obj.target/cpufeatures.node
+node_modules/cpu-features install:   COPY Release/cpufeatures.node
+node_modules/cpu-features install: make: Leaving directory '/tmp/dsh-web-ui-e2e.GyMegZ/home/profiles/web/node_modules/cpu-features/build'
+node_modules/cpu-features install: gyp info ok 
+node_modules/cpu-features install: Done
+node_modules/ssh2 install$ node install.js
+node_modules/ssh2 install: gyp info it worked if it ends with ok
+node_modules/ssh2 install: gyp info using node-gyp@12.3.0
+node_modules/ssh2 install: gyp info using node@22.23.4 | linux | x64
+node_modules/ssh2 install: gyp info find Python using Python version 3.14.4 found at "/usr/bin/python3"
+node_modules/ssh2 install: gyp info spawn /usr/bin/python3
+node_modules/ssh2 install: gyp info spawn args [
+node_modules/ssh2 install: gyp info spawn args '/home/runner/setup-pnpm/node_modules/.pnpm/pnpm@11.28.10/node_modules/pnpm/dist/node_modules/node-gyp/gyp/gyp_main.py',
+node_modules/ssh2 install: gyp info spawn args 'binding.gyp',
+node_modules/ssh2 install: gyp info spawn args '-f',
+node_modules/ssh2 install: gyp info spawn args 'make',
+node_modules/ssh2 install: gyp info spawn args '-I',
+node_modules/ssh2 install: gyp info spawn args '/tmp/dsh-web-ui-e2e.GyMegZ/home/profiles/web/node_modules/ssh2/lib/protocol/crypto/build/config.gypi',
+node_modules/ssh2 install: gyp info spawn args '-I',
+node_modules/ssh2 install: gyp info spawn args '/home/runner/setup-pnpm/node_modules/.pnpm/pnpm@11.28.10/node_modules/pnpm/dist/node_modules/node-gyp/addon.gypi',
+node_modules/ssh2 install: gyp info spawn args '-I',
+node_modules/ssh2 install: gyp info spawn args '/home/runner/.cache/node-gyp/22.23.4/include/node/common.gypi',
+node_modules/ssh2 install: gyp info spawn args '-Dlibrary=shared_library',
+node_modules/ssh2 install: gyp info spawn args '-Dvisibility=default',
+node_modules/ssh2 install: gyp info spawn args '-Dnode_root_dir=/home/runner/.cache/node-gyp/22.23.4',
+node_modules/ssh2 install: gyp info spawn args '-Dnode_gyp_dir=/home/runner/setup-pnpm/node_modules/.pnpm/pnpm@11.28.10/node_modules/pnpm/dist/node_modules/node-gyp',
+node_modules/ssh2 install: gyp info spawn args '-Dnode_lib_file=/home/runner/.cache/node-gyp/22.23.4/<(target_arch)/node.lib',
+node_modules/ssh2 install: gyp info spawn args '-Dmodule_root_dir=/tmp/dsh-web-ui-e2e.GyMegZ/home/profiles/web/node_modules/ssh2/lib/protocol/crypto',
+node_modules/ssh2 install: gyp info spawn args '-Dnode_engine=v8',
+node_modules/ssh2 install: gyp info spawn args '--depth=.',
+node_modules/ssh2 install: gyp info spawn args '--no-parallel',
+node_modules/ssh2 install: gyp info spawn args '--generator-output',
+node_modules/ssh2 install: gyp info spawn args 'build',
+node_modules/ssh2 install: gyp info spawn args '-Goutput_dir=.'
+node_modules/ssh2 install: gyp info spawn args ]
+node_modules/ssh2 install: gyp info spawn make
+node_modules/ssh2 install: gyp info spawn args [ 'BUILDTYPE=Release', '-C', 'build' ]
+node_modules/ssh2 install: make: Entering directory '/tmp/dsh-web-ui-e2e.GyMegZ/home/profiles/web/node_modules/ssh2/lib/protocol/crypto/build'
+node_modules/ssh2 install:   CXX(target) Release/obj.target/sshcrypto/src/binding.o
+node_modules/ssh2 install:   SOLINK_MODULE(target) Release/obj.target/sshcrypto.node
+node_modules/ssh2 install:   COPY Release/sshcrypto.node
+node_modules/ssh2 install: make: Leaving directory '/tmp/dsh-web-ui-e2e.GyMegZ/home/profiles/web/node_modules/ssh2/lib/protocol/crypto/build'
+node_modules/ssh2 install: gyp info ok 
+node_modules/ssh2 install: Succeeded in building optional crypto binding
+node_modules/ssh2 install: Done
+
+dependencies:
++ @dsh-cove/dsh-web-all 0.5.0
+
+Done in 12.1s using pnpm v11.28.10
+[32m[e2e-mount][0m 挂载已注册：dsh.profile.bundles 包含 @dsh-cove/dsh-web-all
+[32m[e2e-mount][0m 启动 dsh web（port=0）...
+[32m[e2e-mount][0m dsh web 就绪：http://127.0.0.1:43013/?token=DhgRuHZd_mivi1rJF82bixJKEGGlAAFAn5RhQfVgKbA（pid 7745）
+[32m[e2e-mount][0m 运行 Playwright 无头渲染 lane...
+[e2e-mount] mem:                total        used        free      shared  buff/cache   available
+[e2e-mount] mem: Mem:           15983        1627       10961          50        3789       14355
+[e2e-mount] mem: Swap:           3071           0        3071
+[e2e-mount] playwright Version 1.62.1
+
+Running 1 test using 1 worker
+
+  ✓  1 tests/e2e/mount.e2e.ts:23:5 › single entity mounts its position modules without browser errors (4.3s)
+
+  1 passed (5.1s)
+[32m[e2e-mount][0m Playwright 退出码：0
+[32m[e2e-mount][0m 通过：dsh-web-all 挂载到真实 DSH 后无头渲染未崩溃
