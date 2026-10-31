@@ -188,7 +188,11 @@ function renderTabs(tabs, services) {
     glyph.className = 'mono';
     if (tab.kind === 'home' || tab.kind === 'settings' || !service) {
       glyph.style.background = tab.kind === 'home' ? '#0F766E' : '#475569';
-      glyph.textContent = tab.kind === 'home' ? '⌂' : '⚙';
+      glyph.innerHTML =
+        tab.kind === 'home'
+          ? '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 7.4 8 2.8l5.2 4.6V13a.6.6 0 0 1-.6.6h-3v-3.4H6.4v3.4h-3A.6.6 0 0 1 2.8 13Z"/></svg>'
+          : '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.9v1.8M8 12.3v1.8M1.9 8h1.8M12.3 8h1.8M3.6 3.6l1.3 1.3M11.1 11.1l1.3 1.3M12.4 3.6l-1.3 1.3M4.9 11.1l-1.3 1.3"/></svg>';
+      glyph.style.color = '#ffffff';
     } else {
       glyph.style.background = colorOf(service.id);
       glyph.textContent = monogramOf(service);
