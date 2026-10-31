@@ -1,0 +1,129 @@
+workflow: android-release
+tag: v0.5.0
+commit: 4555fb8debb9c447f39a83b5e4c47759bf625ebf
+outcome: success
+apk: AnywhereWork-0.5.0.apk
+run: https://github.com/chengxiang-zhang/dsh-cove/actions/runs/41156956420
+
+--- steps ---
+Build the arm64 APK and attach it to the release :: Set up job: success
+Build the arm64 APK and attach it to the release :: Checkout: success
+Build the arm64 APK and attach it to the release :: Require the tag to be on main: success
+Build the arm64 APK and attach it to the release :: Setup Java: success
+Build the arm64 APK and attach it to the release :: Setup Node.js: success
+Build the arm64 APK and attach it to the release :: Install the SDK pieces this app pins: success
+Build the arm64 APK and attach it to the release :: Cache Gradle: success
+Build the arm64 APK and attach it to the release :: Point the project at this runner's SDK: success
+Build the arm64 APK and attach it to the release :: Install the JavaScript dependencies the bundle needs: success
+Build the arm64 APK and attach it to the release :: Build the release APK: success
+Build the arm64 APK and attach it to the release :: Name the artifact after the version it carries: success
+Build the arm64 APK and attach it to the release :: Attach the APK to this tag's release: success
+Build the arm64 APK and attach it to the release :: Report the outcome to the ci-status-android branch: 
+Build the arm64 APK and attach it to the release :: Post Cache Gradle: 
+Build the arm64 APK and attach it to the release :: Post Setup Node.js: 
+Build the arm64 APK and attach it to the release :: Post Setup Java: 
+Build the arm64 APK and attach it to the release :: Post Checkout: 
+
+--- sdk.log (tail) ---
+sdk: /usr/local/lib/android/sdk
+sdkmanager: /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+yes: standard output: Broken pipe
+Loading package information...                                                  Loading local repository...                                                     [                                       ] 3% Loading local repository...        [                                       ] 3% Fetch remote repository...         [=                                      ] 3% Fetch remote repository...         [=                                      ] 4% Fetch remote repository...         [=                                      ] 5% Fetch remote repository...         [==                                     ] 5% Fetch remote repository...         [==                                     ] 6% Fetch remote repository...         [==                                     ] 7% Fetch remote repository...         [==                                     ] 7% Computing updates...               [===                                    ] 8% Computing updates...               [===                                    ] 10% Computing updates...              [===                                    ] 10% Installing CMake 3.22.1           [===                                    ] 10% Downloading cmake-3.22.1-linux.zip[====                                   ] 10% Downloading cmake-3.22.1-linux.zip[====                                   ] 11% Downloading cmake-3.22.1-linux.zip[====                                   ] 12% Downloading cmake-3.22.1-linux.zip[=====                                  ] 13% Downloading cmake-3.22.1-linux.zip[=====                                  ] 14% Downloading cmake-3.22.1-linux.zip[=====                                  ] 15% Downloading cmake-3.22.1-linux.zip[======                                 ] 15% Downloading cmake-3.22.1-linux.zip[======                                 ] 16% Downloading cmake-3.22.1-linux.zip[======                                 ] 17% Downloading cmake-3.22.1-linux.zip[=======                                ] 18% Downloading cmake-3.22.1-linux.zip[=======                                ] 19% Downloading cmake-3.22.1-linux.zip[=======                                ] 20% Downloading cmake-3.22.1-linux.zip[========                               ] 20% Downloading cmake-3.22.1-linux.zip[========                               ] 21% Downloading cmake-3.22.1-linux.zip[========                               ] 21% Unzipping...                      [========                               ] 21% Unzipping... bin/cmake            [========                               ] 22% Unzipping... bin/cmake            [=========                              ] 23% Unzipping... bin/cmake            [=========                              ] 24% Unzipping... bin/cmake            [=========                              ] 24% Unzipping... bin/ctest            [=========                              ] 25% Unzipping... bin/ctest            [==========                             ] 25% Unzipping... bin/ctest            [==========                             ] 26% Unzipping... bin/ctest            [==========                             ] 27% Unzipping... bin/ctest            [===========                            ] 28% Unzipping... bin/ctest            [===========                            ] 28% Unzipping... bin/cpack            [===========                            ] 29% Unzipping... bin/cpack            [===========                            ] 30% Unzipping... bin/cpack            [============                           ] 30% Unzipping... bin/cpack            [============                           ] 31% Unzipping... bin/cpack            [============                           ] 31% Unzipping... share/vim/vimfiles/in[============                           ] 31% Unzipping... share/vim/vimfiles/sy[============                           ] 31% Unzipping... share/aclocal/cmake.m[============                           ] 31% Unzipping... share/emacs/site-lisp[============                           ] 31% Unzipping... share/cmake-3.22/incl[============                           ] 31% Unzipping... share/cmake-3.22/Help[============                           ] 31% Unzipping... share/cmake-3.22/Temp[============                           ] 32% Unzipping... share/cmake-3.22/Temp[============                           ] 32% Unzipping... share/cmake-3.22/Modu[============                           ] 32% Unzipping... share/bash-completion[============                           ] 32% Unzipping... doc/cmake-3.22/Copyri[============                           ] 32% Unzipping... doc/cmake-3.22/cmzlib[============                           ] 32% Unzipping... doc/cmake-3.22/cmzstd[============                           ] 32% Unzipping... doc/cmake-3.22/cmnght[============                           ] 32% Unzipping... doc/cmake-3.22/cmsys/[============                           ] 32% Unzipping... doc/cmake-3.22/cmcurl[============                           ] 32% Unzipping... doc/cmake-3.22/cmlibr[============                           ] 32% Unzipping... doc/cmake-3.22/cmliba[============                           ] 32% Unzipping... doc/cmake-3.22/cmlibl[============                           ] 32% Unzipping... doc/cmake-3.22/cmlibu[============                           ] 32% Unzipping... doc/openssl-1.1.1l/LI[============                           ] 32% Unzipping... source.properties    [============                           ] 32% Unzipping... bin/ninja            [============                           ] 32% Unzipping... doc/ninja/LICENSE    [============                           ] 32% Unzipping... share/cmake-3.22/Modu[=============                          ] 33% Unzipping... share/cmake-3.22/Modu[=====================                  ] 55% Unzipping... share/cmake-3.22/Modu[=====================                  ] 55% Installing NDK (Side by side) 27.1[=====================                  ] 55% Downloading android-ndk-r27b-linux[======================                 ] 55% Downloading android-ndk-r27b-linux[======================                 ] 56% Downloading android-ndk-r27b-linux[======================                 ] 57% Downloading android-ndk-r27b-linux[=======================                ] 58% Downloading android-ndk-r27b-linux[=======================                ] 59% Downloading android-ndk-r27b-linux[=======================                ] 60% Downloading android-ndk-r27b-linux[========================               ] 60% Downloading android-ndk-r27b-linux[========================               ] 61% Downloading android-ndk-r27b-linux[========================               ] 62% Downloading android-ndk-r27b-linux[=========================              ] 63% Downloading android-ndk-r27b-linux[=========================              ] 64% Downloading android-ndk-r27b-linux[=========================              ] 65% Downloading android-ndk-r27b-linux[==========================             ] 65% Downloading android-ndk-r27b-linux[==========================             ] 66% Downloading android-ndk-r27b-linux[==========================             ] 66% Unzipping... share/cmake-3.22/Modu[==========================             ] 66% Unzipping... android-ndk-r27b/    [==========================             ] 66% Unzipping... android-ndk-r27b/READ[==========================             ] 66% Unzipping... android-ndk-r27b/meta[==========================             ] 66% Unzipping... android-ndk-r27b/shad[==========================             ] 66% Unzipping... android-ndk-r27b/ndk-[==========================             ] 66% Unzipping... android-ndk-r27b/wrap[==========================             ] 66% Unzipping... android-ndk-r27b/ndk-[==========================             ] 66% Unzipping... android-ndk-r27b/tool[==========================             ] 67% Unzipping... android-ndk-r27b/tool[===========================            ] 68% Unzipping... android-ndk-r27b/tool[===========================            ] 69% Unzipping... android-ndk-r27b/tool[===========================            ] 70% Unzipping... android-ndk-r27b/tool[============================           ] 70% Unzipping... android-ndk-r27b/tool[============================           ] 71% Unzipping... android-ndk-r27b/tool[============================           ] 72% Unzipping... android-ndk-r27b/tool[=============================          ] 73% Unzipping... android-ndk-r27b/tool[=============================          ] 74% Unzipping... android-ndk-r27b/tool[=============================          ] 75% Unzipping... android-ndk-r27b/tool[==============================         ] 75% Unzipping... android-ndk-r27b/tool[==============================         ] 76% Unzipping... android-ndk-r27b/tool[==============================         ] 77% Unzipping... android-ndk-r27b/tool[==============================         ] 77% Unzipping... android-ndk-r27b/buil[==============================         ] 77% Unzipping... android-ndk-r27b/sour[==============================         ] 77% Unzipping... android-ndk-r27b/NOTI[==============================         ] 77% Unzipping... android-ndk-r27b/ndk-[==============================         ] 77% Unzipping... android-ndk-r27b/NOTI[==============================         ] 77% Unzipping... android-ndk-r27b/pyth[==============================         ] 77% Unzipping... android-ndk-r27b/preb[==============================         ] 77% Unzipping... android-ndk-r27b/ndk-[==============================         ] 77% Unzipping... android-ndk-r27b/sour[==============================         ] 77% Unzipping... android-ndk-r27b/simp[==============================         ] 77% Unzipping... android-ndk-r27b/CHAN[==============================         ] 78% Unzipping... android-ndk-r27b/CHAN[=======================================] 100% Unzipping... android-ndk-r27b/CHA
+
+/usr/local/lib/android/sdk/cmake:
+3.22.1
+3.31.5
+4.1.2
+
+/usr/local/lib/android/sdk/ndk:
+27.1.12297006
+27.3.13750724
+29.0.14206865
+30.0.16248370
+
+/usr/local/lib/android/sdk/platforms:
+android-34
+android-34-ext10
+android-34-ext11
+android-34-ext12
+android-34-ext8
+android-35
+android-35-ext14
+android-35-ext15
+android-36
+android-36-ext18
+android-36-ext19
+android-36.1
+android-37.0
+android-37.1
+android-37.2
+android-37.2-beta1
+android-37.2-beta2
+android-37.2-beta3
+
+--- apk-build.log (tail) ---
+> Task :react-native-safe-area-context:stripReleaseDebugSymbols NO-SOURCE
+> Task :react-native-safe-area-context:copyReleaseJniLibsProjectAndLocalJars
+> Task :react-native-safe-area-context:extractDeepLinksForAarRelease
+> Task :app:compileReleaseArtProfile
+> Task :react-native-safe-area-context:extractReleaseAnnotations
+> Task :react-native-safe-area-context:mergeReleaseGeneratedProguardFiles
+> Task :react-native-safe-area-context:mergeReleaseConsumerProguardFiles
+> Task :react-native-webview:stripReleaseDebugSymbols NO-SOURCE
+> Task :react-native-webview:checkReleaseAarMetadata
+> Task :react-native-webview:copyReleaseJniLibsProjectAndLocalJars
+> Task :react-native-webview:extractDeepLinksForAarRelease
+> Task :react-native-webview:extractReleaseAnnotations
+> Task :react-native-webview:mergeReleaseGeneratedProguardFiles
+> Task :react-native-webview:mergeReleaseConsumerProguardFiles
+> Task :react-native-webview:mergeReleaseJavaResource
+> Task :react-native-safe-area-context:mergeReleaseJavaResource
+> Task :react-native-safe-area-context:syncReleaseLibJars
+> Task :react-native-safe-area-context:bundleReleaseLocalLintAar
+> Task :react-native-webview:syncReleaseLibJars
+> Task :react-native-webview:bundleReleaseLocalLintAar
+> Task :react-native-safe-area-context:writeReleaseLintModelMetadata
+> Task :react-native-webview:writeReleaseLintModelMetadata
+> Task :react-native-safe-area-context:generateReleaseLintVitalModel
+> Task :react-native-webview:generateReleaseLintVitalModel
+> Task :app:processReleaseJavaRes
+> Task :app:optimizeReleaseResources
+> Task :app:collectReleaseDependencies
+> Task :app:mergeReleaseJavaResource
+> Task :app:sdkReleaseDependencyData
+> Task :app:validateSigningRelease
+> Task :app:writeReleaseAppMetadata
+> Task :app:writeReleaseSigningConfigVersions
+> Task :react-native-safe-area-context:lintVitalAnalyzeRelease
+> Task :react-native-webview:lintVitalAnalyzeRelease
+The Daemon will expire after the build after running out of JVM Metaspace.
+The project memory settings are likely not configured or are configured to an insufficient value.
+The daemon will restart for the next build, which may increase subsequent build times.
+These settings can be adjusted by setting 'org.gradle.jvmargs' in 'gradle.properties'.
+The currently configured max heap space is '2 GiB' and the configured max metaspace is '512 MiB'.
+For more information on how to set these values, please refer to https://docs.gradle.org/9.4.1/userguide/build_environment.html#sec:configuring_jvm_memory in the Gradle documentation.
+To disable this warning, set 'org.gradle.daemon.performance.disable-logging=true'.
+Daemon will be stopped at the end of the build after running out of JVM Metaspace
+> Task :app:lintVitalAnalyzeRelease
+> Task :app:lintVitalReportRelease
+> Task :app:lintVitalRelease
+> Task :app:packageRelease
+> Task :app:createReleaseApkListingFileRedirect
+> Task :app:assembleRelease
+
+[Incubating] Problems report is available at: file:///home/runner/work/dsh-cove/dsh-cove/tools/netbird-client/android/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.4.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 4m 39s
+149 actionable tasks: 149 executed
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.4.1/userguide/configuration_cache_enabling.html
+
+
+--- release assets ---
+AnywhereWork-0.5.0.apk
+dsh-cove-dsh-web-all-0.5.0.tgz
