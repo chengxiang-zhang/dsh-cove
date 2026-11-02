@@ -3,12 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import {
-  WAKE_STALE_AFTER_MS,
-  shouldReloadOnRefresh,
-  shouldReloadOnWake,
-  workspacePageAction,
-} from '../src/view-freshness.mjs';
+import { shouldReloadOnRefresh, workspacePageAction } from '../src/view-freshness.mjs';
 
 const moduleSource = readFileSync(fileURLToPath(new URL('../src/view-freshness.mjs', import.meta.url)), 'utf8');
 const shellSource = readFileSync(fileURLToPath(new URL('../shell/main.mjs', import.meta.url)), 'utf8');
@@ -26,9 +21,10 @@ test('a page that already exists is reused, however long it was off screen', () 
 });
 
 test('the decision has no notion of elapsed time', () => {
-  // The old timer reloaded a page hidden for five minutes and destroyed one hidden for
-  // ten, guessing at a dead update socket. Both were removed: a hidden page keeps its
-  // socket, and the DSH client reconnects one that dies.
+  // The old timers reloaded a page hidden for five minutes, destroyed one hidden for ten,
+  // and reloaded the page on screen after a long sleep. All three were removed: a hidden
+  // page keeps its socket, Chromium reclaims background memory, and the DSH client
+  // reconnects a socket that died with the suspend.
   assert.equal(
     workspacePageAction({ hasPage: true, hiddenSince: 1, now: 9_999_999 }),
     'reuse',
@@ -36,8 +32,8 @@ test('the decision has no notion of elapsed time', () => {
   );
   assert.doesNotMatch(
     moduleSource,
-    /HIDDEN_STALE_AFTER_MS|hiddenSince/,
-    'no hidden-duration branch may remain in the decision module',
+    /HIDDEN_STALE_AFTER_MS|hiddenSince|WAKE_STALE|shouldReloadOnWake/,
+    'no hidden-duration or wake branch may remain in the decision module',
   );
 });
 
@@ -52,17 +48,6 @@ test('the new-session entry loads the front door, not a reuse of wherever the pa
   assert.equal(workspacePageAction({ hasPage: true, fresh: true }), 'load');
 });
 
-test('a machine that slept reloads the page on screen, a brief sleep does not', () => {
-  assert.equal(shouldReloadOnWake({ hasPage: true, suspendedMs: WAKE_STALE_AFTER_MS }), true);
-  assert.equal(shouldReloadOnWake({ hasPage: true, suspendedMs: WAKE_STALE_AFTER_MS - 1 }), false);
-  assert.equal(shouldReloadOnWake({ hasPage: false, suspendedMs: 3_600_000 }), false);
-  assert.equal(
-    shouldReloadOnWake({ hasPage: true, suspendedMs: Number.NaN }),
-    false,
-    'an unknown suspend duration is not evidence of a dead page',
-  );
-});
-
 test('an explicit refresh reloads a loaded page and does nothing without one', () => {
   assert.equal(shouldReloadOnRefresh({ hasPage: true }), true);
   assert.equal(shouldReloadOnRefresh({ hasPage: false }), false);
@@ -71,42 +56,44 @@ test('an explicit refresh reloads a loaded page and does nothing without one', (
 // The policy only matters if the shell actually asks it. Text-level gates are how this
 // package pins behaviour that lives in the Electron main process, which no unit test can
 // import (it needs a running app). Each assertion below is one call site that, if dropped,
-// puts the frozen page back.
-test('the shell wires the policy into every path that can leave a page frozen', () => {
+// puts a page replacement back on a path the user did not ask for.
+test('the shell wires the decision into opening a tab', () => {
   assert.match(
     shellSource,
     /from '\.\.\/src\/view-freshness\.mjs'/,
-    'the shell must use the shared policy rather than inline timers',
+    'the shell must use the shared policy rather than inline logic',
   );
   assert.match(shellSource, /workspacePageAction\(\{/, 'opening a machine must decide about its page');
   assert.doesNotMatch(
     shellSource,
-    /hiddenSince/,
+    /hiddenSince|IDLE_DISCARD_MS|reclaimIdleViews|startIdleReclaim/,
     'tab residency must not depend on how long a page was off screen',
   );
-  assert.match(shellSource, /shouldReloadOnWake\(/, 'waking from sleep must decide about its page');
-  assert.match(
+  assert.doesNotMatch(
     shellSource,
-    /powerMonitor\.on\('resume'/,
-    'a resume handler is the only thing that notices a page died while the machine slept',
+    /shouldReloadOnWake|WAKE_STALE_AFTER_MS/,
+    'waking from sleep must not replace the page',
+  );
+});
+
+test('exactly one reload path remains: the user asking for one', () => {
+  const reloads = shellSource.match(/webContents\.reload\(\)/g) ?? [];
+  assert.equal(
+    reloads.length,
+    1,
+    `only reloadActiveWorkspace may replace a page, found ${reloads.length} reload call sites`,
   );
   const refreshPaths = shellSource.match(/reloadActiveWorkspace\(\)/g) ?? [];
   assert.ok(
     refreshPaths.length >= 3,
     `refresh must reload the page from the menu, the tray and the window; found ${refreshPaths.length} call sites`,
   );
-});
-
-test('nothing destroys or reloads a page because of elapsed time', () => {
+  const resumeAt = shellSource.indexOf("powerMonitor.on('resume'");
+  assert.ok(resumeAt !== -1, 'a wake handler must still re-read the machine list');
   assert.doesNotMatch(
-    shellSource,
-    /IDLE_DISCARD_MS|reclaimIdleViews|startIdleReclaim/,
-    'no idle reclaim timer: a hidden tab keeps its page until the tab or the machine goes',
-  );
-  assert.doesNotMatch(
-    shellSource,
-    /workspaceHiddenSince/,
-    'the shell must not record when a page went off screen',
+    shellSource.slice(resumeAt, resumeAt + 600),
+    /reload\(/,
+    'the wake handler may re-read the machine list, never replace the page',
   );
 });
 

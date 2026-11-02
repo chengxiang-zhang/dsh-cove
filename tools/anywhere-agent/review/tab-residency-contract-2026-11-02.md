@@ -31,18 +31,18 @@ shell: reclaiming idle page dsh.a.netbird (0 min off screen)
 
 1. **页签打开后，页面常驻。** 切走只是 `setVisible(false)`，切回只是 `setVisible(true)`：不 reload、不重建、不换 `webContents`。路由、滚动位置、未发送草稿都跟着页面留着。
 2. **页面只在这两种情况被导航**：视图还没有页面（首次打开）；用户点「新会话」（`fresh`，回到机器的前台门，而不是重载原来的路由）。
-3. **页面只在这两种情况被重载**：机器从睡眠中醒来（socket 随挂起而死，`shouldReloadOnWake`）；用户显式刷新（`shouldReloadOnRefresh`，菜单 / 托盘 / `⌘R`）。
+3. **页面只在一种情况被重载**：用户显式刷新（`shouldReloadOnRefresh`，菜单 / 托盘 / `⌘R`）。没有第二种自动重载：机器从睡眠中醒来也**不**重载页面，醒来只重读一次机器列表（可达性/未读/引擎状态），页面的 socket 重连是 DSH 客户端自己的循环。
 4. **页面只在这两种情况被销毁**：页签关闭；机器持续缺席机器列表超过 `VIEW_PRUNE_GRACE_MS`（`viewsToPrune`，目前 10 分钟，针对的是机器真的不在了，不是时间过去）。
-5. **不做按时间的回收/重载。** 判定只在 `src/view-freshness.mjs`，单测 `test/view-freshness.test.mjs`。
+5. **没有任何自动重载。** 页面只在应用重启（从地址加载）、用户打开页签/点「新会话」（导航）、用户显式刷新（重载）这三种动作下被加载或替换；不按时间、不按睡眠、不按隐藏时长。判定只在 `src/view-freshness.mjs`，单测 `test/view-freshness.test.mjs`。
 6. **隐藏期间连接真断了的兜底**是 DSH 客户端自己的重连循环（500ms→10s，带抖动、持续），以及用户的显式刷新。壳不再用"屏外时长"代理"连接已死"。
 
 ## 三、改动清单
 
 | 文件 | 改动 |
 | --- | --- |
-| `src/view-freshness.mjs` | 删除 `HIDDEN_STALE_AFTER_MS` 与 `reload` 分支；`workspacePageAction({ hasPage, fresh })` 只回答 `load` / `reuse`；保留醒来与显式刷新两条重载判定 |
-| `shell/main.mjs` | 删除 `IDLE_DISCARD_MS`、`reclaimIdleViews`、`startIdleReclaim`、`workspaceHiddenSince`；`showWorkspace` 不再按屏外时长重载；`hideWorkspace` / `dropWorkspaceView` 同步去掉时间记账 |
-| `test/view-freshness.test.mjs` | 改为断言"无时间分支"：`reuse` 不随时间改变、`activateTab` 不导航、壳里不再有 idle 回收 |
+| `src/view-freshness.mjs` | 删除 `HIDDEN_STALE_AFTER_MS`、`WAKE_STALE_AFTER_MS`、`shouldReloadOnWake` 与 `reload` 分支；`workspacePageAction({ hasPage, fresh })` 只回答 `load` / `reuse`；只保留显式刷新一条重载判定 |
+| `shell/main.mjs` | 删除 `IDLE_DISCARD_MS`、`reclaimIdleViews`、`startIdleReclaim`、`workspaceHiddenSince`；`showWorkspace` 不再按屏外时长重载；`hideWorkspace` / `dropWorkspaceView` 同步去掉时间记账；删除 `powerMonitor` 醒来重载（醒来只重读机器列表） |
+| `test/view-freshness.test.mjs` | 改为断言"无自动重载"：`reuse` 不随时间改变、`activateTab` 不导航、壳里不再有 idle 回收与醒来重载、`webContents.reload()` 只剩显式刷新一处 |
 | `poc/tab-residency.mjs`（新增） | 15 条断言的真实窗口验收：切走不销毁、切回同一 `webContents`、多次往返不产二次请求、显式刷新仍重载、关页签销毁页面 |
 | `DESIGN.md` / `docs/README.md` | 指向本契约，替换原来"5 分钟重载"的说法 |
 
@@ -90,14 +90,15 @@ closing a tab destroys its page
 all checks passed
 ```
 
-`test/view-freshness.test.mjs` 9 条全绿，其中三条是结构门：壳里不再有 `hiddenSince` / idle 回收，`activateTab` 的整个函数体不含 `reload` / `loadURL`。
+`test/view-freshness.test.mjs` 8 条全绿，其中三条是结构门：壳里不再有 `hiddenSince` / idle 回收，`activateTab` 的整个函数体不含 `reload` / `loadURL`。
 
 仓库门禁（本机）：`pnpm typecheck`、`pnpm test`（shared 37 条、dsh-web-all 1375 passed / 1 skipped）、`pnpm docs:check`、`git diff --check` 通过。`node --test tools/anywhere-agent/test/*.test.mjs` 为 248 passed / 1 failed，唯一失败与本次改动无关：版本门 `test/version.test.mjs` 要求 `tools/anywhere-agent/package.json` 与 `packages/dsh-web-all/package.json` 同版本，当前为 0.6.0 与 0.6.1，由当日 0.6.1 发布提交只改运行时包引起（两个文件均未被本次 diff 触碰）。`make-dmg.test.mjs` 在受限文件沙箱下会因 `hdiutil` 被拒失败，放开文件访问后 3 条全过。
 
-## 五、为什么不再做时间回收
+## 五、为什么没有任何自动重载
 
 - **内存不是理由**：Chromium 自己会还后台页的内存（同上实测）。壳再按时间销毁，等于用用户的位置换一份浏览器已经还过的内存。
 - **"连接可能已死"不是理由**：页签隐藏时页面进程仍在跑，socket 仍在；真断了是 DSH 客户端重连的事，重连不上是刷新的事——两件都是页面自己的状态，壳用分钟数猜不出来。
+- **睡眠醒来同理**：醒来时页面 socket 随挂起而死，但重连仍是 DSH 客户端自己的循环（500ms→10s、带抖动、持续），壳能补的只有机器列表那三个答案的重读；用"睡了多久"去换页面，同样是拿用户的位置赌一个没有依据的判断。
 - **代价是确定的**：一次重载 = 一次首屏等待（实测 2.5–3.2s），加丢位置与草稿；而它保护的问题在隐藏页上通常根本没有发生。
 
 ## 六、未验证
@@ -107,6 +108,7 @@ all checks passed
 | 打包产物 | 已复验：`--packaged` 对 0.6.1（CFBundleVersion 30；payload `package.json` 的 build 标为 `30-dirty`，因为打包时工作区未提交）的 `Anywhere Work.app` 跑同一份脚本，15 条全绿；已安装覆盖 `/Applications/Anywhere Work.app`，旧包保留在 `/Applications/Anywhere Work.app.retired-20261102-2139` |
 | 安装后的人工验证 | 装好的是新包，但正在运行的进程还是旧包；重启 App 后才生效。本机未经人手点击验证，验收以 `--packaged` 的 15 条断言为准 |
 | 隐藏数小时后的页面内容新鲜度 | 契约只保证"不重建、不重载、同一页面"；页面内容是否最新由 DSH 客户端自己的重连决定，属宿主行为，不在壳的控制面 |
+| 睡眠醒来后的页面内容新鲜度 | 醒来不再自动重载，页面靠 DSH 客户端自己重连；本机未做真实的合盖/开盖走查，只做了"醒来不重载"的结构门断言 |
 | 内存长期读数 | 多页签常驻数小时的总内存未做小时级测量；已有实测支持"Chromium 会还后台页内存"这一判断 |
 | Windows | 无 Windows 机器，`WebContentsView` 的可见性/内存行为未在该平台验证 |
 | 机器真的下线 | 仍走 `viewsToPrune` 的 10 分钟缺席宽限销毁；该路径本次未改，也未回归 |

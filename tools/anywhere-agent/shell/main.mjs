@@ -42,7 +42,7 @@ import { fleetWanted, withFleetIntent } from '../src/fleet-intent.mjs';
 import { endpointFromEngineConfig, endpointHostLabel, endpointIsUsable, loadBootstrapEndpoint, normalizeEndpoint, resolveEndpoint, shouldRetryEndpointDiscovery } from '../src/endpoint.mjs';
 import { ackIdOf, badgeUrl, clampWatermark, parseWatermarks, readDecision, summarizeFeed } from '../src/notify.mjs';
 import { resolveHelper as resolveHelperPath } from '../src/helper-path.mjs';
-import { shouldReloadOnRefresh, shouldReloadOnWake, workspacePageAction } from '../src/view-freshness.mjs';
+import { shouldReloadOnRefresh, workspacePageAction } from '../src/view-freshness.mjs';
 import { SNAPSHOT_HEARTBEAT_MS, shouldClearProxy, shouldReadSnapshotOnHeartbeat, snapshotHeartbeatMs, viewsToPrune } from '../src/snapshot-freshness.mjs';
 import { updateCheckDue } from '../src/update.mjs';
 import { contentRect, isCovering, sameRect } from '../src/view-geometry.mjs';
@@ -2784,33 +2784,17 @@ app.whenReady().then(() => {
   installAppMenu();
   installTray();
 
-  // Sleeping takes the page's update socket with it, and nothing on screen re-subscribes
-  // on wake: without this, the window keeps painting whatever it had before the lid
-  // closed. Only a machine that was actually asleep invalidates the page - a display
-  // sleep or a brief suspend leaves it alone, and an unsent draft with it.
-  let suspendedAt = 0;
-  powerMonitor.on('suspend', () => {
-    suspendedAt = Date.now();
-  });
+  // Sleep is not a reason to replace a page. The machine list did go stale while this
+  // process was suspended - reachability, unseen work and the engine link all changed and
+  // none of them is pushed - so the list is re-read once. The page itself is not touched:
+  // its socket reconnect is the DSH client's own loop, and a screen that still looks stuck
+  // is what the user's explicit refresh is for.
   powerMonitor.on('resume', () => {
-    const suspendedMs = suspendedAt === 0 ? 0 : Date.now() - suspendedAt;
-    suspendedAt = 0;
-    // The machine list is as stale as the page: reachability, unseen work and the engine
-    // link all changed while this process was suspended, and none of them is pushed.
     if (!scriptedStates) {
       void currentSnapshot().catch((error) => {
         process.stderr.write(`shell: the list could not be re-read after wake (${error?.message ?? error})\n`);
       });
     }
-    if (activeWorkspace === '') {
-      return;
-    }
-    const view = workspaceViews.get(activeWorkspace);
-    if (!view || !shouldReloadOnWake({ hasPage: view.webContents.getURL() !== '', suspendedMs })) {
-      return;
-    }
-    process.stderr.write(`shell: reloading ${activeWorkspace} after ${Math.round(suspendedMs / 1000)}s asleep\n`);
-    view.webContents.reload();
   });
 
   // The machine list's three answers are not pushed by anything, so without a heartbeat
