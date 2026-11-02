@@ -236,7 +236,11 @@ async function verifyMachine(machine, scope, version) {
   const dshHome = expandHome(scope.dshHome, { remote: !machine.local })
   const result = { installed: {}, entry: null, ok: false, notes: [] }
   for (const profile of machine.rolloutProfiles || []) {
-    const probe = await runRemote(machine, versionProbeCommand(`${dshHome}/profiles/${profile}`), { timeout: 30_000 })
+    const command = versionProbeCommand(`${dshHome}/profiles/${profile}`)
+    // The probe needs the same PATH the install needed: on these machines `node`
+    // is only there through nvm or a user prefix.
+    const pathEd = machine.pathPrefix ? `PATH=${machine.pathPrefix}:$PATH ${command}` : command
+    const probe = await runRemote(machine, pathEd, { timeout: 30_000 })
     result.installed[profile] = probe.ok ? probe.stdout : `probe-failed: ${probe.stderr}`
   }
   // The operator's own machine is reached over loopback: its nginx virtual host
