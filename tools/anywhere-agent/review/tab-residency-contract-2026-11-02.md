@@ -1,6 +1,6 @@
 # 页签常驻契约：切页签不重建、不重载（2026-11-02）
 
-> 状态：报告的现象已修，本机真实 Electron 窗口内实测通过（源码检出 15 条全绿）；重新打包的 `Anywhere Work.app`（0.6.1，CFBundleVersion 30）用 `--packaged` 复验同样 15 条全绿，并已安装覆盖 `/Applications/Anywhere Work.app`；Windows 未验证，见第六节。
+> 状态：报告的现象已修，本机真实 Electron 窗口内实测通过（源码检出 15 条全绿）；重新打包的 `Anywhere Work.app`（0.6.1，CFBundleVersion 33）用 `--packaged` 复验同样 15 条全绿，并已安装覆盖 `/Applications/Anywhere Work.app`。壳现在没有任何自动重载：切页签、睡眠醒来都不重建不重载，只有应用重启、用户打开页签/「新会话」/显式刷新会加载或替换页面。Windows 未验证，见第六节。
 > 适用范围：`tools/anywhere-agent/shell`（桌面客户端壳）。DSH Web 页面本身不需要任何改动。
 
 ## 一、报告的现象与根因
@@ -92,7 +92,7 @@ all checks passed
 
 `test/view-freshness.test.mjs` 8 条全绿，其中三条是结构门：壳里不再有 `hiddenSince` / idle 回收，`activateTab` 的整个函数体不含 `reload` / `loadURL`。
 
-仓库门禁（本机）：`pnpm typecheck`、`pnpm test`（shared 37 条、dsh-web-all 1375 passed / 1 skipped）、`pnpm docs:check`、`git diff --check` 通过。`node --test tools/anywhere-agent/test/*.test.mjs` 为 248 passed / 1 failed，唯一失败与本次改动无关：版本门 `test/version.test.mjs` 要求 `tools/anywhere-agent/package.json` 与 `packages/dsh-web-all/package.json` 同版本，当前为 0.6.0 与 0.6.1，由当日 0.6.1 发布提交只改运行时包引起（两个文件均未被本次 diff 触碰）。`make-dmg.test.mjs` 在受限文件沙箱下会因 `hdiutil` 被拒失败，放开文件访问后 3 条全过。
+仓库门禁（本机）：`pnpm typecheck`、`pnpm test`（shared 37 条、dsh-web-all 1375 passed / 1 skipped）、`git diff --check` 通过；`node scripts/verify-docs.mjs`（`pnpm docs:check` 的同一门禁）通过。`node --test tools/anywhere-agent/test/*.test.mjs` 为 248 passed / 0 failed（版本门要求的两个 manifest 已由 `886bcc7` 同步到 0.6.1）。`make-dmg.test.mjs` 在受限文件沙箱下会因 `hdiutil` 被拒失败，放开文件访问后 3 条全过。
 
 ## 五、为什么没有任何自动重载
 
@@ -105,7 +105,7 @@ all checks passed
 
 | 项 | 说明 |
 | --- | --- |
-| 打包产物 | 已复验：`--packaged` 对 0.6.1（CFBundleVersion 30；payload `package.json` 的 build 标为 `30-dirty`，因为打包时工作区未提交）的 `Anywhere Work.app` 跑同一份脚本，15 条全绿；已安装覆盖 `/Applications/Anywhere Work.app`，旧包保留在 `/Applications/Anywhere Work.app.retired-20261102-2139` |
+| 打包产物 | 已复验：`--packaged` 对 0.6.1（CFBundleVersion 33）的 `Anywhere Work.app` 跑同一份脚本，15 条全绿；payload 的 `main.mjs` / `view-freshness.mjs` 与提交 HEAD 的 blob 逐字节一致。payload `package.json` 的 build 标为 `33-dirty`，原因是同一工作区里有另一会话未提交的 `docs/fleet-upgrade-0.6.1-20261102.md`（未被拷进 payload），不是应用源码不干净。已安装覆盖 `/Applications/Anywhere Work.app`；0.5.0 旧包保留在 `/Applications/Anywhere Work.app.retired-20261102-2139` |
 | 安装后的人工验证 | 装好的是新包，但正在运行的进程还是旧包；重启 App 后才生效。本机未经人手点击验证，验收以 `--packaged` 的 15 条断言为准 |
 | 隐藏数小时后的页面内容新鲜度 | 契约只保证"不重建、不重载、同一页面"；页面内容是否最新由 DSH 客户端自己的重连决定，属宿主行为，不在壳的控制面 |
 | 睡眠醒来后的页面内容新鲜度 | 醒来不再自动重载，页面靠 DSH 客户端自己重连；本机未做真实的合盖/开盖走查，只做了"醒来不重载"的结构门断言 |
