@@ -29,7 +29,12 @@
     "config:render": "node scripts/config-render.mjs",
     "dsh-netbird:llm-apply": "node scripts/dsh-netbird-llm-apply.mjs",
     "fleet-config:render": "node scripts/render-fleet-config.mjs",
-    "fleet-config:check": "node scripts/render-fleet-config.mjs --check"
+    "fleet-config:check": "node scripts/render-fleet-config.mjs --check",
+    "preset:render": "node scripts/render-preset.mjs",
+    "preset:check": "node scripts/render-preset.mjs --check && node scripts/verify-preset-refs.mjs",
+    "fleet:collect": "node scripts/dsh-fleet-collect.mjs",
+    "fleet:schedule": "node scripts/dsh-fleet-collect.mjs --install-schedule",
+    "fleet:rollout": "node scripts/dsh-fleet-rollout.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

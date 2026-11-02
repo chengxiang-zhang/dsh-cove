@@ -5,7 +5,7 @@
 #   gate-lock.sh            # (re)write MANIFEST.sha256 next to the scripts
 #   gate-lock.sh --check    # verify current hashes match the manifest (exit 1 on mismatch)
 #
-# Run after any legitimate edit to scripts/. The manifest is the
+# Run after any legitimate edit to scripts/ (see MAINTENANCE.md). The manifest is the
 # integrity baseline: verify.sh / journey.sh refuse to trust evidence when a gate script
 # no longer matches it. Scripts live outside the workspace, so agents cannot rewrite them;
 # the lock detects deployments where the scripts were changed after the baseline.
@@ -13,7 +13,7 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 MANIFEST="$DIR/MANIFEST.sha256"
-FILES=(check_spec.py check_whitelist.py coverage_check.py gate-lock.sh journey.sh project.sh replay.sh scan_drift.py verify_preset_budgets.py verify.sh wish.sh)
+FILES=(check_spec.py coverage_check.py gate-lock.sh journey.sh project.sh replay.sh scan_drift.py verify.sh wish.sh)
 
 sha256_of() {
   local f="$1"

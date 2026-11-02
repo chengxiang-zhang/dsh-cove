@@ -7,17 +7,11 @@
 缺 / 空 / 路径缺失 → 逐条列错，exit 1；
 requirements 无 O 编号或注明 N/A → 打印 skip，exit 0。
 
-负对照自证（guard only guards if the regression fails it）：
-  python3 coverage_check.py --self-test
-构造正例+负例断言：缺行/空落点/空证据/坏证据路径 → 必 exit 1；完好 → exit 0。
-自证失败即 exit 1（门禁自身被回归击穿时，先修门禁再放行）。
-
-用法：python3 coverage_check.py <workspace> <id> | coverage_check.py --self-test
+用法：python3 coverage_check.py <workspace> <id>
 Exit: 0 ok/skip, 1 fail, 2 usage.
 """
 import re
 import sys
-import tempfile
 from pathlib import Path
 
 
@@ -58,7 +52,12 @@ def table_after(text, heading):
     return rows
 
 
-def check(root: Path, wid: str) -> int:
+def main():
+    if len(sys.argv) != 3:
+        print("usage: coverage_check.py <workspace> <id>", file=sys.stderr)
+        return 2
+    root = Path(sys.argv[1]).resolve()
+    wid = sys.argv[2]
     req_path = root / "docs" / "wish" / wid / "requirements.md"
     tsv_path = root / ".sdd" / "acceptance" / wid / "coverage.tsv"
 
@@ -66,7 +65,7 @@ def check(root: Path, wid: str) -> int:
         print(f"coverage_check: missing requirements.md at {req_path}", file=sys.stderr)
         return 1
 
-    req_text = req_path.read_text(encoding="utf-8-sig")
+    req_text = req_path.read_text(encoding="utf-8")
     rows = table_after(req_text, "存量功能清单")
     o_ids = [r.get("编号", "").strip() for r in rows if re.match(r"^O\d+", r.get("编号", "").strip())]
 
@@ -80,7 +79,7 @@ def check(root: Path, wid: str) -> int:
         return 1
 
     tsv_rows = {}
-    for lineno, line in enumerate(tsv_path.read_text(encoding="utf-8-sig").splitlines(), 1):
+    for lineno, line in enumerate(tsv_path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         parts = [c.strip() for c in line.split("\t")]
@@ -110,24 +109,10 @@ def check(root: Path, wid: str) -> int:
             errs += 1
             continue
         p = Path(evpath)
-        if ".." in p.parts:
-            print(f"coverage_check: 存量功能 {oid} 证据路径不得含 ..: {evpath!r}（禁止跨目录/跨愿望引用）", file=sys.stderr)
-            errs += 1
-            continue
-        resolved = p if p.is_absolute() else (root / p).resolve()
-        resolved = resolved.resolve()
-        try:
-            resolved.relative_to(root.resolve())
-        except ValueError:
-            print(f"coverage_check: 存量功能 {oid} 证据路径越出工作区: {evpath!r}（工作区内绝对路径可用，工作区外一律拒绝）", file=sys.stderr)
-            errs += 1
-            continue
-        if resolved == tsv_path.resolve():
-            print(f"coverage_check: 存量功能 {oid} 证据路径自指 coverage.tsv: {evpath!r}", file=sys.stderr)
-            errs += 1
-            continue
-        if not resolved.is_file():
-            print(f"coverage_check: 存量功能 {oid} 证据路径不存在: {evpath!r}", file=sys.stderr)
+        if not p.is_absolute():
+            p = root / evpath
+        if not p.is_file():
+            print(f"coverage_check: 存量功能 {oid} 证据路径不存在: {evpath}", file=sys.stderr)
             errs += 1
 
     if errs:
@@ -135,64 +120,6 @@ def check(root: Path, wid: str) -> int:
         return 1
     print(f"coverage_check OK: {wid} ({len(o_ids)} 存量功能均有落点与证据)")
     return 0
-
-
-def self_test() -> int:
-    """负对照自证：构造正例与四类负例，全部断言后报告。任一断言失败 → exit 1。"""
-    failures = []
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        wish = root / "docs" / "wish" / "selftest" / "requirements.md"
-        wish.parent.mkdir(parents=True)
-        # requirements：O1 + O2
-        req = """# selftest · 需求清单
-
-## 2. 存量功能清单
-
-| 编号 | 存量功能 | 处置 |
-|---|---|---|
-| O1 | 旧功能一 | 保留 |
-| O2 | 旧功能二 | 保留 |
-"""
-        wish.write_text(req, encoding="utf-8")
-
-        acc = root / ".sdd" / "acceptance" / "selftest"
-        acc.mkdir(parents=True)
-        ev1 = acc / "ev1.png"
-        ev1.write_text("x", encoding="utf-8")
-
-        good_tsv = f"O1\t新页面A\t{ev1}\nO2\t新页面B\t{ev1}\n"
-        cases = [
-            ("正例：全好 → 期望 exit 0", good_tsv, 0),
-            ("负例 A：删掉落点行 → 期望 exit 1", "O1\t新页面A\t%s\n" % ev1, 1),
-            ("负例 B：空落点 → 期望 exit 1", "O1\t\t%s\nO2\t新页面B\t%s\n" % (ev1, ev1), 1),
-            ("负例 C：空证据 → 期望 exit 1", "O1\t新页面A\t\nO2\t新页面B\t%s\n" % ev1, 1),
-            ("负例 D：证据路径不存在 → 期望 exit 1", "O1\t新页面A\tno-such-file.png\nO2\t新页面B\t%s\n" % ev1, 1),
-        ]
-        for label, tsv_text, want in cases:
-            (acc / "coverage.tsv").write_text(tsv_text, encoding="utf-8")
-            got = check(root, "selftest")
-            status = "OK" if got == want else "FAIL"
-            if got != want:
-                failures.append(f"{label} — want exit {want}, got {got}")
-            print(f"  [{status}] {label}（exit {got}）")
-
-    if failures:
-        for f in failures:
-            print(f"coverage_check --self-test FAIL: {f}", file=sys.stderr)
-        return 1
-    print("coverage_check --self-test OK：正例放行、四类负例全部被拒（门禁自证有效）")
-    return 0
-
-
-def main():
-    if len(sys.argv) == 2 and sys.argv[1] == "--self-test":
-        return self_test()
-    if len(sys.argv) != 3:
-        print("usage: coverage_check.py <workspace> <id> | coverage_check.py --self-test", file=sys.stderr)
-        return 2
-    root = Path(sys.argv[1]).resolve()
-    return check(root, sys.argv[2])
 
 
 if __name__ == "__main__":

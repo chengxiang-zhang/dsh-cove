@@ -22,7 +22,8 @@
       "default": "./lib/client.js"
     },
     "./src/*": "./src/*",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./presets/*": "./presets/*"
   },
   "dsh": {
     "engines": {
@@ -48,11 +49,11 @@
     }
   },
   "scripts": {
-    "build": "node ../../scripts/config-render.mjs && tsc -b && tsdown",
+    "build": "node ../../scripts/config-render.mjs && node ../../scripts/render-preset.mjs && tsc -b && tsdown",
     "bundle": "tsdown",
     "watch": "tsdown --watch",
     "typecheck": "tsc -b --pretty false",
-    "test": "node ../../scripts/config-render.mjs && vitest run",
+    "test": "node ../../scripts/config-render.mjs && node ../../scripts/render-preset.mjs && vitest run",
     "test:watch": "vitest",
     "prepack": "pnpm build"
   },

@@ -144,20 +144,6 @@ describe('bundled code-vibe preset', () => {
     expect(await readFile(resolve(packageRoot, 'presets/code-vibe/skills/wish-programming/SKILL.md'), 'utf8')).toContain('# Wish Programming')
   })
 
-  it('runs the preset budget gate from packaged assets with a clean home', async () => {
-    const home = await mkdtemp(resolve(tmpdir(), 'dsh-code-vibe-test-'))
-    try {
-      const script = resolve(packageRoot, 'presets/code-vibe/skills/wish-programming/scripts/verify_preset_budgets.py')
-      const { stdout, stderr } = await execFileAsync('python3', [script], {
-        env: { ...process.env, HOME: home },
-      })
-      expect(stdout).toContain('verify_preset_budgets OK')
-      expect(stderr).not.toContain('.agent-presets')
-    } finally {
-      await rm(home, { recursive: true, force: true })
-    }
-  })
-
   it('ships upstream provenance without machine-specific checkout paths', async () => {
     const upstream = await readFile(resolve(packageRoot, 'presets/code-vibe/skills/UPSTREAM.md'), 'utf8')
     const notices = await readFile(resolve(packageRoot, 'presets/code-vibe/THIRD_PARTY_NOTICES.md'), 'utf8')

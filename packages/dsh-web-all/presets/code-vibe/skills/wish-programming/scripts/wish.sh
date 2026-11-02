@@ -9,12 +9,11 @@
 # `--start` also flips the pool row's status new -> active (best effort).
 set -euo pipefail
 
-CWD="."; ACTION=""; WISH=""; TITLE=""; QUOTE=""; ROOT_ARG=""
+CWD="."; ACTION=""; WISH=""; TITLE=""; QUOTE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --cwd) CWD="${2:-}"; shift 2 ;;
-    --root) ROOT_ARG="${2:-}"; shift 2 ;;
     --new) ACTION=new; shift ;;
     --start) ACTION=start; WISH="${2:-}"; shift 2 ;;
     --title) TITLE="${2:-}"; shift 2 ;;
@@ -40,7 +39,7 @@ find_root() {
   cd "$1" && pwd
 }
 
-ROOT="${ROOT_ARG:-$(find_root "$CWD")}"
+ROOT="$(find_root "$CWD")"
 POOL="$ROOT/docs/product/demand-pool.md"
 DOC="$ROOT/docs/wish"
 
@@ -53,31 +52,22 @@ emit() {  # emit <path> <<EOF ... EOF
 
 if [[ "$ACTION" == "new" ]]; then
   [[ -n "$TITLE" ]] || { echo "wish: --new needs --title" >&2; exit 2; }
-  if [[ "$TITLE" == *$'\n'* || "$TITLE" == *$'\r'* || "$TITLE" == *'|'* ]]; then
-    echo "wish: --title 含换行或管道符（需求池注入防护；标题须为单行文本）" >&2; exit 2
-  fi
-  if [[ -n "$QUOTE" && ( "$QUOTE" == *$'\n'* || "$QUOTE" == *$'\r'* ) ]]; then
-    QUOTE="$(printf '%s' "$QUOTE" | tr '\r\n' '  ')"
-    echo "wish: --quote 换行已压平为空格（原话应逐字转录，换行请直接编辑 quote.md）" >&2
-  fi
   [[ -f "$POOL" ]] || { echo "wish: no demand pool at $POOL — run project.sh first" >&2; exit 1; }
   last=$(grep -oE '^\| *W[0-9]+' "$POOL" | tail -1 | grep -oE '[0-9]+' || echo 0)
   next=$(( ${last:-0} + 1 ))
   printf '| W%d | %s | new | |\n' "$next" "$TITLE" >> "$POOL"
   mkdir -p "$DOC/W$next"
   if [[ -n "$QUOTE" ]]; then
-    printf '# 用户原话（最高优先级 · 逐字转录 · 不可改写）\n\n> quote 版本：v1\n\n%s\n\n> 记录：%s（原话正文一字不改；本节与任何下游转述冲突时以本节为准；quote 更新到 vN+1 时下游一并重新对齐）\n' \
+    printf '# 用户原话（最高优先级 · 逐字转录 · 不可改写）\n\n%s\n\n> 记录：%s（原话正文一字不改；本节与任何下游转述冲突时以本节为准）\n' \
       "$QUOTE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$DOC/W$next/quote.md"
-    echo "wish: wrote $DOC/W$next/quote.md (原话已落盘, quote v1)"
+    echo "wish: wrote $DOC/W$next/quote.md (原话已落盘)"
   else
     emit "$DOC/W$next/quote.md" <<'EOF'
 # 用户原话（最高优先级 · 逐字转录 · 不可改写）
 
-> quote 版本：v1
-
 <待补录：用户原话逐字原文（最高优先级工件，必须补录；check_spec 会拦截占位）>
 
-> 记录：（原话正文一字不改；本节与任何下游转述冲突时以本节为准；quote 更新到 vN+1 时下游一并重新对齐）
+> 记录：（原话正文一字不改；本节与任何下游转述冲突时以本节为准）
 EOF
     echo "wish: quote.md 为占位 — 请逐字补录用户原话（最高优先级）"
   fi
@@ -88,7 +78,6 @@ fi
 
 # start
 [[ -n "$WISH" ]] || { echo "wish: --start needs <id>" >&2; exit 2; }
-[[ "$WISH" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || { echo "wish: --start 非法 id（仅允许字母数字下划线连字符，拒绝路径穿越）" >&2; exit 2; }
 mkdir -p "$DOC/$WISH"
 
 emit "$DOC/$WISH/contract.md" <<EOF

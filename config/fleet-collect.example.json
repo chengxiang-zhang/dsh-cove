@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "description": "Placeholder fleet-collection scope. Copy to config/fleet-collect.local.json (gitignored) and replace machine names, SSH aliases and the dsh home with the real deployment.",
+  "dshHome": "~/.dsh",
+  "surfaces": {
+    "presets": {
+      "roots": [
+        {
+          "path": ".agent-presets"
+        }
+      ],
+      "include": [
+        "*/agent.cordis.yml",
+        "*/preset.yml",
+        "*/skills/**",
+        "*/plugins/**",
+        "*/scripts/**",
+        "*/docs/**",
+        "*/evals/**",
+        "*/MAINTENANCE.md"
+      ],
+      "exclude": [
+        "**/evals/results-*/**",
+        "**/__pycache__/**",
+        "**/*.pyc"
+      ]
+    },
+    "profiles": {
+      "roots": [
+        {
+          "path": "profiles",
+          "maxdepth": 2
+        }
+      ],
+      "include": [
+        "*/cordis.patch.yml",
+        "*/*.js",
+        "*/*.mjs",
+        "*/*.cjs"
+      ],
+      "exclude": []
+    },
+    "skills": {
+      "roots": [
+        {
+          "path": "skills",
+          "maxdepth": 3
+        }
+      ],
+      "include": [
+        "**/*.md",
+        "**/*.json",
+        "**/*.js",
+        "**/*.mjs",
+        "**/*.sh",
+        "**/*.py"
+      ],
+      "exclude": []
+    }
+  },
+  "checkouts": {
+    "roots": [
+      "~/code"
+    ],
+    "maxdepth": 3,
+    "originMatch": [
+      "dsh-cove",
+      "dsh-web"
+    ],
+    "diffMaxBytes": 262144
+  },
+  "limits": {
+    "maxFiles": 20000,
+    "maxFileBytes": 2097152,
+    "maxTotalBytes": 67108864,
+    "sshTimeoutSeconds": 120,
+    "maxTransferKilobytes": 262144
+  },
+  "baseline": {
+    "preset": "code-vibe",
+    "presetDir": "packages/dsh-web-all/presets/code-vibe",
+    "patchFile": "packages/dsh-web-all/presets/code-vibe.patch.yml"
+  },
+  "machines": [
+    {
+      "name": "studio-mac",
+      "ssh": "ssh-studio-mac",
+      "os": "darwin",
+      "surfaces": [
+        "presets",
+        "profiles",
+        "checkouts"
+      ],
+      "baselinePreset": "code-vibe"
+    },
+    {
+      "name": "laptop-b",
+      "ssh": "ssh-laptop-b",
+      "os": "darwin",
+      "surfaces": [
+        "profiles"
+      ],
+      "baselinePreset": null
+    },
+    {
+      "name": "tower-lab",
+      "ssh": "ssh-tower-lab",
+      "os": "linux",
+      "surfaces": [
+        "presets",
+        "profiles",
+        "checkouts"
+      ],
+      "baselinePreset": "code-vibe"
+    }
+  ]
+}

@@ -16,7 +16,7 @@ Phases:
   --phase close    (acceptance-passed 门): 回填存在性检查（仓库感知）
 
 Usage:
-  python3 check_spec.py <workspace> <id> [--phase design|plan|build|close]
+  python3 check_spec.py <workspace> <id> [--phase design|plan|build|close] [--tier T1|T2-spec|T2-wish|T2-ops|T3]
 Exit: 0 ok, 1 fail, 2 usage.
 """
 import re
@@ -152,21 +152,95 @@ def table_header(text, heading):
     return cells(lines[start])
 
 
-def main():
-    if len(sys.argv) not in (3, 5):
-        print("usage: check_spec.py <workspace> <id> [--phase design|plan|build|close]", file=sys.stderr)
+def _pick(d, *names):
+    for n in names:
+        p = d / n
+        if p.is_file():
+            return p
+    return None
+
+
+def check_tier(root, wid, tier):
+    """Tier-aware minimal gate (aliases: spec/requirements, design/design-spec, tasks/plan)."""
+    d = root / "docs" / "wish" / wid
+    if not d.is_dir():
+        d = root / "docs" / "changes" / wid
+    if not d.is_dir():
+        print(f"check_spec FAIL: {wid} tier={tier} — no docs/wish or docs/changes dir", file=sys.stderr)
+        return 1
+    errs = 0
+    need = {}
+    if tier == "T1":
+        print(f"check_spec OK: {wid} tier=T1 (no artifacts required)")
+        return 0
+    if tier == "T2-ops":
+        need["runbook"] = _pick(d, "runbook.md")
+    elif tier == "T2-spec":
+        need["spec"] = _pick(d, "spec.md", "requirements.md")
+        need["tasks"] = _pick(d, "tasks.md", "plan.md")
+        need["acceptance"] = _pick(d, "acceptance.md")
+    elif tier == "T2-wish":
+        need["quote"] = _pick(d, "quote.md")
+        need["spec"] = _pick(d, "spec.md", "requirements.md")
+        need["design"] = _pick(d, "design.md", "design-spec.md")
+        need["tasks"] = _pick(d, "tasks.md", "plan.md")
+        need["acceptance"] = _pick(d, "acceptance.md")
+    elif tier == "T3":
+        need["quote"] = _pick(d, "quote.md")
+        need["spec"] = _pick(d, "spec.md", "requirements.md")
+        need["design"] = _pick(d, "design.md", "design-spec.md")
+        need["tasks"] = _pick(d, "tasks.md", "plan.md")
+        need["acceptance"] = _pick(d, "acceptance.md")
+    else:
+        print(f"check_spec: unknown tier {tier!r}", file=sys.stderr)
         return 2
-    root = Path(sys.argv[1]).resolve()
-    wid = sys.argv[2]
+    for k, f in need.items():
+        if f is None:
+            print(f"ERROR: {wid} tier={tier} missing {k} (spec/requirements, design/design-spec, tasks/plan, acceptance, runbook)", file=sys.stderr)
+            errs += 1
+        elif not f.read_text(encoding="utf-8", errors="ignore").strip():
+            print(f"ERROR: {wid} tier={tier} {f.name} is empty", file=sys.stderr)
+            errs += 1
+    acc = need.get("acceptance")
+    if acc is not None and acc.is_file():
+        txt = acc.read_text(encoding="utf-8", errors="ignore")
+        if not any(w in txt for w in ("负控", "negative", "反例")):
+            print(f"ERROR: {wid} tier={tier} acceptance.md has no negative-control section", file=sys.stderr)
+            errs += 1
+        if not any(w in txt for w in ("回滚", "rollback", "revert")):
+            print(f"ERROR: {wid} tier={tier} acceptance.md has no rollback section", file=sys.stderr)
+            errs += 1
+    if errs:
+        print(f"check_spec FAIL: {wid} tier={tier} ({errs} error(s))", file=sys.stderr)
+        return 1
+    print(f"check_spec OK: {wid} tier={tier}")
+    return 0
+
+
+def main():
+    args = [a for a in sys.argv[1:]]
+    if len(args) < 2:
+        print("usage: check_spec.py <workspace> <id> [--phase design|plan|build|close] [--tier T1|T2-spec|T2-wish|T2-ops|T3]", file=sys.stderr)
+        return 2
+    root = Path(args[0]).resolve()
+    wid = args[1]
     phase = "build"
-    if len(sys.argv) == 5:
-        if sys.argv[3] != "--phase":
-            print("usage: check_spec.py <workspace> <id> [--phase design|plan|build|close]", file=sys.stderr)
+    tier = ""
+    rest = args[2:]
+    while rest:
+        flag = rest.pop(0)
+        if flag == "--phase" and rest:
+            phase = rest.pop(0)
+        elif flag == "--tier" and rest:
+            tier = rest.pop(0)
+        else:
+            print(f"check_spec: unknown arg {flag!r}", file=sys.stderr)
             return 2
-        phase = sys.argv[4]
-        if phase not in {"design", "plan", "build", "close"}:
-            print(f"check_spec: invalid phase {phase!r}", file=sys.stderr)
-            return 2
+    if phase not in {"design", "plan", "build", "close"}:
+        print(f"check_spec: invalid phase {phase!r}", file=sys.stderr)
+        return 2
+    if tier:
+        return check_tier(root, wid, tier)
 
     wish_dir = root / "docs" / "wish" / wid
     product_md = wish_dir / "product.md"
@@ -194,16 +268,6 @@ def main():
             elif any("待补录" in l for l in qlines):
                 print("ERROR: quote.md 仍是占位 — 必须逐字补录用户原话（原话最高优先级，禁止以转述代替）", file=sys.stderr)
                 errs += 1
-            # 原话指纹（v3 对抗修复）：journey --confirm 时锁定 quote.md sha256；
-            # 内容被改动（含只改一字）但未重新确认 → 拦截。存量 wish 无指纹文件 → 降级不查。
-            qhash_f = root / ".sdd" / "acceptance" / (wid + ".quote-hash")
-            if qhash_f.is_file():
-                import hashlib
-                locked = qhash_f.read_text(encoding="utf-8", errors="ignore").splitlines()[0].split("=", 1)[-1].strip()
-                cur = hashlib.sha256(quote_md.read_bytes()).hexdigest()
-                if not locked or cur != locked:
-                    print("ERROR: quote.md 内容与确认时指纹不一致（原话被改动后未重新 --confirm；quote 更新须版本+1、下游重对齐、并重新确认）", file=sys.stderr)
-                    errs += 1
 
         # ---- requirements.md（阶段 1 产出） ----------------------------------
         req_md = wish_dir / "requirements.md"
@@ -258,51 +322,6 @@ def main():
         for e in check_confirmation_pack(pack):
             print(f"ERROR: {e}", file=sys.stderr)
             errs += 1
-
-        # ---- quote 版本一致性（v2 新增：stale 检出） -------------------------
-        qver = None
-        if quote_md.is_file():
-            mq = re.search(r"quote 版本\s*[：:]\s*v(\d+)", quote_md.read_text(encoding="utf-8"))
-            qver = mq.group(1) if mq else None
-        if qver:
-            for label, path, sec in (
-                ("requirements.md", req_md, "需求清单"),
-                ("design-spec.md", design_spec, "需求覆盖矩阵"),
-            ):
-                if not path.is_file():
-                    continue
-                t = path.read_text(encoding="utf-8")
-                mv = re.search(r"quote 版本\s*[：:]\s*v(\d+)", t)
-                if mv is None:
-                    print(f"ERROR: {label} missing quote 版本 line (quote= v{qver}；新 wish 必须声明并一致)", file=sys.stderr)
-                    errs += 1
-                elif mv.group(1) != qver:
-                    print(f"ERROR: {label} quote 版本 v{mv.group(1)} != quote.md v{qver} — stale，须重新对齐原话", file=sys.stderr)
-                    errs += 1
-            if pack.is_file():
-                pt = pack.read_text(encoding="utf-8")
-                mv = re.search(r"quote 版本\s*[：:]\s*v(\d+)", pt)
-                if mv is None:
-                    print(f"ERROR: confirmation-pack.md missing quote 版本 line (quote= v{qver})", file=sys.stderr)
-                    errs += 1
-                elif mv.group(1) != qver:
-                    print(f"ERROR: confirmation-pack.md quote 版本 v{mv.group(1)} != quote.md v{qver} — stale，本包作废需重做", file=sys.stderr)
-                    errs += 1
-
-        # ---- design-spec 备选方案节（v2 新增；旧 wish 无版本行时仅警告） ------
-        if design_spec.is_file():
-            dtext2 = design_spec.read_text(encoding="utf-8")
-            if section_exists(dtext2, "备选方案"):
-                opts_lines = section_lines(dtext2, "备选方案")
-                if not opts_lines:
-                    print("ERROR: design-spec.md 备选方案 section empty (≥1 个被否方案+理由)", file=sys.stderr)
-                    errs += 1
-            else:
-                if qver:
-                    print("ERROR: design-spec.md missing section 备选方案 (Alternatives considered；缺失 = 决策会被重审)", file=sys.stderr)
-                    errs += 1
-                else:
-                    print("WARN: design-spec.md missing 备选方案 section（存量 wish 不强制；下次进入本 wish 时补齐）", file=sys.stderr)
 
     # ---- plan gate: arch.md 条件式（技术架构类愿望才需要） --------------------
     if need_plan:

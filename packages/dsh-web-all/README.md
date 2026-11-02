@@ -14,7 +14,7 @@ English | [中文](README.zh.md)
 - **Run-finished notifications**: every finished turn is recorded and aggregated into the read-only `GET /api/dsh-notify/feed`, which the desktop and mobile machine lists use to mark results that have not been looked at, and which can be pushed to Feishu once the run has fully stopped. Configure it under **Settings → Built-in plugins → Notifications**.
 - **Browser automation**: per-session Playwright browsers exposed as the `mcp__playwright__*` tool namespace.
 - **Automation run target**: native automation tasks deliver into the conversation that created them; this capability lets each task run in a fresh session every time instead, keeping the original conversation clean. There is no settings UI for it: it is chosen in natural language when the task is created, and the agent applies it with `schedule_mode_set`.
-- **Wish Programming preset**: a bundled `code-vibe` preset with its curated skills and native coding tools appears as an additional session mode; Standard remains the default.
+- **Wish Programming preset**: a bundled `code-vibe` preset with tiered task routing, its curated skills, a session confirmation and routing gate, and native coding tools appears as an additional session mode; Standard remains the default.
 
 The web profile runtime stack is `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app` + `@dsh-cove/dsh-web-all`.
 

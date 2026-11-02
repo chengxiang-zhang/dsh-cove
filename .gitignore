@@ -56,3 +56,7 @@ packages/dsh-web-all/presets/hiopen.patch.yml
 
 # 退役材料：移出跟踪但保留在磁盘（可逆，不删除）
 .retired/
+
+# 机队采集产物：含各机器 home 路径与未公开的预设/门禁源码，只在采集机上保留
+.harvest/
+config/fleet-collect.local.json
