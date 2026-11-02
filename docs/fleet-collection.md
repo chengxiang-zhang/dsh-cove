@@ -91,7 +91,7 @@ node scripts/dsh-fleet-rollout.mjs --version 0.6.0                        # 只�
 node scripts/dsh-fleet-rollout.mjs --version 0.6.0 --apply --only pc-tower # 真装一台
 ```
 
-计划阶段逐台打印要执行的 `dsh plugin --profile <p> add @dsh-cove/dsh-web-all@<ver>`、重启方式（服务名现场探测，不硬编码）与要验证的入口地址，并顺手报告「当前装的是哪个版本、入口是否应答」——这就是分发前的机队基线。`--apply` 才真正安装与重启；重启会打断该机器上正在跑的会话，所以默认只出计划，且支持 `--only` 逐台灰度、`--skip-restart` 只装不重启。
+计划阶段逐台打印要执行的 `dsh plugin --profile <p> add @dsh-cove/dsh-web-all@<ver>`、重启方式与要验证的入口地址，并顺手报告「当前装的是哪个版本、入口是否应答」——这就是分发前的机队基线。`dsh` 路径、`pnpm` 所在的 PATH 前缀、服务句柄（systemd user / systemd system / launchd label）都是逐台事实，按机器写在范围文件的 `dshPath`、`pathPrefix`、`service` 里；没有声明的机器才回落到现场探测，因为非交互 SSH 里既找不到 nvm 的 `dsh`，也常常找不到 `pnpm`。重启后入口会有一段 502，验证按轮询等到 200/302 才算通过。`--apply` 才真正安装与重启；重启会打断该机器上正在跑的会话，所以默认只出计划，且支持 `--only` 逐台灰度、`--skip-restart` 只装不重启。
 
 判定标准是两条独立事实：磁盘上解析出的包版本等于目标版本，且入口返回 `200`/`302`。任一不成立即该机器失败，退出码 1。
 

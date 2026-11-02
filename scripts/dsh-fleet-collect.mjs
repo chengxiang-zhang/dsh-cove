@@ -215,6 +215,22 @@ export function resolveScopePath({ root = repoRoot, options = {}, env = process.
   return { path: join(root, 'config', 'fleet-collect.example.json'), source: 'template' }
 }
 
+const SERVICE_KINDS = new Set(['systemd-user', 'systemd-system', 'launchd', 'none'])
+
+/** Validates one declared service handle; `null` means "detect it at rollout time". */
+function normalizeService(value, where) {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'object') throw new Error(`fleet scope: ${where} must be an object`)
+  const kind = requireString(value.kind, `${where}.kind`)
+  if (!SERVICE_KINDS.has(kind)) {
+    throw new Error(`fleet scope: ${where}.kind must be one of ${[...SERVICE_KINDS].join(', ')}`)
+  }
+  return {
+    kind,
+    target: value.target ? requireString(value.target, `${where}.target`) : null,
+  }
+}
+
 function requireString(value, where) {
   if (typeof value !== 'string' || value.trim() === '') {
     throw new Error(`fleet scope: ${where} must be a non-empty string`)
@@ -293,6 +309,14 @@ export function validateScope(raw, source = 'scope') {
       baselinePreset: machine.baselinePreset || null,
       netbirdName: machine.netbirdName ? requireString(machine.netbirdName, `${where}.netbirdName`) : null,
       rolloutProfiles,
+      // How a rollout reaches this machine's `dsh` CLI and how its web service
+      // restarts. Both are machine-local facts (nvm paths, unit scope, label),
+      // so they are declared here rather than guessed at rollout time.
+      dshPath: machine.dshPath ? requireString(machine.dshPath, `${where}.dshPath`) : null,
+      // `dsh plugin add` shells out to pnpm, which a non-interactive SSH session
+      // does not always find; the prefix names the directory that carries it.
+      pathPrefix: machine.pathPrefix ? requireString(machine.pathPrefix, `${where}.pathPrefix`) : null,
+      service: normalizeService(machine.service, `${where}.service`),
       notes: machine.notes || null,
     }
   })
@@ -530,24 +554,6 @@ export async function estimateSize(machine, scope, files) {
 export function buildTarScript(scope) {
   const dshHome = expandHome(scope.dshHome, { remote: true })
   return `set -u; cd "${dshHome}" || exit 3; exec tar -czf - -T - 2>/dev/null`
-}
-
-/** Parses the checkout listing (`repo<TAB>origin<TAB>branch<TAB>head<TAB>dirty`). */
-export function parseCheckoutListing(stdout) {
-  const repos = []
-  for (const line of String(stdout).split('\n')) {
-    if (!line.trim() || line.startsWith('SECTION')) continue
-    const [repo, origin, branch, head, dirty] = line.split('\t')
-    if (!repo) continue
-    repos.push({ repo, origin: origin || '', branch: branch || '', head: head || '', dirty: Number(dirty || 0) })
-  }
-  return repos
-}
-
-/** Keeps the repos whose origin names one of the configured upstreams. */
-export function filterCheckouts(repos, scope) {
-  if (!scope.checkouts) return []
-  return repos.filter((repo) => scope.checkouts.originMatch.some((needle) => repo.origin.includes(needle)))
 }
 
 /** Surface names that own a directory tree; `checkouts` is handled separately. */

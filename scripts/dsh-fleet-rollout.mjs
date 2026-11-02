@@ -91,11 +91,45 @@ export function normalizeVersion(value) {
  * rather than guessing a unit that may not exist.
  */
 export function restartCommand(machine) {
+  const declared = machine.service
+  if (declared && declared.kind === 'none') return { kind: 'none', detect: 'true', extract: () => null, restart: () => 'true' }
+  if (declared && declared.target) {
+    if (declared.kind === 'systemd-user') {
+      return {
+        kind: 'systemd-user',
+        target: declared.target,
+        detect: `printf '%s' ${declared.target}`,
+        extract: (stdout) => stdout.trim() || null,
+        restart: (unit) => `XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user restart ${unit}`,
+      }
+    }
+    if (declared.kind === 'systemd-system') {
+      return {
+        kind: 'systemd-system',
+        target: declared.target,
+        detect: `printf '%s' ${declared.target}`,
+        extract: (stdout) => stdout.trim() || null,
+        // `-n` fails fast instead of hanging on a password prompt.
+        restart: (unit) => `sudo -n systemctl restart ${unit}`,
+      }
+    }
+    if (declared.kind === 'launchd') {
+      return {
+        kind: 'launchd',
+        target: declared.target,
+        detect: `printf '%s' ${declared.target}`,
+        extract: (stdout) => stdout.trim() || null,
+        restart: (label) => `launchctl kickstart -k gui/$(id -u)/${label}`,
+      }
+    }
+  }
   const os = (machine.os || '').toLowerCase()
   if (os === 'linux') {
     return {
       kind: 'systemd-user',
-      detect: 'systemctl --user list-unit-files --no-legend | grep -iE "dsh.*web|web.*dsh" | head -1',
+      detect: 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user list-unit-files --no-legend | grep -iE "dsh.*web|web.*dsh" | head -1',
+      // `systemctl` prints `<unit> <state>`; the unit is the first column.
+      extract: (stdout) => (stdout.trim().split(/\s+/u)[0] || null),
       restart: (unit) => `systemctl --user restart ${unit}`,
     }
   }
@@ -103,6 +137,8 @@ export function restartCommand(machine) {
     return {
       kind: 'launchd',
       detect: 'launchctl list | grep -i dsh | head -1',
+      // `launchctl list` prints `<pid> <status> <label>`; the label is last.
+      extract: (stdout) => (stdout.trim().split(/\s+/u).pop() || null),
       restart: (label) => `launchctl kickstart -k gui/$(id -u)/${label}`,
     }
   }
@@ -163,7 +199,10 @@ export function buildPlan(machine, scope, version) {
     version,
     profiles,
     install: profiles
-      ? profiles.map((profile) => `dsh plugin --profile ${profile} add @dsh-cove/dsh-web-all@${version}`)
+      ? profiles.map(
+          (profile) =>
+            `${machine.pathPrefix ? `PATH=${machine.pathPrefix}:$PATH ` : ''}${machine.dshPath || 'dsh'} plugin --profile ${profile} add @dsh-cove/dsh-web-all@${version}`,
+        )
       : ['(no rolloutProfiles declared for this machine; nothing to install)'],
     restart,
     entry: entryUrl(machine),
@@ -177,6 +216,18 @@ function formatPlan(plan) {
   else lines.push('  restart: none (unknown OS)')
   if (plan.entry) lines.push(`  verify: ${plan.entry}`)
   return lines.join('\n')
+}
+
+/** Polls one entry until it answers 200/302, or reports the last status it saw. */
+export async function waitForEntry(url, { attempts = 20, intervalMs = 3000 } = {}) {
+  let status = null
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const probe = await runLocal(`curl -s -o /dev/null -w '%{http_code}' --max-time 8 ${url}`)
+    status = probe.stdout || null
+    if (/^(200|302)$/u.test(status || '')) return status
+    await new Promise((done) => setTimeout(done, intervalMs))
+  }
+  return status
 }
 
 async function verifyMachine(machine, scope, version) {
@@ -193,11 +244,11 @@ async function verifyMachine(machine, scope, version) {
   // host itself can answer outside that host block.
   const url = machine.local ? 'http://127.0.0.1:3080/' : entryUrl(machine)
   if (url) {
-    const probe = await runLocal(`curl -s -o /dev/null -w '%{http_code}' --max-time 8 ${url}`)
-    result.entry = { url, status: probe.stdout || null }
-    result.ok =
-      Object.values(result.installed).every((value) => value === version) &&
-      /^(200|302)$/u.test(probe.stdout || '')
+    // A restarted service answers 502 until its own listen happens; the rollout is
+    // only meaningful once the entry it broke has come back.
+    const probe = await waitForEntry(url)
+    result.entry = { url, status: probe }
+    result.ok = Object.values(result.installed).every((value) => value === version) && /^(200|302)$/u.test(probe || '')
   } else {
     result.ok = Object.values(result.installed).every((value) => value === version)
     result.notes.push('no netbirdName: entry probe skipped')
@@ -261,7 +312,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
         const failedInstall = record.actions.some((action) => !action.ok)
         if (!failedInstall && plan.restart && !options.skipRestart) {
           const detect = await runRemote(machine, plan.restart.detect, { timeout: 30_000 })
-          const target = (detect.stdout || '').split(/\s+/u).pop()
+          const target = plan.restart.extract(detect.stdout || '')
           if (!target) {
             record.error = 'could not detect the dsh web service unit'
           } else {
