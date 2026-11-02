@@ -167,6 +167,28 @@ for (const width of [320, 390]) test(`family panels and settings remain usable a
   expect(errors).toEqual([])
 })
 
+/**
+ * Click inside the settings sheet after clearing whatever first-run dialog the shell put
+ * up. On a clean runner DSH raises its "Add an API key" dialog asynchronously, and its
+ * mask lands on top of the sheet - sometimes after the sheet is already visible, which is
+ * why a single dismissal at the start of the test is not enough (release run 41461065403
+ * still hit `_mask_` while clicking the sheet navigation).
+ */
+async function clickInSheet(page: Page, locator: ReturnType<Page['locator']>): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await dismissFirstRunDialogs(page)
+    try {
+      await locator.click({ timeout: 5_000 })
+      return
+    } catch (error) {
+      if (attempt === 2) {
+        await locator.click({ force: true, timeout: 10_000 }).catch(() => { throw error })
+        return
+      }
+    }
+  }
+}
+
 test('family settings save and reload through the native form API', async ({ page }) => {
   await page.goto(BASE_URL!, { waitUntil: 'domcontentloaded' })
   // The shell mounts its rows asynchronously. Without this wait the account-menu click
@@ -176,21 +198,21 @@ test('family settings save and reload through the native form API', async ({ pag
   await expect(page.getByRole('button', { name: 'SSH', exact: true })).toBeVisible({ timeout: 30_000 })
   await openSettings(page)
   const openFeishu = async () => {
-    await page.getByText('Built-in plugins', { exact: true }).click()
-    await page.getByRole('tab', { name: /Feishu|飞书/ }).click()
+    await clickInSheet(page, page.getByText('Built-in plugins', { exact: true }).first())
+    await clickInSheet(page, page.getByRole('tab', { name: /Feishu|飞书/ }).first())
     await expect(page.locator('[data-dsh-plugin="lark-inbox"] [data-field="announceToAgent"] input[type="checkbox"]')).toBeEnabled()
   }
   await openFeishu()
   const original = await page.locator('[data-dsh-plugin="lark-inbox"] [data-field="announceToAgent"] input[type="checkbox"]').isChecked()
   await page.locator('[data-dsh-plugin="lark-inbox"] [data-field="announceToAgent"] input[type="checkbox"]').setChecked(!original)
-  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await clickInSheet(page, page.getByRole('button', { name: 'Save', exact: true }).first())
   await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
   await page.reload()
   await openSettings(page)
   await openFeishu()
   await expect(page.locator('[data-dsh-plugin="lark-inbox"] [data-field="announceToAgent"] input[type="checkbox"]')).toBeChecked({ checked: !original })
   await page.locator('[data-dsh-plugin="lark-inbox"] [data-field="announceToAgent"] input[type="checkbox"]').setChecked(original)
-  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await clickInSheet(page, page.getByRole('button', { name: 'Save', exact: true }).first())
   await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
 })
 
