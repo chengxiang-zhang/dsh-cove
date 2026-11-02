@@ -5,7 +5,7 @@ description: Use when several independent WRITE tasks must change the same repos
 
 # Lane（多任务同仓并行，worktree-per-task）
 
-> 一个任务 = 一个 lane（独立 worktree + 分支 + 会话），互不踩；合并可预演、可回滚；滥用由机械门禁识别。
+> 一个任务 = 一个 lane（独立 worktree + 分支 + 会话），互不踩；合并可预演、可回滚；未登记的 worktree 由 `dsh-lane audit` 识别。
 > 工具：`scripts/dsh-lane.sh`。**它随预设分发，不在消费仓里**：脚本在预设根的 `scripts/`，与本次加载的 `skills/lane-worktree/SKILL.md` 同属一个预设目录。调用前先解析绝对路径，不要假设 `<repo>/scripts/dsh-lane.sh` 存在：
 > 1. 包内预设：`node -p "require.resolve('@dsh-cove/dsh-web-all/package.json')"` → `<pkg>/presets/code-vibe/scripts/dsh-lane.sh`；
 > 2. 用户级预置目录（有的部署把预设整目录拷到这里）：`ls ~/.dsh/.agent-presets/*/scripts/dsh-lane.sh`；
@@ -26,7 +26,7 @@ description: Use when several independent WRITE tasks must change the same repos
 ## 不变量（违反即停）
 
 1. **一任务一 lane**：`<LANE_ROOT>/<repo>/<task-id>`，分支 `task/<task-id>`；lane 不得建在仓库内。
-2. **登记制**：只能用 `dsh-lane` 创建/登记；未登记、越界的 worktree 由门禁判红。
+2. **登记制**：只能用 `dsh-lane` 创建/登记；未登记、越界的 worktree 由 `dsh-lane audit` 判红。
 3. **一 lane 一 owner**：一个会话只在一个 lane 工作；**不新增 GUI 项目**——会话用 `session/create {cwd: lane}`，完成即 `archive/drop`。
 4. **上限/TTL**：每仓 4、全局 8；48h 告警、96h 强收。
 5. **setup 必过才开工**：`.env*`（禁 production）、依赖、per-lane 缓存、`LANE_PORT_BASE` 就绪。
@@ -36,21 +36,25 @@ description: Use when several independent WRITE tasks must change the same repos
 9. **合并后必须清理**：`dsh-lane drop`；未清理 lane 计入上限。
 10. **验收回主 checkout**：lane 内红绿只作草稿。
 
-## 占用检测（2026-11-01，门已机械生效）
+## 占用检测（2026-11-02 起没有机械门，自己查）
 
-不需要你自己判断"有没有别的会话在同一个 checkout"——`wish-gate` 会替你查：
+预设里**没有**门禁插件替你看「这个 checkout 是不是被别的会话占着」：跨会话避让是纪律，不是运行时强制。写进一个不是你建的 checkout 之前，先自己看三眼：
 
-- 每个会话第一次写某个工作树时，门在该仓的 `<git-common-dir>/dsh-claims.jsonl` 记一条心跳（15 分钟 TTL，30 秒续一条）；
-- 同一工作树若另有活跃会话（心跳未过期），**你的写操作会被拒**，理由里直接给 lane 提示；
-- 只读不占用；lane 的 root 与主 checkout 不同，不会被误判；陈旧心跳 15 分钟后自动失效，不需要手删。
+```bash
+git -C <repo> status --short          # 有没有不属于你的未提交改动
+git -C <repo> log -1 --format=%cr     # 最近一次提交距今多久（树可能正在被改）
+"$LANE_SCRIPT" list                   # 已登记的 lane、TTL、stale
+```
 
-看到这条拒绝时，**先判自己是不是真的要写这个仓**，再按下面三条选一条，不要反复重试、不要切主 checkout 的分支、不要删别人的 claim 文件：
+- 工作树干净、也没有别人正在改的迹象：直接写；
+- 有未提交改动，或改动落在你的写域之外：**当作另一个会话正在这个树里工作**，不要覆盖它；
+- 只读不占用：调研、取数、实验分析、报告都没有仓内写入，既不建 lane，也不用避让别人的工作树。
 
-1. **只读/分析**（调研、取数、实验分析、报告、量测）：**不要建 lane**——你没有仓内写入，不需要隔离工作树。把中间产物与最终产物写到仓外（`/tmp/<task>/` 或用户指定的输出目录），然后重试那一步；拒绝信息里的「建 lane 或等它结束」只针对写场景，对只读场景是错的默认。
+没有跨会话的 claim 登记可查（这类状态文件已随门禁移除），判断依据就是上面这些：**宁可先问、先等，也不要覆盖一个正在被改的工作树**。看到别人的未提交改动时，按下面三条选一条，不要反复重试、不要切主 checkout 的分支、不要动别人的中间产物。
+
+1. **只读/分析**（调研、取数、实验分析、报告、量测）：**不要建 lane**——你没有仓内写入，不需要隔离工作树。把中间产物与最终产物写到仓外（`/tmp/<task>/` 或用户指定的输出目录），那一步照写。
 2. **任务确实要改这个仓**：按上面的硬门建 lane（先解析脚本路径，别在消费仓里找 `scripts/dsh-lane.sh`），在 lane 里写，验收回主 checkout 跑。
-3. **既不该只读、又够不上两条并行写任务**（例如只是一处小修，而当前 checkout 被别的会话占着）：等它结束（先做别的切片或直接报阻塞），不要为了抢一个工作树去造 lane。
-
-排障：`cat <repo>/.git/dsh-claims.jsonl`（每行 `{root, sessionId, pid, ts}`）。
+3. **既不该只读、又够不上两条并行写任务**（例如只是一处小修，而当前 checkout 里有别人的未提交改动）：等它结束（先做别的切片或直接报阻塞），不要为了抢一个工作树去造 lane。
 
 ## 命令
 
@@ -93,7 +97,7 @@ session/create {cwd: <LANE_ROOT>/<repo>/<task-id>}    # 原生 API，workspaceId
 | 现象 | 处理 |
 |---|---|
 | 消费仓里找不到 `scripts/dsh-lane.sh` | 脚本在预设根 `scripts/`，不在仓里；按「何时用」上方第 1–3 条解析绝对路径，别在仓里翻 |
-| 只读任务被 checkout 占用门拒绝 | 不要建 lane：把中间产物写 `/tmp` 或仓外后重试 |
+| 检出里有别人的未提交改动 | 不要覆盖：换 lane 或等它结束；自己的中间产物写 `/tmp` 或仓外 |
 | `merge` rc=20 | 冲突预演拦截；在 lane 内解决后重试 |
 | `check` 失败 | 未 setup 或 lane 被移动；重跑 setup 或重建 |
 | 未登记 worktree | `audit` 判红；要么登记要么删除 |

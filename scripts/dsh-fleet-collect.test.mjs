@@ -61,7 +61,7 @@ test('glob matching keeps single-star inside one segment and double-star across 
 test('a file is selected only by the surface that claims it', () => {
   assert.equal(selectByGlobs('code-vibe/agent.cordis.yml', SCOPE.surfaces.presets.include, SCOPE.surfaces.presets.exclude), true)
   assert.equal(selectByGlobs('web/cordis.patch.yml', SCOPE.surfaces.presets.include), false)
-  assert.equal(selectByGlobs('web/wish-gate.js', SCOPE.surfaces.profiles.include), true)
+  assert.equal(selectByGlobs('web/local-plugin.js', SCOPE.surfaces.profiles.include), true)
 })
 
 test('paths are matched relative to their surface root', () => {

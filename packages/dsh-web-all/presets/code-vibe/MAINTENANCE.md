@@ -70,21 +70,13 @@
     另：从自定义 `agent.cordis.yml` 移除不可用 `tool-session-query`（会致 agent-preset/invalid）。
     未跑：6 回归、压缩探针、A–H/P1–P6/P-C 其余。详见 `docs/VALIDATION-v5-20261029.md`。
 
-## P0 wish-gate（2026-10-30）
+## wish-gate 已移除（2026-11-02）
 
-- 文件：`plugins/wish-gate.js`（运行时副本：`~/.dsh/profiles/<profile>/wish-gate.js`）
-- 挂载：在目标 profile 的 `cordis.patch.yml` 末尾追加
-  ```yaml
-  - insert:
-      - id: wish-gate
-        name: './wish-gate.js'
-        config: {}
-  ```
-  然后重启该 profile 的 `dsh web`。
-- 行为（P0 + P1，2026-10-30 v2）：
-  - UI/产品意图词命中或会话加载 `wish-programming` 时，`ask_user_question` 之前的 `write/edit/subagent/spawn_teammate` 一律拒绝；
-  - 数据/迁移、运维/生产、跨仓契约、多文件/跨模块、大改版 → 写文件/派工前必须加载 `change-spec`（或 `large-backlog-program` / `wish-programming`），否则拒绝；
-  - `git commit`/`git push` 未经用户要求一律拒绝；
-  - prompt section 强制"UI 改动=T2-wish，先加载 wish-programming 再提问"。
-- 回滚：删除上面块并重启（插件文件可保留）。
-- 验证：J4-1/J4-2/J7-1 r3 均 `wish-programming`+ask；J2-1 r3 编辑正常（无假阳性）。
+- 它曾是什么：`plugins/wish-gate.js`，一个随预设分发的机械门插件——按关键词/任务档拦写入、要求先加载 spec、拦未经用户要求的 `git commit`/`git push`，并在 `<git-common-dir>` 里给会话记工作树占用心跳。
+- 为什么移除（owner 决定，2026-11-02，逐条一行）：
+  - 只读命令被误拒（`git -C <repo> log`、纯计算 heredoc 等本不落盘的调用被当成写）；
+  - 同一机制的镜像面会锁死真正要写这个仓的会话（只读会话替自己占了工作树）；
+  - 状态文件 `dsh-claims.jsonl` 落在用户仓库的 `.git` 里，等于往别人的仓里写私有状态；
+  - 合同套件在 HEAD 上就是红的，门自身没有可信的绿。
+- 留下了什么：`skills/lane-worktree/SKILL.md` 与 `scripts/dsh-lane.sh` 仍是纪律 + 便利工具（一任务一 lane、登记、合并预演、串行合并、清理、`audit`）；跨会话占用避让回到「会话自己看工作树」，**没有机械占用门**。预设的强制力仍只来自 DSH 的审批栈 / 沙箱 / plan mode。
+- 历史与本轮判断依据：`docs/GATE-FIX-REPORT-20261101.md`、`docs/GATE-FIX-REPORT-20261102.md`。

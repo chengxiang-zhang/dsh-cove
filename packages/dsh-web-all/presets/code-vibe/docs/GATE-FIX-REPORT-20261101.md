@@ -114,3 +114,6 @@ live 服务：`systemctl --user restart com.dsh.web.service`（13:03:23 起，HT
 - lane 默认路径已落地（见 §2.5）；剩余边界：claim 是"心跳"不是锁——两个会话在 30 秒内同时起写仍可能都写入，靠 TTL 收敛，不保证强互斥。
 - **门是可读源码**：E/D 两个会话里模型主动 `cat` 了 `wish-gate.js` 并做触发实验（"Test whether .kube path triggers gate"）。门是纪律，不是安全边界；若需要防绕过，应改为不可读位置或服务端判定。
 - 旧 gate 的红色基线（17 pass / 18 fail）来自本轮改造前的实跑；旧文件已被 v9 覆盖且 profile 改为 symlink，未保留副本 —— 若要长期可复现，应把旧版存进 `evals/fixtures/`。
+## 8. 后续：本报告描述的门已于 2026-11-02 移除
+
+本报告记录的是 v9 的修复，不等于该门应当继续存在。2026-11-02 owner 决定把 `wish-gate` 从 bundled `code-vibe` 预设整体移除，插件、合同测试与挂载行同批删除。理由与替代形态见 `GATE-FIX-REPORT-20261102.md` 第 10 节与 `MAINTENANCE.md` 的「wish-gate 已移除（2026-11-02）」。因此文中出现的 `plugins/wish-gate.js`、`scripts/test-wish-gate.mjs`、`<git-common-dir>/dsh-claims.jsonl` 心跳与 `node scripts/test-wish-gate.mjs` 复跑命令都是历史路径，现已不存在；跨会话占用避让回到「会话自己看工作树」的纪律。

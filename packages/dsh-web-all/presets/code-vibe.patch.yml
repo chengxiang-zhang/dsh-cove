@@ -7,9 +7,9 @@
 #
 # The composition is an AGENT-PLANE list: every row belongs to the session that
 # mounts this preset, and the host composition (base + web bundles) keeps the
-# registries, sandbox, approvals and model route. Skill assets and the wish-gate
-# plugin resolve from the installed package root through `!!js` expressions, so a
-# profile needs no copy of either.
+# registries, sandbox, approvals and model route. The rendered rows and the skill
+# assets behind them resolve from the installed package root through `!!js`
+# expressions, so a profile needs no copy of either.
 - insert:
     - id: preset-code-vibe
       name: '@deepseek-ai/dsh-agent-preset'
@@ -375,13 +375,3 @@
             name: '@deepseek-ai/dsh-agent-tool-presentation'
             config:
               mode: native
-
-          # ── gates ───────────────────────────────────────────────────────────────────
-
-          # code-vibe only: necessity-only confirmation, skill routing before writes, and
-          # a session working-tree claim. The module ships inside this package and the row
-          # names it as a package subpath (preset rows take plain specifiers; loader `!!js`
-          # interpolation applies to configuration values, not to row names).
-          - id: wish-gate
-            name: '@dsh-cove/dsh-web-all/presets/code-vibe/plugins/wish-gate.js'
-            config: {}

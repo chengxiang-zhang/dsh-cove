@@ -108,7 +108,7 @@ test('--check fails on a drifted patch and passes on the rendered one', () => {
 
 test('the repository patch is the rendered form of the shipped composition', () => {
   const patch = expectedPatch()
-  assert.ok(patch.includes(`${ROW_INDENT}- id: wish-gate`), 'the gate row ships in the preset')
+  assert.ok(!patch.includes(`${ROW_INDENT}- id: wish-gate`), 'no mechanical gate row ships in the preset')
   assert.ok(
     patch.includes("createRequire(baseUrl).resolve('@dsh-cove/dsh-web-all/package.json')"),
     'assets resolve from the installed package, not a profile copy',

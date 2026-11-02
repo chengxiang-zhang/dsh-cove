@@ -168,3 +168,14 @@ claim 文件里只有 session-ownerAAAA（读会话未落 claim）
 | `pnpm test:scripts` | 495 pass, 0 fail |
 
 工作区状态：v11 代码已提交到本地 `dev`（`fix(preset): key the checkout claim on write destinations`），提交内容与本次核验的字节一致（`git show <commit>:<path> | cmp - <path>` 无差异）；本报告随同一提交入库。仓库内无 `.git/dsh-claims.jsonl`（v11 测试用中性临时 cwd，不再在测试仓落 claim）。
+
+## 10. 后续处置：门已移除（2026-11-02，owner 决定）
+
+本报告核验的 v11 是这条机械门的最后一版。核验结论「可以合入」只针对 v11 相对 v10 的两个缺陷修复，不构成「这条门值得继续存在」的结论；随后 owner 决定把 `wish-gate` 从 bundled `code-vibe` 预设整体移除，理由四条：
+
+1. **只读命令被误拒**：`git -C <repo> log`、纯计算 heredoc 等本不落盘的调用仍被判为写本仓（本轮修掉的只是其中一类）；
+2. **镜像面锁死**：只读会话替自己记下工作树心跳，反过来把真正要写这个仓的会话挡在门外 15 分钟；
+3. **状态文件落在别人的仓里**：`dsh-claims.jsonl` 写在 `<git-common-dir>` 下，等于往用户仓库的 `.git` 里写私有状态；
+4. **门自身没有可信的绿**：合同套件在 HEAD 上就是红的（§9 的 4 条 ask 用例），一份红着的门无法作为合入判据。
+
+移除后留下的是纪律与便利工具，不是机械门：`skills/lane-worktree/SKILL.md`（一任务一 lane、登记、合并预演、清理）与 `scripts/dsh-lane.sh`（含 `audit`）继续随预设分发；跨会话占用避让回到「会话自己看工作树（`git status`/`git log`/`dsh-lane list`）」，**没有机械占用门**。插件、合同测试与挂载行同批删除，维护记录见 `MAINTENANCE.md` 的「wish-gate 已移除（2026-11-02）」。

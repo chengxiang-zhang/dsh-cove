@@ -354,13 +354,3 @@
   name: '@deepseek-ai/dsh-agent-tool-presentation'
   config:
     mode: native
-
-# ── gates ───────────────────────────────────────────────────────────────────
-
-# code-vibe only: necessity-only confirmation, skill routing before writes, and
-# a session working-tree claim. The module ships inside this package and the row
-# names it as a package subpath (preset rows take plain specifiers; loader `!!js`
-# interpolation applies to configuration values, not to row names).
-- id: wish-gate
-  name: '@dsh-cove/dsh-web-all/presets/code-vibe/plugins/wish-gate.js'
-  config: {}

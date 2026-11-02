@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | `$DSH_HOME/.agent-presets/<name>/` | 预设组合 `agent.cordis.yml`、skills、plugins、脚本、评测 | 否，机器本地 |
 | `$DSH_HOME/profiles/<profile>/cordis.patch.yml` | 每台机器实际挂载的行（预设覆盖、模型、门禁） | 否 |
-| `$DSH_HOME/profiles/<profile>/*.js` | 设备本地插件（例如 `wish-gate.js`） | 否 |
+| `$DSH_HOME/profiles/<profile>/*.js` | 设备本地插件（例如 `local-plugin.js`） | 否 |
 | `~/code/dsh-cove`、`~/code/dsh-web` | 机器自己的检出与未提交改动 | 否 |
 
 机器上的改造不会自己回到仓库：一台机器改了预设，其他机器与本仓都看不到，除非有人去收。采集器把这几类「升级面」以只读方式取回本仓 `.harvest/`，评审合并后进 `packages/`，再通过 npm 版本分发回每台机器。

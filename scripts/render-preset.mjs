@@ -37,9 +37,9 @@ const HEADER = `# Bundled \`code-vibe\` preset for DSH 0.2: the "wish programmin
 #
 # The composition is an AGENT-PLANE list: every row belongs to the session that
 # mounts this preset, and the host composition (base + web bundles) keeps the
-# registries, sandbox, approvals and model route. Skill assets and the wish-gate
-# plugin resolve from the installed package root through \`!!js\` expressions, so a
-# profile needs no copy of either.
+# registries, sandbox, approvals and model route. The rendered rows and the skill
+# assets behind them resolve from the installed package root through \`!!js\`
+# expressions, so a profile needs no copy of either.
 `
 
 /**
