@@ -158,7 +158,8 @@ function apply() {
   renderTabs(tabs, services);
   renderBanner();
   applyPage(tab, services, tabs);
-  applyDetailBounds(tab);
+  pageOwnedByService = tab?.kind === 'service';
+  scheduleDetailBounds();
 
   if (tab && tab.id !== lastActiveTabId) {
     lastActiveTabId = tab.id;
@@ -681,11 +682,13 @@ function showServerField() {
   el['server-input'].value = snapshot?.server?.line ?? '';
   el['server-input'].focus();
   el['server-input'].select();
+  syncOverlay();
 }
 
 function closeServerField() {
   el['server-field'].hidden = true;
   el['server-input'].value = '';
+  syncOverlay();
 }
 
 async function saveServerField() {
@@ -705,31 +708,81 @@ async function saveServerField() {
 
 /* -------------------------------------------------------------- native bounds */
 
+/**
+ * Tells the main process where the page area is.
+ *
+ * A service page is a native surface painted above this document, so its geometry cannot
+ * be expressed in CSS and has to be reported. Reporting on render is not enough: resizing
+ * the window moves the page area without changing anything this file draws from, which is
+ * how the page kept its old size until a tab switch happened to re-render. The reporter is
+ * therefore driven by the layout itself, and coalesced to one message per frame because a
+ * live resize produces one layout change per frame.
+ */
 let boundsFrame = 0;
+let sentBounds = '';
+/** Whether the active tab is the kind that owns the page area. */
+let pageOwnedByService = false;
 
-/** Tells the main process where the page area is, so a service's native view can cover it. */
-function applyDetailBounds(tab) {
-  const isService = tab?.kind === 'service';
+function measurePageArea() {
+  const rect = el.page.getBoundingClientRect();
+  return {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+}
+
+function sendDetailBounds() {
+  if (typeof api.detailBounds !== 'function') {
+    return;
+  }
+  const rect = pageOwnedByService ? measurePageArea() : { x: 0, y: 0, width: 0, height: 0 };
+  const key = `${rect.x},${rect.y},${rect.width},${rect.height}`;
+  if (key === sentBounds) {
+    return;
+  }
+  sentBounds = key;
+  api.detailBounds(rect);
+}
+
+function scheduleDetailBounds() {
   if (boundsFrame) {
-    cancelAnimationFrame(boundsFrame);
+    return;
   }
   boundsFrame = requestAnimationFrame(() => {
     boundsFrame = 0;
-    if (typeof api.detailBounds !== 'function') {
-      return;
-    }
-    if (!isService) {
-      api.detailBounds({ x: 0, y: 0, width: 0, height: 0 });
-      return;
-    }
-    const rect = el.page.getBoundingClientRect();
-    api.detailBounds({
-      x: Math.round(rect.x),
-      y: Math.round(rect.y),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
-    });
+    sendDetailBounds();
   });
+}
+
+/**
+ * Everything that can move the page area without a new snapshot arriving.
+ *
+ * The observer covers the page's own box (a banner or the agent bar appearing shifts it),
+ * and the window listeners cover the viewport (resize, and the visual viewport, which is
+ * what moves when the window is zoomed).
+ */
+function watchPageLayout() {
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(scheduleDetailBounds).observe(el.page);
+  }
+  window.addEventListener('resize', scheduleDetailBounds);
+  window.visualViewport?.addEventListener('resize', scheduleDetailBounds);
+}
+
+/**
+ * Keeps the native page out from under an overlay.
+ *
+ * The palette and the server field are DOM, and the native page is painted above DOM:
+ * there is no z-index that can win. When one of those covers the page area the surface
+ * has to step aside, and come back when the last of them closes.
+ */
+function syncOverlay() {
+  if (typeof api.setOverlay !== 'function') {
+    return;
+  }
+  api.setOverlay(!el.palette.hidden || !el['server-field'].hidden);
 }
 
 /* ------------------------------------------------------------------ palette */
@@ -740,11 +793,13 @@ function openPalette() {
   el['palette-input'].value = '';
   el['palette-input'].focus();
   renderPalette('');
+  syncOverlay();
 }
 
 function closePalette() {
   el.palette.hidden = true;
   el['palette-scrim'].hidden = true;
+  syncOverlay();
 }
 
 function renderPalette(query) {
@@ -924,6 +979,17 @@ document.addEventListener('keydown', (event) => {
 /* ---------------------------------------------------------------- bootstrap */
 
 async function start() {
+  watchPageLayout();
+  if (typeof api.onMenu === 'function') {
+    // The menu is the one command surface a focused native page cannot swallow, so the
+    // commands a person presses inside a page live there as well as in the keydown
+    // handler below.
+    api.onMenu('open-palette', openPalette);
+    api.onMenu('open-settings', () => call('openSettings'));
+    api.onMenu('open-server-field', showServerField);
+    api.onMenu('new-tab', () => call('openHome'));
+    api.onMenu('close-tab', () => call('close', tabsOf(snapshot).activeId));
+  }
   if (typeof api.onSnapshot === 'function') {
     api.onSnapshot((next) => {
       snapshot = next;

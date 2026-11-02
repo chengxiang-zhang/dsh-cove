@@ -18,7 +18,9 @@ contextBridge.exposeInMainWorld('anywhere', {
   // runtime itself, so a missing one is answered with a command the person owns.
   runInstaller: () => ipcRenderer.invoke('run-installer'),
   detailBounds: (rect) => ipcRenderer.send('detail-bounds', rect),
-  setSidebar: (visible) => ipcRenderer.send('sidebar', visible),
+  // The native page paints above this whole document, so an overlay that covers the page
+  // area has to ask the page to step aside rather than trying to paint higher.
+  setOverlay: (covering) => ipcRenderer.send('overlay', Boolean(covering)),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   // The agent's state is pushed, not polled: the main process owns the agent, so it
   // is the only place that knows when something changed.

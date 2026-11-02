@@ -45,6 +45,7 @@ import { resolveHelper as resolveHelperPath } from '../src/helper-path.mjs';
 import { shouldReloadOnRefresh, shouldReloadOnWake, workspacePageAction } from '../src/view-freshness.mjs';
 import { SNAPSHOT_HEARTBEAT_MS, shouldClearProxy, shouldReadSnapshotOnHeartbeat, snapshotHeartbeatMs, viewsToPrune } from '../src/snapshot-freshness.mjs';
 import { updateCheckDue } from '../src/update.mjs';
+import { contentRect, isCovering, sameRect } from '../src/view-geometry.mjs';
 
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1383,7 +1384,26 @@ const workspaceHiddenSince = new Map();
 /** When each machine was first missing from the list, so a blip does not drop its page. */
 const workspaceMissingSince = new Map();
 let activeWorkspace = '';
-let detailRect = null;
+/**
+ * The page area as the renderer last measured it, in CSS pixels.
+ *
+ * It is deliberately kept in the units it arrived in: the placement has to be derived
+ * from it every time (see `dipDetailRect`), because both the window size and the shell's
+ * zoom can change between two measurements and a stored DIP rect would then be a number
+ * that was right for a previous state.
+ */
+let detailRectCss = null;
+/**
+ * Whether the shell is showing something over the page area - the ⌘K palette, the server
+ * field.
+ *
+ * Those are DOM, and a native surface is painted above the whole renderer, so an overlay
+ * that covers the page area has to hide the surface while it is up. Nothing in CSS can
+ * express that ordering, which is why it is a state the renderer reports.
+ */
+let overlayOpen = false;
+/** Where the surface was last placed, so a resize that changes nothing costs nothing. */
+let placedRect = null;
 
 /** Creates (or reuses) the view for one machine. */
 function workspaceViewFor(entry) {
@@ -1404,10 +1424,42 @@ function workspaceViewFor(entry) {
   return view;
 }
 
+/**
+ * The page area in the units `setBounds` takes, or null when there is nothing to cover.
+ *
+ * This is the one place the two coordinate systems meet: the renderer measures in CSS
+ * pixels, the surface is placed in DIP, and the shell's zoom level is the exchange rate.
+ * Deriving it per call - rather than trusting whichever number was last stored - is what
+ * makes a zoom change, a window resize and a display change all end up in the same
+ * answer.
+ */
+function dipDetailRect() {
+  if (detailRectCss === null) {
+    return null;
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return null;
+  }
+  const rect = contentRect({
+    rect: detailRectCss,
+    zoom: mainWindow.webContents.getZoomFactor(),
+    content: mainWindow.getContentBounds(),
+  });
+  return isCovering(rect) ? rect : null;
+}
+
+/**
+ * Places the surface over the page area, if a surface is supposed to be there.
+ *
+ * Callers keep owning visibility (opening a tab, hiding the pane); this only answers
+ * "where", and hides the workspace when there is nowhere to put it.
+ */
 function applyDetailBounds() {
-  if (detailRect !== null) {
+  const rect = overlayOpen ? null : dipDetailRect();
+  if (rect !== null && !sameRect(rect, placedRect)) {
+    placedRect = rect;
     for (const view of webViews.values()) {
-      view.setBounds(detailRect);
+      view.setBounds(rect);
     }
   }
   if (activeWorkspace === '') {
@@ -1417,12 +1469,55 @@ function applyDetailBounds() {
   if (!view) {
     return;
   }
-  if (detailRect === null || detailRect.width === 0 || detailRect.height === 0) {
+  if (rect === null) {
     view.setVisible(false);
     return;
   }
-  view.setBounds(detailRect);
+  view.setBounds(rect);
   view.setVisible(true);
+}
+
+/** The view the active tab owns, whichever kind of service it is. */
+function currentSurface() {
+  if (activeWorkspace !== '') {
+    return workspaceViews.get(activeWorkspace) ?? null;
+  }
+  return webViews.get(tabsState.activeId) ?? null;
+}
+
+/** Puts the active tab's page back after something covered it. */
+function showCurrentSurface() {
+  const view = currentSurface();
+  if (!view || overlayOpen) {
+    return;
+  }
+  const rect = dipDetailRect();
+  if (rect === null) {
+    return;
+  }
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.contentView.children.includes(view)) {
+    mainWindow.contentView.addChildView(view);
+  }
+  view.setBounds(rect);
+  placedRect = rect;
+  view.setVisible(true);
+}
+
+/**
+ * Repaints the native pages' backdrop in the current scheme.
+ *
+ * A page paints its own background once it loads, but the frame between attaching it and
+ * first paint shows this colour: keeping it at the value from creation time flashes the
+ * previous appearance in a window that just changed.
+ */
+function repaintNativeViews() {
+  const color = windowBackground();
+  for (const view of workspaceViews.values()) {
+    view.setBackgroundColor(color);
+  }
+  for (const view of webViews.values()) {
+    view.setBackgroundColor(color);
+  }
 }
 
 /**
@@ -1482,7 +1577,12 @@ async function showWorkspace(host, options = {}) {
   }
   activeWorkspace = host;
   applyDetailBounds();
-  view.setVisible(true);
+  // Visibility is the caller's to decide, except when an overlay is up: a native surface
+  // is painted above the whole renderer, so showing it under the palette would put the
+  // page on top of the thing the user just asked for.
+  if (!overlayOpen) {
+    view.setVisible(true);
+  }
   writeSeam();
   // The acceptance run captures this view's page: a native view is not part of the
   // renderer's screenshot, so the seam is how the embedded workspace can be evidenced.
@@ -1654,6 +1754,7 @@ function applyScheme(choice) {
   writeSettings({ ...readSettings(), scheme: schemeChoice });
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setBackgroundColor(windowBackground());
+    repaintNativeViews();
     mainWindow.webContents.send('scheme-changed', {
       scheme: schemeChoice === 'system' ? '' : schemeChoice,
       label: schemeLabel(),
@@ -1701,6 +1802,20 @@ function installAppMenu() {
         { role: 'front', label: '前置全部窗口' },
       ]
     : [{ role: 'close', label: '关闭' }];
+  // Tab and window commands belong in the menu as well as in the renderer. A keystroke
+  // goes to whatever has focus, and what usually has focus is the page inside a native
+  // view - which is not this renderer. A menu accelerator reaches the window whichever
+  // layer is focused, so a command that only lived in a renderer listener was a command
+  // the user could not reach while reading a page.
+  const tabItems = [
+    { label: '新页签', accelerator: 'CommandOrControl+T', click: () => mainWindow?.webContents.send('new-tab') },
+    { label: '关闭页签', accelerator: 'CommandOrControl+W', click: () => mainWindow?.webContents.send('close-tab') },
+  ];
+  const settingsItem = {
+    label: '设置…',
+    accelerator: 'CommandOrControl+,',
+    click: () => mainWindow?.webContents.send('open-settings'),
+  };
   const template = [
     {
       // macOS owns an application menu named after the app; Windows expects a File
@@ -1709,10 +1824,13 @@ function installAppMenu() {
       submenu: [
         { role: 'about', label: '关于 Anywhere Work' },
         { type: 'separator' },
+        ...(isMac ? [settingsItem] : [...tabItems, settingsItem]),
+        { type: 'separator' },
         ...appMenuExtras,
         { role: 'quit', label: '退出' },
       ],
     },
+    ...(isMac ? [{ label: '文件', submenu: tabItems }] : []),
     {
       label: '编辑',
       submenu: [
@@ -1741,14 +1859,9 @@ function installAppMenu() {
           },
         },
         {
-          label: '搜索机器',
-          accelerator: 'CommandOrControl+F',
-          click: () => mainWindow?.webContents.send('focus-search'),
-        },
-        {
-          label: '显示或隐藏侧栏',
-          accelerator: 'CommandOrControl+Alt+S',
-          click: () => mainWindow?.webContents.send('toggle-sidebar'),
+          label: '跳到服务…',
+          accelerator: 'CommandOrControl+K',
+          click: () => mainWindow?.webContents.send('open-palette'),
         },
         {
           // The address is a setting, so it has a home in the menu as well as on the panels
@@ -1811,6 +1924,19 @@ function createMainWindow() {
     },
   });
   mainWindow.loadFile(join(HERE, 'renderer', 'index.html'));
+  // The renderer reports the page area whenever its layout changes, which is what keeps
+  // the native page in step. These are the changes that happen *without* the renderer
+  // being told anything, so they are also re-applied here: the frame between the window
+  // growing and the next report would otherwise paint the page at its old size.
+  mainWindow.on('resize', applyDetailBounds);
+  mainWindow.on('restore', applyDetailBounds);
+  // Full screen animates the content area on macOS; the final size only exists once the
+  // transition is over, and a placement made during it is one frame too early.
+  mainWindow.on('enter-full-screen', applyDetailBounds);
+  mainWindow.on('leave-full-screen', applyDetailBounds);
+  // Zooming the shell changes the CSS-to-DIP ratio without moving the page: the view has
+  // to be re-placed even though nothing about the layout "changed".
+  mainWindow.webContents.on('zoom-changed', applyDetailBounds);
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -2248,10 +2374,14 @@ function showWebView(tabId, view) {
   if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.contentView.children.includes(view)) {
     mainWindow.contentView.addChildView(view);
   }
-  if (detailRect !== null && detailRect.width > 0 && detailRect.height > 0) {
-    view.setBounds(detailRect);
+  // A view that has just been created has no bounds yet, so the placement is made here
+  // explicitly: `applyDetailBounds` skips a placement that has not moved.
+  const rect = overlayOpen ? null : dipDetailRect();
+  if (rect !== null) {
+    view.setBounds(rect);
+    placedRect = rect;
   }
-  view.setVisible(true);
+  view.setVisible(!overlayOpen);
   writeSeam();
   if (mainWindow && !mainWindow.isDestroyed()) {
     const tab = tabsState.tabs.find((candidate) => candidate.id === tabId);
@@ -2498,23 +2628,47 @@ ipcMain.on('copy-diagnostics', () => {
   );
 });
 
+/**
+ * The page area, measured by the renderer.
+ *
+ * The renderer owns the layout, so it is the only place that knows where the page area
+ * is - but a measurement is not a placement: the rect arrives in CSS pixels and is
+ * converted where it is used (see `dipDetailRect`). It reports on layout changes rather
+ * than on renders, because a window resize changes the area without changing any state
+ * the renderer draws from.
+ */
 ipcMain.on('detail-bounds', (_event, rect) => {
   if (!rect || typeof rect !== 'object') {
     return;
   }
-  detailRect = {
-    x: Math.round(Number(rect.x) || 0),
-    y: Math.round(Number(rect.y) || 0),
-    width: Math.max(0, Math.round(Number(rect.width) || 0)),
-    height: Math.max(0, Math.round(Number(rect.height) || 0)),
+  detailRectCss = {
+    x: Number(rect.x) || 0,
+    y: Number(rect.y) || 0,
+    width: Math.max(0, Number(rect.width) || 0),
+    height: Math.max(0, Number(rect.height) || 0),
   };
   applyDetailBounds();
 });
 
-ipcMain.on('sidebar', (_event, visible) => {
-  // The pane moves when the sidebar folds, so the view has to be told.
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('sidebar', Boolean(visible));
+/**
+ * Whether something in the shell's own DOM is covering the page area.
+ *
+ * A native surface paints above the entire renderer, so there is no z-index that can put
+ * the ⌘K palette over it: the surface has to step aside while an overlay is up, and come
+ * back when it closes.
+ */
+ipcMain.on('overlay', (_event, open) => {
+  const next = Boolean(open);
+  if (next === overlayOpen) {
+    return;
+  }
+  overlayOpen = next;
+  if (overlayOpen) {
+    hideNativeViews();
+  }
+  applyDetailBounds();
+  if (!overlayOpen) {
+    showCurrentSurface();
   }
 });
 
@@ -2554,6 +2708,7 @@ nativeTheme.on('updated', () => {
     return;
   }
   mainWindow.setBackgroundColor(windowBackground());
+  repaintNativeViews();
   mainWindow.webContents.send('scheme-changed', {
     scheme: schemeChoice === 'system' ? '' : schemeChoice,
     label: schemeLabel(),
