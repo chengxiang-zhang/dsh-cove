@@ -534,7 +534,10 @@ export function selectMachineFiles(probe, machine, scope) {
 /** Exact transfer size of the selected files, asked before a byte is moved. */
 export function buildSizeScript(scope) {
   const dshHome = expandHome(scope.dshHome, { remote: true })
-  return `set -u; cd "${dshHome}" || exit 3; tr '\\n' '\\0' | xargs -0 du -ck 2>/dev/null | awk '$2 == "total" { s += $1 } END { print s + 0 }'`
+  // LC_ALL=C: a localized `du` prints its total line as e.g. `总计`, and the awk
+  // below matches the word `total`. Without this the estimate silently reads 0 on
+  // machines whose locale is not English.
+  return `set -u; cd "${dshHome}" || exit 3; tr '\\n' '\\0' | LC_ALL=C xargs -0 du -ck 2>/dev/null | awk '$2 == "total" { s += $1 } END { print s + 0 }'`
 }
 
 export async function estimateSize(machine, scope, files) {
@@ -1305,8 +1308,9 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
           ? ` ahead of baseline (${record.drift.harvestedFiles} files)`
           : ` +${record.drift.added.length}/~${record.drift.modified.length}/-${record.drift.removed.length}`
         : ''
+      const shownBytes = record.bytes > 0 ? record.bytes : (record.estimatedKilobytes || 0) * 1024
       log(
-        `  ${record.ok ? 'ok' : 'FAIL'}${record.ok ? ` files=${record.files.length} ${formatBytes(record.bytes)}` : `: ${record.error}`}${driftLabel}`,
+        `  ${record.ok ? 'ok' : 'FAIL'}${record.ok ? ` files=${record.files.length} ${formatBytes(shownBytes)}${record.dryRun ? ' (estimated)' : ''}` : `: ${record.error}`}${driftLabel}`,
       )
     }
     manifest.machines.push(record)
