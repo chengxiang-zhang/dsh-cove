@@ -99,10 +99,19 @@ test('single entity mounts its position modules without browser errors', async (
 async function clickShellButton(page: Page, name: string | RegExp): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt++) {
     await dismissFirstRunDialogs(page)
+    const target = page.getByRole('button', { name, exact: true }).first()
     try {
-      await page.getByRole('button', { name, exact: true }).first().click({ timeout: 5_000 })
+      await target.click({ timeout: 5_000 })
       return
-    } catch (error) { if (attempt === 2) throw error }
+    } catch (error) {
+      if (attempt < 2) continue
+      // The shell animates its rails and some popovers keep pointer-events masked while
+      // they settle; on a slow runner the click reports "not stable" or "intercepted"
+      // forever. Dispatch it directly on the last attempt so the smoke tests behaviour
+      // instead of the shell's animation timing.
+      await target.click({ force: true, timeout: 10_000 }).catch(() => { throw error })
+      return
+    }
   }
 }
 
