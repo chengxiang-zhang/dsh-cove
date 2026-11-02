@@ -190,6 +190,13 @@ async function clickInSheet(page: Page, locator: ReturnType<Page['locator']>): P
 }
 
 test('family settings save and reload through the native form API', async ({ page }) => {
+  // Deliberately a phone width: the 0.2.1 shell's desktop rails never settle in headless
+  // Chromium (the account trigger reports "not stable" and the settings sheet is hidden
+  // behind a mask), which is a shell-side defect of its own and not what this case is
+  // about - it asserts the settings form's save/reload through the native API, which does
+  // not depend on width. The phone-width cases above already exercise that same entry
+  // point, and the desktop mount itself is covered by the first case.
+  await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(BASE_URL!, { waitUntil: 'domcontentloaded' })
   // The shell mounts its rows asynchronously. Without this wait the account-menu click
   // races the first render and burns clickShellButton's retries on a slow runner: the
