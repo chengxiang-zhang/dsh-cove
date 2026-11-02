@@ -150,6 +150,11 @@ for (const width of [320, 390]) test(`family panels and settings remain usable a
 
 test('family settings save and reload through the native form API', async ({ page }) => {
   await page.goto(BASE_URL!, { waitUntil: 'domcontentloaded' })
+  // The shell mounts its rows asynchronously. Without this wait the account-menu click
+  // races the first render and burns clickShellButton's retries on a slow runner: the
+  // v0.6.1 release run failed here twice at desktop width while the phone-width cases,
+  // which do wait for a shell button first, passed.
+  await expect(page.getByRole('button', { name: 'SSH', exact: true })).toBeVisible({ timeout: 30_000 })
   await openSettings(page)
   const openFeishu = async () => {
     await page.getByText('Built-in plugins', { exact: true }).click()
