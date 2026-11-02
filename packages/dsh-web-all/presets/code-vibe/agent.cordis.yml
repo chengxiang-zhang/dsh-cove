@@ -29,12 +29,14 @@
 # ── identity ────────────────────────────────────────────────────────────────
 
 # The preset's own persona, shadowing the deployment default for this agent.
-# `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
+# `{{model}}` resolves from the agent's own route. DSH 0.2.1 dropped the `cwd`
+# variable (its registry is provider/model only) and throws on unknown groups, so the
+# working directory is described in prose instead of being interpolated.
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
     # 0.1.6-alpha.1: field renamed text → prefix (required)
-    suffix: Your working directory is {{cwd}}.
+    suffix: Your working directory is the session workspace root; confirm it with pwd before writing files relative to it.
     prefix: |-
       You are a wish-programming coding agent powered by the {{model}} model. You are the FRONT-DESK PM: the user only talks to you; translate everything into user language — never dump internal artifacts (product.md / arch.md / review-*.md) or engineering vocabulary at the user without a plain-language explanation. Keep only four things resident: 需求原文 / 确认结论 / 语义不变量清单（含 Out-of-scope）/ 模块进度摘要; push detail to artifacts and subagents.
 

@@ -35,8 +35,15 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
  * semantics, this gate catches the common literal form.
  */
 
-/** Variable names DSH registers globally (dsh-agent-loop lib/index.js). */
-const DSH_BUILTIN_VARIABLES = new Set(['provider', 'model', 'cwd'])
+/**
+ * Variable names DSH registers globally (dsh-agent-loop lib/index.js).
+ *
+ * `cwd` was a 0.2.0 built-in and is GONE in 0.2.1: the registry there is provider +
+ * model only, and renderPrompt throws `unknown prompt variable "{{cwd}}"` on every
+ * model step. A preset that still interpolates it therefore bricks every turn on
+ * 0.2.1 (pc-tower regression, 2026-11-02), which is why it is no longer allowlisted.
+ */
+const DSH_BUILTIN_VARIABLES = new Set(['provider', 'model'])
 /** DSH VARIABLE_NAME (dsh-system-prompt lib/index.js). */
 const VARIABLE_NAME = /^[a-z][a-z0-9_]*$/
 /** A complete simple {{name}} group. */
@@ -224,14 +231,65 @@ function auditFile(file, source) {
   return problems
 }
 
+/** Every bundled preset YAML, source and rendered copy. */
+function collectPresetFiles() {
+  const files = []
+  for (const entry of readdirSync(join(ROOT, 'packages'))) {
+    const presets = join(ROOT, 'packages', entry, 'presets')
+    if (!statSync(presets, { throwIfNoEntry: false })?.isDirectory()) continue
+    const walk = (dir) => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name)
+        const stat = statSync(full)
+        if (stat.isDirectory()) walk(full)
+        else if (name.endsWith('.yml') || name.endsWith('.yaml')) files.push(full)
+      }
+    }
+    walk(presets)
+  }
+  return files
+}
+
+/**
+ * Preset YAML carries systemPrompt text too (persona prefix/suffix, announce
+ * sections), and DSH interpolates it with the same strict registry. Static analysis
+ * of the TS call sites never saw that, so a `{{cwd}}` in a persona suffix shipped and
+ * broke every 0.2.1 turn; presets can register no variables, so only the built-ins
+ * are legal here.
+ */
+function auditPresetFile(file) {
+  const source = readFileSync(file, 'utf8')
+  const problems = []
+  const lines = source.split('\n')
+  for (let index = 0; index < lines.length; index += 1) {
+    REF_GROUP.lastIndex = 0
+    let match
+    while ((match = REF_GROUP.exec(lines[index])) !== null) {
+      const name = match[1]
+      if (VARIABLE_NAME.test(name) && DSH_BUILTIN_VARIABLES.has(name)) continue
+      problems.push(
+        `${relative(ROOT, file)}:${index + 1}: preset text references "{{${name}}}", which DSH 0.2.1 does not register (built-ins: ${[...DSH_BUILTIN_VARIABLES].join(', ')}; the removed "cwd" throws on every model step); presets cannot register variables, so keep this text static`,
+      )
+    }
+  }
+  return problems
+}
+
 function auditAll() {
   const problems = []
   for (const file of collectSourceFiles()) {
     const source = readFileSync(file, 'utf8')
     problems.push(...auditFile(file, source))
   }
+  for (const file of collectPresetFiles()) problems.push(...auditPresetFile(file))
   return problems
 }
+
+test('bundled preset YAML interpolates only variables DSH actually registers', () => {
+  const problems = []
+  for (const file of collectPresetFiles()) problems.push(...auditPresetFile(file))
+  assert.deepEqual(problems, [], problems.length > 0 ? `preset prompt-variable hazards:\n${problems.join('\n')}` : undefined)
+})
 
 test('every systemPrompt section/context text is static or references only registered variables', () => {
   const problems = auditAll()

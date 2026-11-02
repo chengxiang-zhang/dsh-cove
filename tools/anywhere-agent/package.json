@@ -1,6 +1,6 @@
 {
   "name": "@dsh-cove/anywhere-agent",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": true,
   "description": "App-scoped overlay agent and intranet browser for DSH workspaces",
   "type": "module",
