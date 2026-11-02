@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ScheduleModeEngine, type ScheduleModePorts } from '../src/host/services/schedule-mode/engine.ts'
+import { ScheduleModeEngine, ScheduleModeError, type ScheduleModePorts } from '../src/host/services/schedule-mode/engine.ts'
 import { ScheduleModeStore } from '../src/host/services/schedule-mode/store.ts'
 import { register } from '../src/host/services/schedule-mode/index.ts'
-import { bindFamilyConfig } from '../src/host/services/family-config.ts'
+import { bindFamilyConfig, notifyFamilyConfigChange } from '../src/host/services/family-config.ts'
 import type { NativeTaskView } from '../src/core/schedule-mode/native.ts'
 import type { ScheduleModePolicy } from '../src/core/schedule-mode/types.ts'
 
@@ -162,6 +162,41 @@ describe('schedule-mode fail-closed persistence and lifetime fixes', () => {
 // These assertions deliberately verify the new fail-closed public behavior.
 
 describe('schedule-mode hot settings cleanup', () => {
+  for (const action of ['notify', 'disable', 'dispose'] as const) {
+    it(`does not report cancelled startup reconciliation after ${action}`, async () => {
+      const f = fixture()
+      const warn = vi.fn()
+      const off = () => {}
+      const ctx = { get: () => undefined, webServer: { register: () => off },
+        tools: { register: () => off }, on: () => off }
+      const dispose = register(ctx as never, { storePath: f.file, logger: { warn } })
+      try {
+        if (action === 'dispose') dispose()
+        else {
+          if (action === 'disable') bindFamilyConfig({ 'schedule-mode': { enabled: false } })
+          notifyFamilyConfigChange()
+        }
+        await new Promise(resolve => setTimeout(resolve, 20))
+        expect(warn).not.toHaveBeenCalled()
+      } finally { dispose() }
+    })
+  }
+
+  it('still reports recovery errors from the active registration', async () => {
+    const f = fixture()
+    const warn = vi.fn()
+    const error = new ScheduleModeError('recovery-required', 'active transition needs recovery')
+    const reconcile = vi.spyOn(ScheduleModeEngine.prototype, 'reconcile').mockRejectedValue(error)
+    const off = () => {}
+    const ctx = { get: () => undefined, webServer: { register: () => off },
+      tools: { register: () => off }, on: () => off }
+    const dispose = register(ctx as never, { storePath: f.file, logger: { warn } })
+    try {
+      await Promise.resolve()
+      expect(warn).toHaveBeenCalledWith(error)
+    } finally { dispose(); reconcile.mockRestore() }
+  })
+
   it('disabled settings do not mount routes or start native creation', async () => {
     const f = fixture()
     bindFamilyConfig({ 'schedule-mode': { enabled: false } })

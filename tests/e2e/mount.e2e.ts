@@ -17,10 +17,9 @@ const ENTRY_NAMES = [
   /^Plugins$/,
   /^SSH$/,
   /^(?:记忆|Memory)$/,
-  /^Settings$/,
 ]
 
-test('single entity mounts its position modules without browser errors', async ({ page }) => {
+test('single entity mounts its position modules without browser errors', async ({ page }, testInfo) => {
   const pageErrors: string[] = []
   const pluginConsoleErrors: string[] = []
   page.on('pageerror', error => pageErrors.push(error.message))
@@ -86,14 +85,89 @@ test('single entity mounts its position modules without browser errors', async (
   await expect(page.getByText(/Hosts|主机/).first()).toBeVisible({ timeout: 15_000 })
   // The Feishu page is the Built-in plugins settings tab, present only while the
   // host serves the family settings entry.
-  await page.getByRole('button', { name: 'Settings' }).first().click()
+  await openSettings(page)
   await page.getByText('Built-in plugins', { exact: true }).first().click()
   await page.getByRole('tab', { name: /Feishu|飞书/ }).first().click()
   await expect(page.locator('[data-dsh-plugin="lark-inbox"][data-dsh-part="settings"]')).toHaveCount(1)
   await expect(page.getByText(/Feishu connection and settings|飞书连接与配置/).first()).toBeVisible({ timeout: 15_000 })
   await expect(page.getByText(/Failed to load plugins/i)).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('desktop-feishu.png'), fullPage: true })
   expect(pageErrors, 'page errors').toEqual([])
   expect(pluginConsoleErrors, 'entity console errors').toEqual([])
+})
+
+async function clickShellButton(page: Page, name: string | RegExp): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await dismissFirstRunDialogs(page)
+    try {
+      await page.getByRole('button', { name, exact: true }).first().click({ timeout: 5_000 })
+      return
+    } catch (error) { if (attempt === 2) throw error }
+  }
+}
+
+/** Settings moved under Account menu in DSH 0.2.1; keep the 0.2.0 path. */
+async function openSettings(page: Page): Promise<void> {
+  const legacySettings = page.getByRole('button', { name: 'Settings', exact: true }).first()
+  if (await legacySettings.isVisible()) await legacySettings.click()
+  else {
+    await clickShellButton(page, 'Account menu')
+    await page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
+  }
+}
+
+for (const width of [320, 390]) test(`family panels and settings remain usable at phone width ${width}px`, async ({ page }, testInfo) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.setViewportSize({ width, height: 844 })
+  await page.goto(BASE_URL!, { waitUntil: 'domcontentloaded' })
+  await expect(page.getByRole('button', { name: 'SSH', exact: true })).toBeVisible({ timeout: 30_000 })
+  await dismissFirstRunDialogs(page)
+  await clickShellButton(page, 'SSH')
+  await expect(page.getByText('Remote SSH', { exact: true })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('phone-ssh.png'), fullPage: true })
+  await clickShellButton(page, /^(?:Memory|记忆)$/)
+  await expect(page.getByText('Memory Memoir', { exact: true })).toBeVisible()
+  await openSettings(page)
+  await page.getByText('Built-in plugins', { exact: true }).click()
+  await page.getByRole('tab', { name: /Feishu|飞书/ }).click()
+  await expect(page.locator('[data-dsh-plugin="lark-inbox"][data-dsh-part="settings"]')).toBeVisible()
+  const form = page.locator('[data-dsh-plugin="lark-inbox"][data-dsh-part="settings"]')
+  await expect.poll(async () => (await form.boundingBox())?.width ?? 0).toBeGreaterThan(width - 70)
+  const title = page.locator('[data-slot="settings.header"]')
+  const action = page.getByRole('button', { name: 'Open configuration file', exact: true })
+  const titleBox = await title.evaluate(element => {
+    const range = document.createRange()
+    range.selectNodeContents(element)
+    const box = range.getBoundingClientRect()
+    return { x: box.x, width: box.width }
+  })
+  const actionBox = (await action.boundingBox())!
+  expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(actionBox.x)
+  await page.screenshot({ path: testInfo.outputPath('phone-feishu.png'), fullPage: true })
+  expect(errors).toEqual([])
+})
+
+test('family settings save and reload through the native form API', async ({ page }) => {
+  await page.goto(BASE_URL!, { waitUntil: 'domcontentloaded' })
+  await openSettings(page)
+  const openFeishu = async () => {
+    await page.getByText('Built-in plugins', { exact: true }).click()
+    await page.getByRole('tab', { name: /Feishu|飞书/ }).click()
+    await expect(page.locator('[data-dsh-plugin="lark-inbox"] [data-field="announceToAgent"] input[type="checkbox"]')).toBeEnabled()
+  }
+  await openFeishu()
+  const original = await page.locator('[data-dsh-plugin="lark-inbox"] [data-field="announceToAgent"] input[type="checkbox"]').isChecked()
+  await page.locator('[data-dsh-plugin="lark-inbox"] [data-field="announceToAgent"] input[type="checkbox"]').setChecked(!original)
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
+  await page.reload()
+  await openSettings(page)
+  await openFeishu()
+  await expect(page.locator('[data-dsh-plugin="lark-inbox"] [data-field="announceToAgent"] input[type="checkbox"]')).toBeChecked({ checked: !original })
+  await page.locator('[data-dsh-plugin="lark-inbox"] [data-field="announceToAgent"] input[type="checkbox"]').setChecked(original)
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
 })
 
 /**

@@ -22,7 +22,7 @@ import { nativeTaskView, type NativeTaskView } from '../../../core/schedule-mode
 import type { NativeCreateRequest } from '../../../core/schedule-mode/types.ts'
 import { familyNamespace, onFamilyConfigChange } from '../family-config.ts'
 import { SCHEDULE_MODE_SETTINGS_NAMESPACE, type ScheduleModeConfig } from './config.ts'
-import { ScheduleModeEngine, type ScheduleModePorts } from './engine.ts'
+import { ScheduleModeEngine, ScheduleModeError, type ScheduleModePorts } from './engine.ts'
 import { ScheduleModeStore, defaultScheduleModeStorePath } from './store.ts'
 import { buildSessionCreateRequest } from './session-create.ts'
 import { registerScheduleModeRoutes } from './routes.ts'
@@ -175,9 +175,18 @@ export function register(ctx: Context, deps: ScheduleModeServiceDeps = {}): () =
   const engine = new ScheduleModeEngine(store, ports)
 
   let disposed = false
+  let generation = 0
   let disposeSurfaces: (() => void) | undefined
   const sync = (): void => {
     if (disposed) return
+    const currentGeneration = ++generation
+    const report = (error: unknown): void => {
+      // Settings refresh and disposal deliberately cancel work from the old
+      // registration. Preserve genuine recovery errors from the active one.
+      if ((disposed || currentGeneration !== generation)
+        && error instanceof ScheduleModeError && error.code === 'recovery-required') return
+      logger.warn(error)
+    }
     // Stop pending work before removing the old admission surfaces. Enabling
     // later resumes through its persisted intent, never through a late callback.
     engine.setEnabled(false)
@@ -189,16 +198,16 @@ export function register(ctx: Context, deps: ScheduleModeServiceDeps = {}): () =
         own(registerScheduleModeRoutes(ctx, { engine, logger }))
         own(registerScheduleModeTools(ctx, engine))
         own(onEvent(ctx, 'schedule/changed', () => {
-          if (!disposed) void engine.reconcile().catch(error => logger.warn(error))
+          if (!disposed) void engine.reconcile().catch(report)
         }))
         own(onEvent(ctx, 'workspace/session-stop', (...args: unknown[]) => {
           const payload = args[0] as { sessionId?: unknown } | undefined
           if (disposed || typeof payload?.sessionId !== 'string' || payload.sessionId === '') return
-          void engine.stopSession(payload.sessionId).catch(error => logger.warn(error))
+          void engine.stopSession(payload.sessionId).catch(report)
         }))
       })
       engine.setEnabled(true)
-      void engine.reconcile().catch(error => logger.warn(error))
+      void engine.reconcile().catch(report)
     } catch (error) {
       engine.setEnabled(false)
       throw error

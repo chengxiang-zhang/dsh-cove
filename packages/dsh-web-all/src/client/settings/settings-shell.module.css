@@ -54,3 +54,52 @@
   opacity: 0.5;
   cursor: default;
 }
+/* DSH 0.2.1 keeps a fixed side navigation in its settings dialog. On phones,
+ * give the form the full width and keep navigation in a scrollable top row.
+ * Anchor to the shell's semantic modal/slot attributes, not generated hashes.
+ */
+@media (max-width: 600px) {
+  :global(div:has(> [role="dialog"][aria-modal="true"][data-shortcut-modal="settings"])) {
+    padding: 0;
+  }
+
+  :global([role="dialog"][aria-modal="true"][data-shortcut-modal="settings"]) {
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    flex-direction: column;
+  }
+
+  :global([role="dialog"][aria-modal="true"][data-shortcut-modal="settings"] > nav) {
+    flex: 0 0 auto;
+    width: auto;
+    padding: 16px 12px 8px;
+  }
+
+  :global([role="dialog"][aria-modal="true"][data-shortcut-modal="settings"] > nav > div:last-child) {
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 4px;
+  }
+
+  :global([role="dialog"][aria-modal="true"][data-shortcut-modal="settings"] > nav button) {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  :global([role="dialog"][aria-modal="true"][data-shortcut-modal="settings"] > div) {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+  }
+
+  :global([role="dialog"][aria-modal="true"][data-shortcut-modal="settings"] > div > div:has([data-slot="settings.action"])) {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    height: 28px;
+    padding: 0;
+  }
+}
