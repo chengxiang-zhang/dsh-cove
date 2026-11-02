@@ -117,22 +117,30 @@ async function clickShellButton(page: Page, name: string | RegExp): Promise<void
 
 /** Settings moved under Account menu in DSH 0.2.1; keep the 0.2.0 path. */
 async function openSettings(page: Page): Promise<void> {
+  const nav = page.getByText('Built-in plugins', { exact: true })
+  const opened = () => nav.isVisible({ timeout: 10_000 }).catch(() => false)
   const legacySettings = page.getByRole('button', { name: 'Settings', exact: true }).first()
-  if (await legacySettings.isVisible().catch(() => false)) await legacySettings.click()
-  else {
-    // DSH 0.2.1 renders the account menu as a masked popover: 设置/意见反馈/登录 (Settings /
-    // Feedback / Sign in) above a "More" row. Two things bite the release smoke here - the
-    // trigger is named in the shell's locale, and the popover's full-screen mask outlives
-    // the selection, swallowing the next click inside the settings sheet.
+  if (await legacySettings.isVisible().catch(() => false)) {
+    await legacySettings.click()
+    if (await opened()) return
+  }
+  // DSH 0.2.1 renders the account menu as a masked popover (Settings / Feedback / Sign in
+  // above a More row). On a clean runner the add-an-API-key dialog mounts asynchronously
+  // and can land on top of it, so the whole sequence is retried after clearing dialogs
+  // again rather than assuming one dismissal is enough.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await dismissFirstRunDialogs(page)
     await clickShellButton(page, /^(?:Account menu|账号菜单)$/)
-    await page.getByRole('menuitem', { name: /^(?:Settings|设置)$/ }).first().click()
+    await clickInSheet(page, page.getByRole('menuitem', { name: /^(?:Settings|设置)$/ }).first())
     await page
       .locator('div[aria-hidden="true"][class*="_mask_"]')
       .first()
-      .waitFor({ state: 'hidden', timeout: 10_000 })
+      .waitFor({ state: 'hidden', timeout: 5_000 })
       .catch(() => {})
+    if (await opened()) return
+    await page.keyboard.press('Escape').catch(() => {})
   }
-  await expect(page.getByText('Built-in plugins', { exact: true })).toBeVisible({ timeout: 15_000 })
+  throw new Error('settings sheet did not open')
 }
 
 for (const width of [320, 390]) test(`family panels and settings remain usable at phone width ${width}px`, async ({ page }, testInfo) => {
