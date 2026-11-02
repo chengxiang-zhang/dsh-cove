@@ -267,42 +267,16 @@ let offeredEntries = [];
 /** The last non-empty list, kept so a disconnect does not empty the home page. */
 let lastEntries = [];
 /**
- * How long a page may stay off screen before its memory is given back.
+ * Open tabs keep their pages.
  *
- * A resident page is 150-230MB; five tabs is most of a gigabyte, and a person who
- * wandered off to another tab an hour ago does not need that page still painting. The
- * tab stays, its title stays, and the page is rebuilt from its address on return - the
- * same thing a browser does when it discards a background tab.
+ * A resident page is 150-230MB, and Chromium gives that memory back for a tab that is
+ * not on screen (measured: renderers dropped from 428MB to 220MB a few seconds after the
+ * tabs were hidden, see `review/multi-tab-load-test-2026-10-30.md`). What Chromium does
+ * not restore is the page's state, so a timer that destroys or reloads an off-screen page
+ * trades the user's place in a conversation for memory the browser was already reclaiming.
+ * Pages are dropped only when their tab is closed or their machine stays absent from the
+ * list (`viewsToPrune`) - never because time passed.
  */
-const IDLE_DISCARD_MS = 10 * 60 * 1000;
-let idleReclaim = null;
-
-/** Gives back the memory of every page that has been off screen long enough. */
-function reclaimIdleViews() {
-  const now = Date.now();
-  for (const [host, since] of workspaceHiddenSince) {
-    if (host === activeWorkspace || now - since < IDLE_DISCARD_MS) {
-      continue;
-    }
-    const tab = tabsState.tabs.find((candidate) => candidate.serviceId === `machine:${host}`);
-    if (!tab) {
-      // No tab refers to it any more; the tab lifecycle already dropped it.
-      continue;
-    }
-    process.stderr.write(`shell: reclaiming idle page ${host} (${Math.round((now - since) / 60000)} min off screen)\n`);
-    dropWorkspaceView(host);
-  }
-}
-
-function startIdleReclaim() {
-  if (idleReclaim !== null) {
-    return;
-  }
-  idleReclaim = setInterval(reclaimIdleViews, 60 * 1000);
-  if (typeof idleReclaim.unref === 'function') {
-    idleReclaim.unref();
-  }
-}
 /** The read in flight, so a heartbeat and a click share one probe instead of racing. */
 let snapshotRead = null;
 /** The last snapshot published, so opening a machine can clear its dot in place. */
@@ -1087,7 +1061,6 @@ function publish(snapshot) {
   if (!tabsRestored && (snapshot.state === 'ready' || snapshot.state === 'local')) {
     void restoreTabs();
   }
-  startIdleReclaim();
   void startBridgeOnce();
   // A machine that leaves the list keeps its page for a while: a probe that timed out is
   // far more common than a machine that is gone, and destroying a page over a blip costs
@@ -1372,15 +1345,6 @@ function hideNativeViews() {
     view.setVisible(false);
   }
 }
-/**
- * When each machine's page last stopped being visible.
- *
- * A resident page keeps the snapshot it had when its update socket died, and
- * nothing else in this process reloads it. Recording when it went off screen is what
- * lets `showWorkspace` tell "this page was being watched a moment ago" from "this
- * page has been painting the same frozen list for an hour" (see `src/view-freshness.mjs`).
- */
-const workspaceHiddenSince = new Map();
 /** When each machine was first missing from the list, so a blip does not drop its page. */
 const workspaceMissingSince = new Map();
 let activeWorkspace = '';
@@ -1569,7 +1533,6 @@ async function showWorkspace(host, options = {}) {
   const previous = activeWorkspace === '' ? null : workspaceViews.get(activeWorkspace);
   if (previous) {
     previous.setVisible(false);
-    workspaceHiddenSince.set(activeWorkspace, Date.now());
   }
   const view = workspaceViewFor(entry);
   if (!mainWindow.contentView.children.includes(view)) {
@@ -1587,33 +1550,20 @@ async function showWorkspace(host, options = {}) {
   // The acceptance run captures this view's page: a native view is not part of the
   // renderer's screenshot, so the seam is how the embedded workspace can be evidenced.
   globalThis.__awWorkspace = view;
-  // A resident page only looks current. Its updates arrive over the machine's own
-  // update socket, so any interruption - a sleep, a network switch, the engine
-  // reconnecting, the host restarting its workspace - leaves it painting the snapshot
-  // it had at that moment, and nothing else in this process replaces that snapshot.
-  // A page that was off screen long enough for its socket to have died is therefore
-  // reloaded rather than shown; reloading keeps the page's own route, so the
-  // conversation the user was in is the one they come back to. `fresh` (the
-  // new-session entry) instead loads the machine's front door, which is the screen a
-  // conversation starts on.
+  // Switching back to a tab is a visibility change, not a navigation: the page is shown
+  // as it is, keeping its route, its scroll position and an unsent draft. It is loaded
+  // only when it has no page yet, or when `fresh` (the new-session entry) must land on
+  // the machine's front door rather than wherever the page was left. An update socket
+  // that died while the page was hidden is the DSH client's own reconnect to handle; a
+  // screen that still looks stuck is what the explicit refresh is for.
   const pageAction = workspacePageAction({
     hasPage: view.webContents.getURL() !== '',
     fresh: options.fresh === true,
-    hiddenSince: workspaceHiddenSince.get(host) ?? null,
-    now: Date.now(),
   });
-  workspaceHiddenSince.delete(host);
   if (pageAction !== 'reuse') {
     try {
-      if (pageAction === 'reload') {
-        // The one line that makes "the page was stale and we replaced it" visible in the
-        // log, next to the explicit-refresh and wake lines.
-        process.stderr.write(`shell: reloading ${host} after being off screen\n`);
-        view.webContents.reload();
-      } else {
-        // `loadURL` lives on webContents, not on the view wrapper.
-        await view.webContents.loadURL(entry.url);
-      }
+      // `loadURL` lives on webContents, not on the view wrapper.
+      await view.webContents.loadURL(entry.url);
     } catch (error) {
       // A workspace that will not load is a failure the user must see, not a pane
       // that stays quietly blank.
@@ -1654,7 +1604,6 @@ function hideWorkspace() {
   acknowledgeWatched();
   if (activeWorkspace !== '') {
     workspaceViews.get(activeWorkspace)?.setVisible(false);
-    workspaceHiddenSince.set(activeWorkspace, Date.now());
   }
   activeWorkspace = '';
   globalThis.__awWorkspace = null;
@@ -1676,7 +1625,6 @@ function dropWorkspaceView(host) {
   mainWindow?.contentView.removeChildView(view);
   view.webContents.close();
   workspaceViews.delete(host);
-  workspaceHiddenSince.delete(host);
 }
 
 /**
