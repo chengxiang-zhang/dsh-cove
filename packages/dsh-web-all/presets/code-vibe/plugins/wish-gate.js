@@ -1,4 +1,4 @@
-// wish-gate v10: NECESSITY-ONLY confirmation + routing + cross-session checkout gates.
+// wish-gate v11: NECESSITY-ONLY confirmation + routing + cross-session checkout gates.
 //
 // v9 fixes the six mechanical defects found in the 2026-10-27..11-01 sessions
 // (see docs/GATE-FIX-REPORT-20261101.md):
@@ -18,6 +18,11 @@
 //   v10 also claims the working tree per session (`<git-common-dir>/dsh-claims.jsonl`,
 //   15 min heartbeat) and redirects a second live session to a lane instead of
 //   letting two sessions fight over one checkout.
+//   v11 keys that claim on the paths a call actually writes (write/edit arguments,
+//        explicit bash destinations) instead of the lexical `bashWrite` shape: a
+//        read-only analysis session was denied — and pushed into creating a lane —
+//        just for running `python3 - <<'PY'` or `... > /tmp/x` inside a checkout
+//        another session held. No destination means no claim and no deny.
 //
 // Ask the user ONLY when the agent cannot safely proceed without their input:
 //   A. authorization / irreversible ops (production, switch, rebuild, delete)
@@ -27,6 +32,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const WRITE_TOOLS = new Set(['write', 'edit', 'multi_edit', 'apply_patch']);
 const DELEGATE_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow']);
@@ -165,6 +171,310 @@ const refreshClaim = (file, root, selfId, now) => {
     fs.writeFileSync(file, next.slice(-200).map((c) => JSON.stringify(c)).join('\n') + '\n');
   } catch {}
 };
+
+// Write destinations: the claim gate needs "which paths does this call write", not
+// "does this command look like a write". Only explicit destinations count — a
+// heredoc into python/node/sh is program input, not an output file.
+// File-writing redirections. `&>`/`&>>` (both streams to a file) name a real
+// destination; only `2>&1`-style fd duplication is destination-free.
+const SHELL_REDIRECTS = new Set(['>', '>>', '>|', '&>', '&>>']);
+const SHELL_FD_PREFIXABLE = new Set(['>', '>>', '>|']);
+const SHELL_BLACKHOLE = /^\/dev\/(null|stdout|stderr|tty|fd\/\d+)$/;
+const SHELL_PREFIX = new Set(['sudo', 'env', 'time', 'nohup', 'command', 'builtin', 'exec']);
+const SHELL_ALL_OPERANDS = new Set(['mkdir', 'rm', 'rmdir', 'touch', 'truncate']);
+const SHELL_LAST_OPERAND = new Set(['cp', 'mv', 'install', 'ln']);
+const SHELL_FLAG_VALUES = {
+  sed: new Set(['-e', '-f', '--expression', '--file']),
+  truncate: new Set(['-s', '--size', '-r', '--reference']),
+  touch: new Set(['-d', '--date', '-r', '--reference', '-t', '--time']),
+  mkdir: new Set(['-m', '--mode']),
+  install: new Set(['-m', '--mode', '-o', '--owner', '-g', '--group', '-t', '--target-directory']),
+  cp: new Set(['-t', '--target-directory']),
+  mv: new Set(['-t', '--target-directory']),
+  ln: new Set(['-t', '--target-directory']),
+  git: new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--super-prefix']),
+};
+const SHELL_SCRIPT_FLAGS = new Set(['-e', '-f', '--expression', '--file']);
+const SHELL_TARGET_FLAGS = new Set(['-t', '--target-directory']);
+const GIT_REPO_FLAGS = new Set(['-C', '--git-dir', '--work-tree']);
+// `git` subcommands that mutate the working tree / index / refs. They name no path,
+// so the checkout itself is the destination: two sessions must not share a tree.
+const GIT_WRITE_SUBCOMMANDS = new Set([
+  'add', 'am', 'apply', 'checkout', 'cherry-pick', 'clean', 'commit', 'merge', 'mv',
+  'pull', 'rebase', 'reset', 'restore', 'revert', 'rm', 'stash', 'switch',
+]);
+
+// Drop heredoc bodies: `cat <<'EOF' ... EOF` is input, and its body may contain any
+// literal text (including `>`), so it must never be parsed for destinations.
+const stripHeredocBodies = (cmd) => {
+  const lines = String(cmd).split('\n');
+  const kept = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    kept.push(line);
+    const terms = [];
+    const re = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/g;
+    let m;
+    while ((m = re.exec(line))) terms.push(m[2]);
+    for (const term of terms) {
+      i += 1;
+      while (i < lines.length && lines[i].replace(/^\t+/, '').trim() !== term) i += 1;
+    }
+  }
+  return kept.join('\n');
+};
+
+const tokenizeShell = (cmd) => {
+  const toks = [];
+  const n = cmd.length;
+  let i = 0;
+  const push = (t, v, s, e) => toks.push({ t, v, s, e });
+  while (i < n) {
+    const c = cmd[i];
+    if (c === ' ' || c === '\t' || c === '\r') { i += 1; continue; }
+    if (c === '\n' || c === ';' || c === '(' || c === ')') { push('sep', c, i, i + 1); i += 1; continue; }
+    if (c === '`') { i += 1; continue; }
+    if (c === '|') {
+      const two = cmd[i + 1] === '|';
+      push('sep', two ? '||' : '|', i, i + (two ? 2 : 1));
+      i += two ? 2 : 1;
+      continue;
+    }
+    if (c === '&') {
+      if (cmd[i + 1] === '&') { push('sep', '&&', i, i + 2); i += 2; continue; }
+      if (cmd[i + 1] === '>') {
+        const two = cmd[i + 2] === '>';
+        push('redir', two ? '&>>' : '&>', i, i + (two ? 3 : 2));
+        i += two ? 3 : 2;
+        continue;
+      }
+      push('sep', '&', i, i + 1);
+      i += 1;
+      continue;
+    }
+    if (c === '>') {
+      let v = '>';
+      let e = i + 1;
+      if (cmd[i + 1] === '>') { v = '>>'; e = i + 2; } else if (cmd[i + 1] === '|') { v = '>|'; e = i + 2; } else if (cmd[i + 1] === '&' && /[0-9-]/.test(cmd[i + 2] || '')) {
+        // File-descriptor duplication (`2>&1`, `>&2`): no file destination.
+        v = 'fddup';
+        e = i + 2;
+        while (e < n && /[0-9]/.test(cmd[e])) e += 1;
+      }
+      push('redir', v, i, e);
+      i = e;
+      continue;
+    }
+    if (c === '<') {
+      let v = '<';
+      let e = i + 1;
+      if (cmd[i + 1] === '<') { v = '<<'; e = i + 2; } else if (cmd[i + 1] === '&' && /[0-9-]/.test(cmd[i + 2] || '')) {
+        v = 'fddup';
+        e = i + 2;
+        while (e < n && /[0-9]/.test(cmd[e])) e += 1;
+      }
+      push('redir', v, i, e);
+      i = e;
+      continue;
+    }
+    const start = i;
+    let buf = '';
+    while (i < n) {
+      const ch = cmd[i];
+      if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') break;
+      if (ch === ';' || ch === '|' || ch === '&' || ch === '>' || ch === '<' || ch === '(' || ch === ')' || ch === '`') break;
+      if (ch === '\\') { buf += cmd[i + 1] || ''; i += 2; continue; }
+      if (ch === "'") {
+        const close = cmd.indexOf("'", i + 1);
+        const end = close === -1 ? n : close;
+        buf += cmd.slice(i + 1, end);
+        i = end + 1;
+        continue;
+      }
+      if (ch === '"') {
+        i += 1;
+        while (i < n && cmd[i] !== '"') {
+          if (cmd[i] === '\\') { buf += cmd[i + 1] || ''; i += 2; continue; }
+          buf += cmd[i];
+          i += 1;
+        }
+        i += 1;
+        continue;
+      }
+      if (ch === '$' && cmd[i + 1] === '(') {
+        let depth = 1;
+        let j = i + 2;
+        while (j < n && depth > 0) {
+          if (cmd[j] === '(') depth += 1; else if (cmd[j] === ')') depth -= 1;
+          j += 1;
+        }
+        buf += cmd.slice(i, j);
+        i = j;
+        continue;
+      }
+      buf += ch;
+      i += 1;
+    }
+    if (buf) push('word', buf, start, i);
+  }
+  return toks;
+};
+
+// Destinations written by one simple command (the program plus its operands).
+// `add` names a file, `addDir` names a directory that is itself the target (a
+// checkout operated on through `git -C`, or the session tree for a path-less
+// working-tree mutation).
+const simpleCommandDestinations = (argv, add, addDir) => {
+  let k = 0;
+  while (k < argv.length && SHELL_PREFIX.has(path.basename(argv[k]))) {
+    k += 1;
+    while (k < argv.length && (/^-/.test(argv[k]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[k]))) k += 1;
+  }
+  const prog = argv[k] ? path.basename(argv[k]) : '';
+  if (!prog) return;
+  const rest = argv.slice(k + 1);
+  const flagValues = SHELL_FLAG_VALUES[prog] || new Set();
+  const ops = [];
+  const targetDirs = [];
+  const repoDirs = [];
+  let scriptFlagSeen = false;
+  for (let j = 0; j < rest.length; j++) {
+    const tok = rest[j];
+    if (tok === '--') { for (const tail of rest.slice(j + 1)) ops.push(tail); break; }
+    if (flagValues.has(tok)) {
+      const val = rest[j + 1];
+      if (SHELL_SCRIPT_FLAGS.has(tok)) scriptFlagSeen = true;
+      if (SHELL_TARGET_FLAGS.has(tok) && val !== undefined) targetDirs.push(val);
+      if (GIT_REPO_FLAGS.has(tok) && val !== undefined) repoDirs.push(val);
+      j += 1;
+      continue;
+    }
+    if (/^-/.test(tok)) {
+      if (/^(-e|--expression)/.test(tok)) scriptFlagSeen = true;
+      continue;
+    }
+    ops.push(tok);
+  }
+  if (prog === 'git') {
+    const sub = ops[0] || '';
+    const subArgs = ops.slice(1);
+    let writes = GIT_WRITE_SUBCOMMANDS.has(sub);
+    if (sub === 'stash') writes = !['list', 'show'].includes(subArgs[0] || '');
+    if (sub === 'branch') writes = subArgs.some((tok) => /^(-[dDmM]|--delete|--move|--set-upstream-to|-u)/.test(tok));
+    if (sub === 'tag') writes = subArgs.length > 0;
+    // A path-less working-tree mutation still owns the checkout it runs in. Only a
+    // write registers its checkout: `git -C <repo> log` must stay read-only.
+    if (!writes) return;
+    if (repoDirs.length) { for (const dir of repoDirs) addDir(dir); return; }
+    addDir('.');
+    return;
+  }
+  if (targetDirs.length) { for (const dir of targetDirs) add(dir); return; }
+  if (prog === 'dd') {
+    for (const tok of rest) {
+      const m = /^of=(.+)$/.exec(tok);
+      if (m) add(m[1]);
+    }
+    return;
+  }
+  if (prog === 'tee') { for (const tok of ops) add(tok); return; }
+  if (prog === 'sed') {
+    if (!rest.some((tok) => /^(-i|--in-place)/.test(tok))) return;
+    for (const tok of (scriptFlagSeen ? ops : ops.slice(1))) add(tok);
+    return;
+  }
+  if (SHELL_ALL_OPERANDS.has(prog)) { for (const tok of ops) add(tok); return; }
+  if (SHELL_LAST_OPERAND.has(prog) && ops.length) add(ops[ops.length - 1]);
+};
+
+// Destinations written by a shell command, as absolute paths; anything we cannot
+// resolve (a `$VAR` target) is ignored rather than guessed, and `/dev/*` sinks name
+// no file. A leading `cd <dir>` moves the base for the rest of the command string.
+const shellWriteDestinations = (cmd, sessCwd, onFile, onDir) => {
+  if (!cmd) return;
+  const keep = (dest) => dest && !SHELL_BLACKHOLE.test(dest) && !/[`$]/.test(dest) && dest !== '&';
+  let cwd = path.resolve(sessCwd);
+  const absolute = (dest) => (path.isAbsolute(dest) ? dest : path.resolve(cwd, dest));
+  const add = (dest) => { if (keep(dest)) onFile(absolute(dest)); };
+  const addDir = (dest) => { if (keep(dest)) onDir(dest === '.' ? path.resolve(cwd) : absolute(dest)); };
+  const toks = tokenizeShell(stripHeredocBodies(cmd));
+  let argv = [];
+  let prevWordEnd = -1;
+  const flush = () => {
+    if (!argv.length) return;
+    const prog = path.basename(argv[0]);
+    if (prog === 'cd') {
+      const target = argv[1];
+      if (target && target !== '-' && !/^~/.test(target)) cwd = path.resolve(cwd, target);
+      argv = [];
+      return;
+    }
+    simpleCommandDestinations(argv, add, addDir);
+    argv = [];
+  };
+  for (let i = 0; i < toks.length; i++) {
+    const tk = toks[i];
+    if (tk.t === 'sep') { flush(); prevWordEnd = -1; continue; }
+    if (tk.t === 'redir') {
+      // `2>file`: the adjacent `2` is a file descriptor, not a command word.
+      if ((tk.v === 'fddup' || SHELL_FD_PREFIXABLE.has(tk.v)) && argv.length &&
+        /^\d+$/.test(argv[argv.length - 1]) && prevWordEnd === tk.s) argv.pop();
+      const nxt = toks[i + 1];
+      if (SHELL_REDIRECTS.has(tk.v)) {
+        if (nxt && nxt.t === 'word') { add(nxt.v); i += 1; }
+      } else if (nxt && nxt.t === 'word') {
+        // Input redirection and fd duplication consume their operand but never
+        // name a file this command writes.
+        i += 1;
+      }
+      prevWordEnd = -1;
+      continue;
+    }
+    argv.push(tk.v);
+    prevWordEnd = tk.e;
+  }
+  flush();
+};
+
+const LANE_SCRIPT = (() => {
+  try {
+    return path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), 'scripts', 'dsh-lane.sh');
+  } catch { return null; }
+})();
+
+// Repo roots this call writes, with the first destination that put them in play.
+const claimTargets = (name, args, sessCwd) => {
+  const targets = new Map();
+  const offer = (root, dest) => { if (root && !targets.has(root)) targets.set(root, dest); };
+  const resolve = (dest) => (path.isAbsolute(dest) ? dest : path.resolve(sessCwd, dest));
+  const add = (dest) => {
+    const abs = resolve(dest);
+    offer(nearestRepoRoot(path.dirname(abs)), abs);
+  };
+  const addDir = (dest) => {
+    const abs = resolve(dest);
+    offer(nearestRepoRoot(abs), abs);
+  };
+  if (WRITE_TOOLS.has(name)) {
+    const target = String(args.path || args.file_path || args.file || '');
+    if (!target) {
+      // No structured path (apply_patch and friends): fall back to the session tree.
+      offer(nearestRepoRoot(sessCwd), path.resolve(sessCwd));
+      return targets;
+    }
+    add(target);
+    return targets;
+  }
+  shellWriteDestinations(String(args.command || args.cmd || ''), sessCwd, add, addDir);
+  return targets;
+};
+
+const claimDenyReason = (root, dest, sessionId, mins) => [
+  `这条调用会写 ${dest}，它属于 checkout ${root}：另一个会话（${String(sessionId).slice(-6)}，心跳 ${mins} 分钟前）正在那个工作树里工作。按代价从低到高选一条：`,
+  '1) 任务只是只读分析/取数：把中间产物写到 /tmp 或仓外（例如 `... > /tmp/out.txt`、`tee /tmp/x`），再重试这条命令；纯只读任务不要建 lane。',
+  '2) 任务确实要改这个仓：建 lane 再干 —— `bash ' + (LANE_SCRIPT || '<code-vibe 预设目录>/scripts/dsh-lane.sh') + ' create <repo> <task-id>`。脚本在 code-vibe 预设目录里，消费仓通常没有 scripts/dsh-lane.sh，不要在那个仓里找。',
+  '3) 否则等它结束（心跳超过 15 分钟自动失效）。不要和另一个会话抢同一个工作树。',
+].join('\n');
 
 const isSubagent = (agent) => {
   try {
@@ -344,7 +654,10 @@ export function apply(ctx) {
         // ---- safety gates (both top-level and workers) ----
         if (isBash) {
           if (/\bgit\s+worktree\s+(?:add|remove|move|repair)\b/.test(cmd)) {
-            return { kind: 'deny', reason: 'worktree 只能通过 `scripts/dsh-lane.sh` 管理（lane 规则：一任务一 lane、登记制、合并预演、清理）；裸 `git worktree add/remove/move/repair` 不允许。' };
+            return {
+              kind: 'deny',
+              reason: 'worktree 只能通过 `' + (LANE_SCRIPT || '<code-vibe 预设目录>/scripts/dsh-lane.sh') + '` 管理（lane 规则：一任务一 lane、登记制、合并预演、清理）；裸 `git worktree add/remove/move/repair` 不允许。脚本在 code-vibe 预设目录里，消费仓通常没有 scripts/dsh-lane.sh，不要在那个仓里找。',
+            };
           }
           const destructive = DESTRUCTIVE_RE.test(cmd);
           const isolated = SAFE_BED_RE.test(cmd) && !PROD_RE.test(cmd);
@@ -374,25 +687,27 @@ export function apply(ctx) {
 
         // ---- cross-session checkout ownership (top-level only) ----
         // Workers inherit the Lead's working tree, so they never claim their own.
+        // Only the paths this call writes are considered: a call with no explicit
+        // destination is read-only for the checkout — it neither loses nor takes the
+        // claim. The heartbeat itself is refreshed at the end of the chain, so an op
+        // that a later gate denies never leaves a live claim behind.
         const sessId = (agent.session && (agent.session.header && agent.session.header.id || agent.session.id)) || 'unknown';
         const sessCwd = (agent.session && agent.session.header && agent.session.header.cwd) || process.cwd();
-        if (writeLike) {
-          const target = String(a.path || a.file_path || a.file || '');
-          const start = target && path.isAbsolute(target) ? path.dirname(target) : sessCwd;
-          const root = nearestRepoRoot(start);
-          if (root) {
-            const file = claimsFileFor(root);
+        let claimWrite = null;
+        // Keyed on destinations, not on `writeLike`: `cp a <repo>/b` and
+        // `git apply x.diff` are real working-tree writes without a redirect.
+        if (writeLike || isBash) {
+          const targets = claimTargets(n, a, sessCwd);
+          if (targets.size) {
             const now = Date.now();
-            const other = otherLiveClaim(file, root, sessId, now);
-            if (other) {
-              const mins = Math.max(1, Math.round((now - Number(other.ts || now)) / 60000));
-              return {
-                kind: 'deny',
-                reason: `另一个会话（${String(other.sessionId).slice(-6)}，心跳 ${mins} 分钟前）正在这个 checkout 工作：默认走 lane —— ` +
-                  '先 `scripts/dsh-lane.sh create <repo> <task-id>` 建 lane 再干，或等它结束。不要和另一个会话抢同一个工作树。',
-              };
+            for (const [root, dest] of targets) {
+              const other = otherLiveClaim(claimsFileFor(root), root, sessId, now);
+              if (other) {
+                const mins = Math.max(1, Math.round((now - Number(other.ts || now)) / 60000));
+                return { kind: 'deny', reason: claimDenyReason(root, dest, other.sessionId, mins) };
+              }
             }
-            refreshClaim(file, root, sessId, now);
+            claimWrite = targets;
           }
         }
 
@@ -465,6 +780,12 @@ export function apply(ctx) {
               return { kind: 'deny', reason: '先加载对应 skill 再动手：' + rule.msg + '。当前已加载：' + (Array.from(st.skills).join('、') || '无') };
             }
           }
+        }
+        // The call is allowed: only now does it take (or renew) the checkout claim,
+        // and only for the roots it actually writes.
+        if (claimWrite) {
+          const at = Date.now();
+          for (const root of claimWrite.keys()) refreshClaim(claimsFileFor(root), root, sessId, at);
         }
         return next();
       }));

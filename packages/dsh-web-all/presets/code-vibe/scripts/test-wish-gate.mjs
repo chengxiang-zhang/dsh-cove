@@ -20,11 +20,15 @@ mod.apply(ctx);
 if (!created.length) { console.log('FAIL no agent/created hook'); process.exit(1); }
 
 let agentSeq = 0;
+// The suite must not touch the checkout it runs from: a default agent cwd of
+// process.cwd() made every relative write claim THIS repo, which then denied every
+// later case that ran inside it. Cases that need a checkout pass `cwd` explicitly.
+const NEUTRAL_CWD = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-cwd-'));
 const newAgent = (header = {}) => {
   const h = {};
   const id = header.id || `session-test-${++agentSeq}`;
   const agent = {
-    session: { id, header: { id, origin: undefined, delegationDepth: 0, cwd: process.cwd(), ...header } },
+    session: { id, header: { id, origin: undefined, delegationDepth: 0, cwd: NEUTRAL_CWD, ...header } },
     ctx: { on: (ev, cb) => { h[ev] = cb; return () => {}; } },
   };
   created[0]({ agent });
@@ -289,6 +293,202 @@ await check('P1 a lane worktree is a different root (no false conflict)', async 
   user(b, '写');
   const rb = await run(b, 'write', { path: path.join(lane, 'b.txt'), content: 'x' });
   return rb.denied ? `denied: ${rb.reason}` : true;
+});
+
+// ── v11: the claim keys on write DESTINATIONS, not on command shape ──
+// The 2026-11-02 defect: a read-only analysis session inside a checkout another
+// session held was denied (and pushed into creating a lane) for `python3 - <<'PY'`
+// or `... > /tmp/x`; the mirror image was that such a session silently claimed the
+// checkout and locked the real coder out for the 15 min heartbeat.
+const claimedRepo = () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'claim-v11-'));
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  return repo;
+};
+const claimsIn = (repo) => {
+  try {
+    return fs.readFileSync(path.join(repo, '.git', 'dsh-claims.jsonl'), 'utf8')
+      .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  } catch { return []; }
+};
+// A session whose write is actually allowed: no routing rule matches this request.
+const owningSession = async (repo, id = 'session-owner') => {
+  const h = newAgent({ id, cwd: repo });
+  user(h, '写一个说明文件');
+  const r = await run(h, 'write', { path: path.join(repo, 'notes.txt'), content: 'x' });
+  if (r.denied) throw new Error(`owner write denied: ${r.reason}`);
+  return h;
+};
+const analysisSession = (repo, id) => {
+  const h = newAgent({ id, cwd: repo });
+  user(h, '看下实验的样本量是否达标，把结论给我');
+  return h;
+};
+
+await check('v11 heredoc into python is not a file write (claimed checkout stays usable)', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo);
+  const b = analysisSession(repo, 'session-readonly-heredoc');
+  const r = await run(b, 'bash', { command: "python3 - <<'PY'\nprint(sum([1, 2, 3]))\nPY" });
+  return r.denied ? `denied: ${r.reason}` : true;
+});
+await check('v11 redirect to /tmp is allowed inside a claimed checkout', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo);
+  const b = analysisSession(repo, 'session-readonly-tmp');
+  const heredoc = await run(b, 'bash', { command: `python3 - <<'PY'\nprint(1)\nPY > ${path.join(os.tmpdir(), 'gate-v11-sample.txt')}` });
+  const plain = await run(b, 'bash', { command: `echo sample > ${path.join(os.tmpdir(), 'gate-v11-sample2.txt')}` });
+  const tee = await run(b, 'bash', { command: `echo sample | tee ${path.join(os.tmpdir(), 'gate-v11-sample3.txt')}` });
+  return (!heredoc.denied && !plain.denied && !tee.denied) ? true : `${JSON.stringify(heredoc)} ${JSON.stringify(plain)} ${JSON.stringify(tee)}`;
+});
+await check('v11 fd redirection (2>&1, 2>/dev/null) is not a destination', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo);
+  const b = analysisSession(repo, 'session-readonly-fd');
+  const a = await run(b, 'bash', { command: 'python3 analyze.py 2>&1 | head -20' });
+  const c = await run(b, 'bash', { command: 'python3 analyze.py 2>/dev/null' });
+  const d = await run(b, 'bash', { command: 'git log --oneline -5 > /dev/null 2>&1' });
+  return (!a.denied && !c.denied && !d.denied) ? true : `${JSON.stringify(a)} ${JSON.stringify(c)} ${JSON.stringify(d)}`;
+});
+await check('v11 genuine in-repo write by a second session is still denied with a lane hint', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo);
+  const b = newAgent({ id: 'session-second-writer', cwd: repo });
+  user(b, '写另一个说明文件');
+  const redirect = await run(b, 'bash', { command: `echo hi > ${path.join(repo, 'out.txt')}` });
+  const tee = await run(b, 'bash', { command: `echo hi | tee ${path.join(repo, 'tee.txt')}` });
+  const write = await run(b, 'write', { path: path.join(repo, 'notes2.txt'), content: 'x' });
+  const reasons = [redirect, tee, write].map((r) => r.reason);
+  const ok = redirect.denied && tee.denied && write.denied
+    && reasons.every((reason) => /dsh-lane\.sh/.test(reason) && /\/tmp/.test(reason)
+      && /只读/.test(reason) && !/默认走 lane/.test(reason));
+  return ok ? true : `redirect=${JSON.stringify(redirect)} tee=${JSON.stringify(tee)} write=${JSON.stringify(write)}`;
+});
+await check('v11 relative redirect resolves against the session cwd (still denied)', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo);
+  const b = newAgent({ id: 'session-second-relative', cwd: repo });
+  user(b, '写另一个说明文件');
+  const redirect = await run(b, 'bash', { command: 'echo hi > out.txt' });
+  const tee = await run(b, 'bash', { command: 'echo hi | tee out.txt' });
+  const sedInPlace = await run(b, 'bash', { command: "sed -i 's/a/b/' notes.txt" });
+  return (redirect.denied && tee.denied && sedInPlace.denied)
+    ? true
+    : `redirect=${JSON.stringify(redirect)} tee=${JSON.stringify(tee)} sed=${JSON.stringify(sedInPlace)}`;
+});
+await check('v11 destinations outside any repo are not a claim conflict (negative control)', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo);
+  const b = newAgent({ id: 'session-outside-writer', cwd: NEUTRAL_CWD });
+  user(b, '写一个说明文件到临时目录');
+  const r = await run(b, 'bash', { command: `mkdir -p ${path.join(os.tmpdir(), 'gate-v11-out')} && echo hi > ${path.join(os.tmpdir(), 'gate-v11-out', 'x.txt')}` });
+  return r.denied ? `denied: ${r.reason}` : true;
+});
+await check('v11 path-less working-tree mutations (git apply/merge) are still claim conflicts', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo);
+  const b = newAgent({ id: 'session-git-writer', cwd: repo });
+  user(b, '看下这个补丁，能应用就应用');
+  const apply = await run(b, 'bash', { command: 'git apply fix.diff' });
+  const merge = await run(b, 'bash', { command: 'git merge origin/dev' });
+  const stash = await run(b, 'bash', { command: 'git stash pop' });
+  const log = await run(b, 'bash', { command: 'git log --oneline -3' });
+  const status = await run(b, 'bash', { command: 'git status --short' });
+  const diff = await run(b, 'bash', { command: 'git diff --stat' });
+  const stashList = await run(b, 'bash', { command: 'git stash list' });
+  const deniedWithClaim = [apply, merge, stash].every((r) => r.denied && /dsh-lane\.sh/.test(r.reason));
+  const readsAllowed = !log.denied && !status.denied && !diff.denied && !stashList.denied;
+  return (deniedWithClaim && readsAllowed)
+    ? true
+    : `apply=${JSON.stringify(apply)} merge=${JSON.stringify(merge)} stash=${JSON.stringify(stash)} log=${log.denied} status=${status.denied} diff=${diff.denied} stashList=${stashList.denied}`;
+});
+await check('v11 operand writes (cp/mkdir/truncate/rm) inside a claimed checkout are denied', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo);
+  const b = newAgent({ id: 'session-operand-writer', cwd: repo });
+  user(b, '整理一下这个目录');
+  const cp = await run(b, 'bash', { command: 'cp /etc/hosts copy.txt' });
+  const mkdir = await run(b, 'bash', { command: 'mkdir -p docs/new' });
+  const truncate = await run(b, 'bash', { command: 'truncate -s 0 notes.txt' });
+  const rm = await run(b, 'bash', { command: 'rm notes.txt' });
+  const out = { cp, mkdir, truncate, rm };
+  const allDenied = Object.values(out).every((r) => r.denied && /dsh-lane\.sh/.test(r.reason));
+  return allDenied ? true : JSON.stringify(out);
+});
+await check('v11 a leading cd moves the base for relative destinations', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo);
+  const b = analysisSession(repo, 'session-cd');
+  const outside = await run(b, 'bash', { command: 'cd /tmp && echo sample > gate-v11-cd.txt' });
+  const outsideSub = await run(b, 'bash', { command: '( cd /tmp && echo sample > gate-v11-cd-sub.txt )' });
+  const inside = await run(b, 'bash', { command: `cd ${repo} && echo hi > cd-out.txt` });
+  return (!outside.denied && !outsideSub.denied && inside.denied && /dsh-lane\.sh/.test(inside.reason))
+    ? true
+    : `outside=${JSON.stringify(outside)} sub=${JSON.stringify(outsideSub)} inside=${JSON.stringify(inside)}`;
+});
+await check('v11 git -C <repo> read-only subcommand is not a write (no deny, no claim)', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo);
+  const b = newAgent({ id: 'session-git-c-read', cwd: NEUTRAL_CWD });
+  user(b, '看下另一个仓的提交历史');
+  const log = await run(b, 'bash', { command: `git -C ${repo} log --oneline -3` });
+  const status = await run(b, 'bash', { command: `git --git-dir ${path.join(repo, '.git')} status --short` });
+  const mine = claimsIn(repo).filter((c) => c.sessionId === 'session-git-c-read');
+  // Same shape against an UNCLAIMED checkout: a read-only probe must not take a
+  // claim either (that is how a browsing session used to lock the real coder out).
+  const free = claimedRepo();
+  const c = newAgent({ id: 'session-git-c-probe', cwd: NEUTRAL_CWD });
+  user(c, '看下这个仓的结构');
+  const freeLog = await run(c, 'bash', { command: `git -C ${free} log --oneline -3` });
+  const probed = claimsIn(free).filter((line) => line.sessionId === 'session-git-c-probe');
+  return (!log.denied && !status.denied && mine.length === 0 && !freeLog.denied && probed.length === 0)
+    ? true
+    : `log=${JSON.stringify(log)} status=${JSON.stringify(status)} claims=${JSON.stringify(mine)} freeLog=${JSON.stringify(freeLog)} probed=${JSON.stringify(probed)}`;
+});
+await check('v11 git -C <repo> apply is still denied', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo);
+  const b = newAgent({ id: 'session-git-c-write', cwd: NEUTRAL_CWD });
+  user(b, '看下这个补丁');
+  const r = await run(b, 'bash', { command: `git -C ${repo} apply fix.diff` });
+  return (r.denied && /dsh-lane\.sh/.test(r.reason)) ? true : `reason: ${r.reason}`;
+});
+await check('v11 &> and &>> name a file destination', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo);
+  const b = newAgent({ id: 'session-amp-redirect', cwd: repo });
+  user(b, '记录一下输出');
+  const both = await run(b, 'bash', { command: 'echo hi &> both.txt' });
+  const append = await run(b, 'bash', { command: 'echo hi &>> both.txt' });
+  const outside = await run(b, 'bash', { command: `echo hi &> ${path.join(os.tmpdir(), 'gate-v11-amp.txt')}` });
+  return (both.denied && append.denied && !outside.denied)
+    ? true
+    : `both=${JSON.stringify(both)} append=${JSON.stringify(append)} outside=${JSON.stringify(outside)}`;
+});
+await check('v11 read-only session leaves no claim entry (mirror-image bug)', async () => {
+  const repo = claimedRepo();
+  const b = analysisSession(repo, 'session-readonly-noclaim');
+  await run(b, 'bash', { command: "python3 - <<'PY'\nprint(1)\nPY" });
+  await run(b, 'bash', { command: 'curl -s https://api.example.com/v1/experiments | jq .' });
+  await run(b, 'bash', { command: 'git status --short' });
+  const mine = claimsIn(repo).filter((c) => c.sessionId === 'session-readonly-noclaim');
+  return mine.length === 0 ? true : `read-only session claimed the checkout: ${JSON.stringify(mine)}`;
+});
+await check('v11 a real in-repo write still claims the checkout (positive control)', async () => {
+  const repo = claimedRepo();
+  await owningSession(repo, 'session-writer-claims');
+  const mine = claimsIn(repo).filter((c) => c.sessionId === 'session-writer-claims');
+  return mine.length === 1 ? true : `expected 1 claim line, got ${JSON.stringify(claimsIn(repo))}`;
+});
+await check('v11 a denied op leaves no claim behind (claim write happens last)', async () => {
+  const repo = claimedRepo();
+  const b = newAgent({ id: 'session-denied-first', cwd: repo });
+  user(b, '修一下配置');
+  // denied by skill routing (T1 -> fix-loop); the claim must not be refreshed anyway
+  const r = await run(b, 'write', { path: path.join(repo, 'cfg.txt'), content: 'x' });
+  const mine = claimsIn(repo).filter((c) => c.sessionId === 'session-denied-first');
+  return (r.denied && mine.length === 0) ? true : `denied=${r.denied} claims=${JSON.stringify(mine)}`;
 });
 
 // ── P1: ask necessity (only the four hard classes) ──
