@@ -36,7 +36,7 @@
     "lightningcss": "^1.32.0",
     "playwright": "^1.62.1",
     "tsdown": "^0.22.2",
-    "@deepseek-ai/dsh-util-time": "^0.1.5-rc.2"
+    "@deepseek-ai/dsh-util-time": "^0.2.0-rc.2"
   },
   "license": "Apache-2.0",
   "author": "dsh-cove contributors",
