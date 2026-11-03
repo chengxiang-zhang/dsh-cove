@@ -3,7 +3,7 @@
 #
 # 它做四件事（全部幂等）：
 #   1. 在 $ROOT（默认 ~/tools/acp-agents）安装两个 ACP adapter：codex-acp / claude-agent-acp
-#   2. 把本 skill 自带的 acp-probe.mjs 与 codex-acp-kaon.sh 复制到 $ROOT
+#   2. 把本 skill 自带的 acp-probe.mjs 复制到 $ROOT
 #   3. 往 DSH profile 的 cordis.patch.yml 追加三个 provider + 三个工具行（有标记块，可卸载）
 #   4. 跑 preflight 验证三条通道
 #
@@ -74,9 +74,8 @@ check_state() {
   [ -d "$ROOT/node_modules/@agentclientprotocol/codex-acp" ] || { warn "MISSING adapter codex-acp ($ROOT)"; rc=1; }
   [ -d "$ROOT/node_modules/@agentclientprotocol/claude-agent-acp" ] || { warn "MISSING adapter claude-agent-acp ($ROOT)"; rc=1; }
   [ -f "$ROOT/acp-probe.mjs" ] || { warn "MISSING $ROOT/acp-probe.mjs"; rc=1; }
-  [ -x "$ROOT/codex-acp-kaon.sh" ] || { warn "MISSING $ROOT/codex-acp-kaon.sh"; rc=1; }
   if [ -f "$PATCH_FILE" ]; then
-    for id in subagent-acp-astra tool-subagent-astra subagent-acp-astra-kaon tool-subagent-astra-kaon subagent-acp-opus tool-subagent-opus; do
+    for id in subagent-acp-astra tool-subagent-astra subagent-acp-opus tool-subagent-opus; do
       grep -q "id: $id\$" "$PATCH_FILE" || { warn "MISSING profile row: $id ($PATCH_FILE)"; rc=1; }
     done
   else
@@ -142,8 +141,7 @@ fi
 # ── 3. 复制探针与兜底壳 ────────────────────────────────────────────────────
 mkdir -p "$ROOT"
 install -m 0755 "$SELF_DIR/acp-probe.mjs" "$ROOT/acp-probe.mjs"
-install -m 0755 "$SELF_DIR/codex-acp-kaon.sh" "$ROOT/codex-acp-kaon.sh"
-say "SCRIPTS_INSTALLED $ROOT/acp-probe.mjs $ROOT/codex-acp-kaon.sh"
+say "SCRIPTS_INSTALLED $ROOT/acp-probe.mjs"
 
 # ── 4. profile patch ───────────────────────────────────────────────────────
 if [ ! -f "$PATCH_FILE" ]; then
@@ -193,22 +191,6 @@ $BEGIN_MARK
         toolName: subagent_astra
         backgroundMode: one-shot
         maxDepth: provider-managed
-    - id: subagent-acp-astra-kaon
-      name: '@deepseek-ai/dsh-subagent-acp'
-      config:
-        providerName: acp-astra-kaon
-        command: $ROOT/codex-acp-kaon.sh
-        args: []
-        permission: allow
-        env:
-          KAON_CODEX_MODEL: $KAON_MODEL
-    - id: tool-subagent-astra-kaon
-      name: '@deepseek-ai/dsh-tool-subagent'
-      config:
-        provider: acp-astra-kaon
-        toolName: subagent_astra_kaon
-        backgroundMode: one-shot
-        maxDepth: provider-managed
     - id: subagent-acp-opus
       name: '@deepseek-ai/dsh-subagent-acp'
       config:
@@ -234,7 +216,8 @@ EOF
   cat "$katmp" >> "$PATCH_FILE"
   rm -f "$katmp"
   say "PROFILE_BLOCK_ADDED $PATCH_FILE"
-  say "NOTE DSH hot-reloads this patch; the three tools appear to the model on the NEXT request (no restart needed)."
+  say "NOTE hot reload is observed on this machine (tools appear on the NEXT request); if they do not,"
+  say "     tell the user the change needs a DSH restart per the repository AGENTS.md contract -- do not claim they are live."
 fi
 
 if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then

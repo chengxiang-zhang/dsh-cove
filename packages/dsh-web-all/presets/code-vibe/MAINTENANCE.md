@@ -82,10 +82,12 @@
 - 历史与本轮判断依据：`docs/GATE-FIX-REPORT-20261101.md`、`docs/GATE-FIX-REPORT-20261102.md`。
 
 12. **外部强 agent 派发能力（2026-11-03 落盘）**：把「复杂设计/排障派给更强的 agent 拿独立结论」变成预设能力，而不是某台机器的口头约定。
-    - 新增 `skills/design-dispatch/`：何时派（L3 / 要冻结 / 本地连续同质结论 / 排障假设收敛）、三个工具的路由（`subagent_astra` 订阅默认、`subagent_astra_kaon` 兜底、`subagent_opus55` 并行第二路）、Design Packet 六段、并行红队与三分法、结果处理（外部结论只是输入，事实要本机复跑）。
+    - 新增 `skills/design-dispatch/`：何时派（L3 / 要冻结 / 本地连续同质结论 / 排障假设收敛）、两条通道的路由（`subagent_astra` 订阅默认；订阅断了直接换 `subagent_opus55`）、Design Packet 六段、并行红队与三分法、结果处理（外部结论只是输入，事实要本机复跑）。
     - persona 加了一行路由（`design-orchestrator` 之后）；`design-orchestrator` §4 加一句「reviewer 可以是外部 agent」。**为什么放 persona**：压缩会丢对话、不丢 persona；派发是执行动作，必须在第一次派工前就可见。
-    - 装机（规则 #3，脚本自带正反用例）：`sh skills/design-dispatch/scripts/install.sh`。四步幂等——npm 装两个 ACP adapter、复制 `acp-probe.mjs` 与 `codex-acp-kaon.sh` 到 `~/tools/acp-agents`、往 profile `cordis.patch.yml` 追加带标记的三 provider+三工具行、跑 preflight。`--check` 只体检，`--uninstall` 只摘 profile 块。实测：fresh 装出 6 行/YAML 合法；第二遍只重生成 1 个块（3 provider 行不翻倍）；uninstall 后行数归 0、重装恢复。
+    - 装机（规则 #3，脚本自带正反用例）：`sh skills/design-dispatch/scripts/install.sh`。四步幂等——npm 装两个 ACP adapter、复制 `acp-probe.mjs` 到 `~/tools/acp-agents`、往 profile `cordis.patch.yml` 追加带标记的两 provider+两工具行、跑 preflight。`--check` 只体检，`--uninstall` 只摘 profile 块。实测（**两通道时期的读数，2026-11-03 断 kaon 前**）：fresh 装出 6 行/YAML 合法；第二遍只重生成 1 个块（provider 行不翻倍）；uninstall 后行数归 0、重装恢复。断 kaon 后块变成 4 行，条数与幂等语义不变，但上面这组数字是当时真实的，不改写成 4 行冒充新读数。
     - 探针（规则 #1）：`sh skills/design-dispatch/scripts/preflight.sh`。`PREFLIGHT_ALL_OK` 才算通道可用；退出码 1=通道不可用，2=机器前置缺失。**已知限制**：它只验通道可用性，不验产质量；每次真跑一次极小调用（约 6k tokens），不要放进循环。本机 2026-11-03 实测三通道：codex-subscription 12696ms / codex-kaon 11153ms / claude-opus55 11627ms，全 `PREFLIGHT_OK`。
     - 生效路径（规则 #8）：新增 skill 目录由 `skill-filesystem` 目录扫描发现，persona 改动走 standing stamp → **新会话生效，无需重启**；adapter 与 DSH profile 的三个工具行属于机器前置，不在本仓。
     - 已知边界：外部 agent 是 one-shot（不能续接/中途 steer）；只回最终文本（过程不可审计）；claude 经网关的 `total_cost_usd` 不可信，只认 `usage`；`gpt-6-astra-pro` 订阅不支持、`kaon/gpt-6-astra` 无路由、claude 仅 `kaon-rp/claude-opus-5-5` 前缀可用。
     - 回滚：删除 `skills/design-dispatch/`，persona 与 `design-orchestrator` 的两句话回退即可，然后 `node scripts/render-preset.mjs`。
+
+13. **Codex 不接 kaon（2026-11-03 用户裁决）**：`kaon/gpt-6-astra` 在 kaon 侧 `404 no available route`；`kaon/gpt-6-astra-pro` 有路由但走 OpenRouter 公共额度，实测 3/3 `rate_limit_exceeded`；`kaon/gpt-5.5` 可用但换了模型等于换了能力。结论：**订阅不可用就换 claude，不做同引擎换计费**。已删除 profile 的两行（`subagent-acp-astra-kaon` / `tool-subagent-astra-kaon`）、仓内 `codex-acp-kaon.sh`、以及 `install.sh` / `preflight.sh` 里的对应分支。回滚：`/tmp/cordis.patch.yml.bak-drop-kaon-20261103` + `git checkout` 该轮改动。

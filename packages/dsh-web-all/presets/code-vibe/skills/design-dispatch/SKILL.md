@@ -19,18 +19,30 @@ description: 把复杂设计/排障/独立评审任务派发给外部强 agent�
 - 排障进入假设收敛期，需要外部视角破坏当前假设；
 - 跨仓/跨团队的架构裁决，需要 maker≠grader 的第三方。
 
-**不派**：设计已冻结后的执行、单文件可回滚小修、纯事实查询、能用一条命令取到读数的问题。
+**不派**：设计已冻结后的执行、纯事实查询、能用一条命令取到读数的问题、以及**能用机械判据验收的小改动**。
+
+**一致性/交叉引用/契约审计不派 S**：这类活先让一个 fresh 的本地 subagent 自查（`subagent`，同栈不同上下文），
+实测它在同一份文件上找出 3 条真缺陷，而两路 S 只重合到 1 条，成本是 S 的零头。S 只用于需要**外部知识或不同训练分布**的判断。
+
+**按爆炸半径判，不按文件数判**：单文件但动 `access-trust/`、release workflow、权限/信任围栏、数据删除路径
+—— 派一次 S 复审；单文件且纯展示层 —— 不派。
 
 ## 1. 三个工具
 
-| 工具 | 通道 | 模型 | 何时用 |
-|---|---|---|---|
-| `subagent_astra` | ChatGPT **订阅**（原生 OAuth） | `gpt-6-astra` | **默认**，设计/评审首选 |
-| `subagent_astra_kaon` | kaon-router `/v1/responses` | `kaon/gpt-5.5` | 订阅不可用时兜底 |
-| `subagent_opus55` | kaon-router（Claude Code 侧无订阅通道） | `kaon-rp/claude-opus-5-5` | 默认并行的第二路 |
+| 顺序 | 工具 | 通道 | 模型 | 何时用 |
+|---|---|---|---|---|
+| 1 | `subagent_astra` | ChatGPT **订阅**（原生 OAuth） | `gpt-6-astra` | **默认**。架构/选型/新结构/跨模块契约/复杂排障根因未知，一律先走这个 |
+| 2 | `subagent_opus55` | kaon-router（Claude Code 侧无订阅通道） | `kaon-rp/claude-opus-5-5` | **订阅断了的第一个替补**（429/配额耗尽/认证失效），也用于需要它自己多处翻找的探查型任务 |
 
-- 默认组合：`subagent_astra` + `subagent_opus55` **并行两路**。
-- 降级判据（自动执行，不许静默）：`subagent_astra` 返回 429 / 配额耗尽 / `model_not_found` / 认证失效 → 换 `subagent_astra_kaon`，**并在回执里写明"已降级"**。
+- **默认只跑一路**，按任务形态选（2026-11-03 实测）：
+  - 单文件/结构化审阅、结论型判断 → `subagent_astra`：1 turn、32.6s、非缓存输入约 1.7 万 token；
+  - 需要它自己在仓库里多处翻找的探查型任务 → `subagent_opus55`：会自己开到 9 turn / 70.8s，输入侧约 37.6 万 token。
+- **两路并行不是默认值**。只有第二路带**不同的攻击切片**（不同约束集、不同反例方向）时才并行；
+  同一份 packet 跑两路，实测边际新发现为 0，成本翻倍。第二路连续 N 次 unique-finding=0 就砍掉。
+- 降级阶梯（自动执行，但每一次降级都要在回执里写明）：
+  1. `subagent_astra` 失败（429 / 配额耗尽 / `model_not_found` / 认证失效）→ **直接换 `subagent_opus55`**；
+  2. 两条都不可用 → 停止派发，改本地执行，并在结论里标注质量已降级（这是 §2 里"停下"的唯一条件）。
+  Codex 侧**不接 kaon**：订阅不可用就换 claude，不做同引擎换计费。
 - 模型已知边界：`gpt-6-astra-pro` 在订阅账号下不被支持（400）；`kaon/gpt-6-astra` 在 kaon 侧无路由；claude 侧只有 `kaon-rp/claude-opus-5-5` 前缀可用（`kaon/claude-opus-5-5*` 会被 CLI 400 拒）。
 
 ## 2. 装机（每台机器一次）与 preflight（每会话一次）
@@ -47,10 +59,14 @@ sh <preset-root>/skills/design-dispatch/scripts/preflight.sh codex    # 只查�
 - `install.sh` 幂等：重复跑不会重复加行；`--check` 只体检不改动；`--uninstall` 只摘 profile 块（不删 adapter）。
 - 非默认 profile：`--profile-dir <dir>`；非默认根目录：`--root <dir>`；换模型：`--astra-model/--kaon-model/--opus-model`。
 - `PREFLIGHT_ALL_OK` = 三通道都 `stopReason=end_turn`。退出码 1 = 通道不可用，2 = 机器前置缺失。
-- 任一失败 → **报告缺件并停下**，不要悄悄退化成单路或本地自评。
-- 装完不需要重启 DSH（patch 热重载），三个工具在**下一次请求**出现在工具表里。
+- 读取 preflight 的方式是**按通道**，不是一刀切：两路都绿 → 正常并行；只剩一路 → 单路运行并在回执标注；
+  **三路全红才停下**并报告缺件。preflight 红一条就把整个方案停掉，等于把可用的通道也废了。
+- 生效方式按仓库契约写，不许夸口：本机实测 profile patch 热重载后三个工具在**下一轮请求**可见；若下一轮工具表里没有它们，**按仓库 AGENTS.md 标注「需要用户重启 DSH 服务后生效」并交给用户重启**，不要声称已经可用。
 
 ## 3. Design Packet（派发内容必须自包含）
+
+**先批处理，再派发**：实测固定开销占 98% 以上（claude 回 3 个 token 也要 48,704 输入），
+所以把三个问题合成一次派发，比派三次省接近 3 倍。不要一问一派。
 
 六个必填段，缺一段就是浪费一次强模型调用：
 
@@ -73,8 +89,14 @@ sh <preset-root>/skills/design-dispatch/scripts/preflight.sh codex    # 只查�
 ## 5. 结果处理（不许照抄）
 
 - 外部结论只是**输入**；最终裁决由 Lead 写，并区分 **已证实 / 推断 / 未证实**。
-- 外部 agent 声称的事实要进证据链，**必须由本机复跑命令**确认。
-- 回执必带：用了哪个工具、走哪条通道（订阅 / kaon）、耗时、`usage` token、失败与降级记录。
+- **复现才算证实**：每条 finding 只有在本地复现（一条命令，或 `file:line` 在该 sha 上成立）后才计入结论；
+  复现不了的写进"未证实"，**不是**驳回也不是采信。
+- **派发默认只读**（`permission: allow` 不等于邀请它写）。派发后 `git status --porcelain` 必须为空；
+  非空说明它越界写了，按事故处理。
+- 回执必带：用了哪个工具、走哪条通道（订阅 / kaon）、耗时、`usage` token、失败与降级记录，以及一行 `escalation_reason`（判据不完备 / 订阅不可用 / 需要外部视角）。
+- **质量门只信确定性信号**：schema 是否合规、它引用的东西是否真的出现在上下文里、算术能不能重算。**不信它自报的置信度**，也不信行文是否自信。
+- **对"被接受的结论"抽样复核**：便宜档/单路给出的、被你采纳的结论，要按比例回派一次或本机复跑。自洽的错最贵，而且门抓不到。
+- **看 `escalation_reason` 的分布**：多数失败是"packet 没写清"就改 Packet，不是多派强模型；升级率失控时先怀疑门太严。
 
 ## 6. 已知限制（别当全能）
 

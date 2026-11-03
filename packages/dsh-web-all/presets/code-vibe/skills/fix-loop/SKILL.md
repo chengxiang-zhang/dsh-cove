@@ -7,6 +7,8 @@ description: Use for a small, well-scoped fix — a failing test, a single bug, 
 
 > **Entry tier: T1 only.** ≤2 files / ≤40 lines / reversible / no contract·data·permission change.
 > 预算：15–30 分钟、≤4 轮、0 agent、0 goal、零工件（回复内 3 行报告即可）。
+> **执行体固定为本栈，不派强模型**：规格完备的小修里差距在勤勉不在推理，派出去只会增加固定开销。
+> 例外只有一种：改动落在信任围栏 / 鉴权 / 发布链路这类高风险面上，那属于"判据不完备"，按 `task-router` §1.6 升档。
 
 ## 步骤（顺序不可换）
 

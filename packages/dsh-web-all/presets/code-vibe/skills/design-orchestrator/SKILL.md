@@ -35,6 +35,17 @@ description: Use at the START of any design request (设计/方案/架构/IA/交
 
 升档：D2=2（跨模块/契约/数据/权限）、D3=2（不可逆）、D4=2（要拍板）、D5=2（多团队）任一 ⇒ ≥L2；D1=2 且 D2=2 ⇒ L3。
 
+## 2.5 方案先行（L2 / L3 必做，L1 可跳）
+
+写任何设计件之前，先派一次强模型档（顺序：`subagent_astra` → `subagent_opus55`，见 `design-dispatch`），
+要它交"候选方案 + 取舍理由 + 被忽略的约束"，本栈负责：
+
+1. 把它落成该档最小件（`brief` / 各层文件 / `adr/`）；
+2. 逐条复现它声称的事实（`file:line` 在那个 sha 上成立，或一条命令跑得通）；
+3. 写裁决，区分**已证实 / 推断 / 未证实**；未复现的只能进"未证实"，不许当结论。
+
+**方案不由强模型定稿，执行不交给强模型。** 分工依据：强模型出方案 + 便宜模型执行，实测优于强模型单干；把实现也派出去是双向浪费。
+
 ## 3. 列件（产物清单，放仓库 `docs/design/<id>/`）
 
 必填按档：L1 = `brief.md` + `design.md` + `freeze.md`；L2 = `brief/product/ia/design/review/freeze`；L3 = 适用层 + `adr/` + `review.md` + `freeze.md`。
@@ -44,7 +55,7 @@ description: Use at the START of any design request (设计/方案/架构/IA/交
 
 **派工方式**：按层并行 `subagent`（每个 fresh 上下文），一个 reviewer 一个 subagent；Lead 不替 reviewer 写结论。
 
-**派工可选外部强 agent**：需要独立强判断时（L3、或本轮结论要冻结/进 ADR），reviewer 可以是外部 agent —— `subagent_astra` 与 `subagent_opus55` 并行两路，packet 与路由规则见 `design-dispatch`。外部结论与本地 reviewer 同权，都是输入；Lead 写裁决，且必须区分已证实/推断/未证实。
+**派工可选外部强 agent**：需要独立强判断时（L3、或本轮结论要冻结/进 ADR），reviewer 可以是外部 agent —— **默认只跑一路**（结构化审阅用 `subagent_astra`，需要它自己翻找多处用 `subagent_opus55`），只有第二路带**不同的攻击切片**时才并行；packet 与路由规则见 `design-dispatch`。外部结论与本地 reviewer 同权，都是输入；**finding 必须本地复现才计入**，Lead 写裁决并区分已证实/推断/未证实。
 
 每个 reviewer 的 brief 只含：
 1. 本层 artifact 路径（只读，禁止修改）；
