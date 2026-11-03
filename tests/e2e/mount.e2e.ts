@@ -122,7 +122,11 @@ async function openSettings(page: Page): Promise<void> {
   const opened = () => nav.isVisible({ timeout: 10_000 }).catch(() => false)
   const legacySettings = page.getByRole('button', { name: 'Settings', exact: true }).first()
   if (await legacySettings.isVisible().catch(() => false)) {
-    await legacySettings.click()
+    // The rail button can sit behind a mask - a phone-width family panel renders as a
+    // masked sheet, and the first-run dialog mounts late - so it is clicked through the
+    // same retry as every other shell control. When it stays covered, fall through to the
+    // account menu instead of letting the mask time the case out.
+    await clickInSheet(page, legacySettings).catch(() => {})
     if (await opened()) return
   }
   // DSH 0.2.1 renders the account menu as a masked popover (Settings / Feedback / Sign in
@@ -154,6 +158,14 @@ for (const width of [320, 390]) test(`family panels and settings remain usable a
   await clickShellButton(page, 'SSH')
   await expect(page.getByText('Remote SSH', { exact: true })).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('phone-ssh.png'), fullPage: true })
+  // A phone-width family panel is a masked sheet: the settings entry is unreachable until
+  // the sheet is dismissed, so close it the way a reader would before opening settings.
+  await page.keyboard.press('Escape').catch(() => {})
+  await page
+    .locator('div[aria-hidden="true"][class*="_mask_"]')
+    .first()
+    .waitFor({ state: 'hidden', timeout: 10_000 })
+    .catch(() => {})
   await openSettings(page)
   await page.getByText('Built-in plugins', { exact: true }).click()
   await page.getByRole('tab', { name: /Feishu|飞书/ }).click()
