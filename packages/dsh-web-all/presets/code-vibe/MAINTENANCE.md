@@ -80,3 +80,12 @@
   - 合同套件在 HEAD 上就是红的，门自身没有可信的绿。
 - 留下了什么：`skills/lane-worktree/SKILL.md` 与 `scripts/dsh-lane.sh` 仍是纪律 + 便利工具（一任务一 lane、登记、合并预演、串行合并、清理、`audit`）；跨会话占用避让回到「会话自己看工作树」，**没有机械占用门**。预设的强制力仍只来自 DSH 的审批栈 / 沙箱 / plan mode。
 - 历史与本轮判断依据：`docs/GATE-FIX-REPORT-20261101.md`、`docs/GATE-FIX-REPORT-20261102.md`。
+
+12. **外部强 agent 派发能力（2026-11-03 落盘）**：把「复杂设计/排障派给更强的 agent 拿独立结论」变成预设能力，而不是某台机器的口头约定。
+    - 新增 `skills/design-dispatch/`：何时派（L3 / 要冻结 / 本地连续同质结论 / 排障假设收敛）、三个工具的路由（`subagent_astra` 订阅默认、`subagent_astra_kaon` 兜底、`subagent_opus55` 并行第二路）、Design Packet 六段、并行红队与三分法、结果处理（外部结论只是输入，事实要本机复跑）。
+    - persona 加了一行路由（`design-orchestrator` 之后）；`design-orchestrator` §4 加一句「reviewer 可以是外部 agent」。**为什么放 persona**：压缩会丢对话、不丢 persona；派发是执行动作，必须在第一次派工前就可见。
+    - 装机（规则 #3，脚本自带正反用例）：`sh skills/design-dispatch/scripts/install.sh`。四步幂等——npm 装两个 ACP adapter、复制 `acp-probe.mjs` 与 `codex-acp-kaon.sh` 到 `~/tools/acp-agents`、往 profile `cordis.patch.yml` 追加带标记的三 provider+三工具行、跑 preflight。`--check` 只体检，`--uninstall` 只摘 profile 块。实测：fresh 装出 6 行/YAML 合法；第二遍只重生成 1 个块（3 provider 行不翻倍）；uninstall 后行数归 0、重装恢复。
+    - 探针（规则 #1）：`sh skills/design-dispatch/scripts/preflight.sh`。`PREFLIGHT_ALL_OK` 才算通道可用；退出码 1=通道不可用，2=机器前置缺失。**已知限制**：它只验通道可用性，不验产质量；每次真跑一次极小调用（约 6k tokens），不要放进循环。本机 2026-11-03 实测三通道：codex-subscription 12696ms / codex-kaon 11153ms / claude-opus55 11627ms，全 `PREFLIGHT_OK`。
+    - 生效路径（规则 #8）：新增 skill 目录由 `skill-filesystem` 目录扫描发现，persona 改动走 standing stamp → **新会话生效，无需重启**；adapter 与 DSH profile 的三个工具行属于机器前置，不在本仓。
+    - 已知边界：外部 agent 是 one-shot（不能续接/中途 steer）；只回最终文本（过程不可审计）；claude 经网关的 `total_cost_usd` 不可信，只认 `usage`；`gpt-6-astra-pro` 订阅不支持、`kaon/gpt-6-astra` 无路由、claude 仅 `kaon-rp/claude-opus-5-5` 前缀可用。
+    - 回滚：删除 `skills/design-dispatch/`，persona 与 `design-orchestrator` 的两句话回退即可，然后 `node scripts/render-preset.mjs`。

@@ -44,6 +44,8 @@ description: Use at the START of any design request (设计/方案/架构/IA/交
 
 **派工方式**：按层并行 `subagent`（每个 fresh 上下文），一个 reviewer 一个 subagent；Lead 不替 reviewer 写结论。
 
+**派工可选外部强 agent**：需要独立强判断时（L3、或本轮结论要冻结/进 ADR），reviewer 可以是外部 agent —— `subagent_astra` 与 `subagent_opus55` 并行两路，packet 与路由规则见 `design-dispatch`。外部结论与本地 reviewer 同权，都是输入；Lead 写裁决，且必须区分已证实/推断/未证实。
+
 每个 reviewer 的 brief 只含：
 1. 本层 artifact 路径（只读，禁止修改）；
 2. 自己的判据清单（`references/reviewers.md` 对应行）；
