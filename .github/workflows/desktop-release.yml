@@ -142,12 +142,18 @@ jobs:
           # ls output for filenames that may contain anything.
           DMG="$(find tools/anywhere-agent/build -maxdepth 1 -name '*.dmg' -print -quit)"
           echo "installer: $DMG ($(du -h "$DMG" | cut -f1))"
+          # The release workflow, this job and the two phone jobs all race to create the
+          # release for one tag, so `view` can miss it and `create` can then lose by a
+          # second: v0.7.0 failed this step with "Release.tag_name already exists" while
+          # the same tag's release was being made. Falling back to `upload` turns that
+          # loss into the attach this step came for.
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "$DMG" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "$DMG" \
               --title "dsh-cove $GITHUB_REF_NAME" \
-              --notes-file "$RUNNER_TEMP/notes.md"
+              --notes-file "$RUNNER_TEMP/notes.md" \
+              || gh release upload "$GITHUB_REF_NAME" "$DMG" --clobber
           fi
 
       # The runtime tarball is published by the release workflow from a secret this
