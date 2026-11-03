@@ -22,6 +22,7 @@ This page is the map of the repository's long-lived documentation. Each document
 | --- | --- |
 | Runtime and feature contract | [packages/dsh-web-all/README.md](../packages/dsh-web-all/README.md), [packages/dsh-web-all/README.zh.md](../packages/dsh-web-all/README.zh.md) |
 | Native capability boundary | [docs/native-capability-boundary.md](native-capability-boundary.md) |
+| Built-in plugin usage for operators | [docs/plugin-usage.md](plugin-usage.md) |
 | Development workflow | [docs/development.md](development.md), [docs/i18n.md](i18n.md) |
 | Remote and self-hosted deployment | [docs/remote-access.md](remote-access.md), [tools/dsh-netbird/README.md](../tools/dsh-netbird/README.md) |
 | Fleet collection and merge-back | [docs/fleet-collection.md](fleet-collection.md) |
