@@ -315,8 +315,18 @@ export class ScheduleModeEngine {
   /**
    * 与原生目录对齐的幂等收敛：记录已完成的新会话运行，并把副本轮转到下一条会话。
    * 由 `schedule/changed`、Host 启动、以及面板显式刷新触发。
+   *
+   * Idempotent by construction, so it never claims a recovery is needed. When
+   * the engine is disabled (a settings-driven re-sync sits between its stop and
+   * its start) or another operation of an older generation is still in flight,
+   * there is nothing to converge yet and the next trigger reconciles again.
+   * Raising `recovery-required` here reports a re-sync as broken durable state,
+   * which is what used to land one alarming line in every boot log while the
+   * engine recovered on the following reconcile.
    */
   async reconcile(): Promise<void> {
+    if (this.disposed || !this.enabled) return
+    if (this.executingEpoch !== undefined && this.executingEpoch !== this.epoch) return
     return this.serialize(async () => {
       let policies: ScheduleModePolicy[]
       try { policies = this.store.list().filter(policy => policy.active || policy.transition !== undefined) } catch (error) {
