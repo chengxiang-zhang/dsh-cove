@@ -11,12 +11,13 @@ if (!BASE_URL) throw new Error('DSH_E2E_URL is not set; start an isolated dsh we
  * and accepts either spelling of the localized family label, so a copy change
  * in either dictionary cannot fail the mount check. Feishu is not a sidebar row
  * any more: its connection wizard and settings live in the Built-in plugins
- * settings tab.
+ * settings tab. Memory is not one either: DSH covers project memory natively, so
+ * the memoir domain and its sidebar row are gone (see
+ * docs/native-capability-boundary.md).
  */
 const ENTRY_NAMES = [
   /^Plugins$/,
   /^SSH$/,
-  /^(?:记忆|Memory)$/,
 ]
 
 test('single entity mounts its position modules without browser errors', async ({ page }, testInfo) => {
@@ -153,8 +154,6 @@ for (const width of [320, 390]) test(`family panels and settings remain usable a
   await clickShellButton(page, 'SSH')
   await expect(page.getByText('Remote SSH', { exact: true })).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('phone-ssh.png'), fullPage: true })
-  await clickShellButton(page, /^(?:Memory|记忆)$/)
-  await expect(page.getByText('Memory Memoir', { exact: true })).toBeVisible()
   await openSettings(page)
   await page.getByText('Built-in plugins', { exact: true }).click()
   await page.getByRole('tab', { name: /Feishu|飞书/ }).click()
