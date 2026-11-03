@@ -3,15 +3,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import * as accessTrust from './access-trust/index.ts'
 import * as remoteAccess from './remote-access/index.ts'
 import * as ssh from './ssh/index.ts'
-import * as memoir from './memoir/index.ts'
 import * as worktree from './worktree/index.ts'
 import * as gitGraph from './git-graph/index.ts'
 import * as rightPane from './right-pane/index.ts'
 import * as larkInbox from './lark-inbox/index.ts'
 import * as notify from './notify/index.ts'
 import * as playwrightSessions from './playwright-sessions/index.ts'
-import * as remoteWebUi from './remote-web-ui/index.ts'
-import * as codexBridge from './codex-bridge/index.ts'
 import * as noBrowserAuth from './no-browser-auth/index.ts'
 import * as webRender from './web-render/index.ts'
 import * as webSearchAnthropic from './web-search-anthropic/index.ts'
@@ -21,7 +18,6 @@ import { createServiceLifecycleOwner, type ServiceRegistrationDiagnostic } from 
 export interface ServiceAssemblyDeps {
   dshHome?: string
   agentsHome?: string
-  codexProxyDir?: string
   noBrowserAuth?: boolean
   worktree?: import('./worktree/index.ts').WorktreeServiceConfig
   /** Playwright sessions options; `liveView` toggles the agent-browser live view. */
@@ -57,7 +53,6 @@ export function assembleServices(ctx: Context, deps: ServiceAssemblyDeps = {}): 
   // Mounted right after the fence it consults, before any route family.
   mount('remote-access', () => remoteAccess.register(ctx))
   mount('ssh', () => ssh.register(ctx))
-  mount('memoir', () => memoir.register(ctx))
   mount('worktree', () => worktree.register(ctx, deps.worktree))
   mount('git-graph', () => gitGraph.register(ctx))
   mount('right-pane', () => rightPane.register(ctx))
@@ -67,17 +62,11 @@ export function assembleServices(ctx: Context, deps: ServiceAssemblyDeps = {}): 
   // It only subscribes and serves one read route, so it consults the fence
   // rather than depending on any other family.
   mount('notify', () => notify.register(ctx))
-  mount('codex-bridge', () => codexBridge.register(ctx, {
-    proxyDir: deps.codexProxyDir ?? process.env.DSH_CODEX_PROXY_DIR,
-    logger: { warn: error => console.warn('[web-all:codex-bridge]', error) },
-  }))
-  // The legacy bypass and integrated WebAuth both patch the private BrowserAuth
-  // object. Never stack them: an explicit bypass is the legacy compatibility
-  // mode, otherwise remote-web-ui owns the composed account session.
+  // Network-gate mode patches the private BrowserAuth object so the Host/Origin
+  // fence is the only admission rule. Without it, the native launch token and
+  // cookie remain the gate; this plugin does not mint sessions of its own.
   if (deps.noBrowserAuth === true) {
     mount('no-browser-auth', () => noBrowserAuth.register(ctx, { enabled: true }))
-  } else {
-    mount('remote-web-ui', () => remoteWebUi.register(ctx))
   }
   mount('web-render', () => webRender.register(ctx, { dshHome: deps.dshHome }))
   // Mounted next to web-render: both register providers into `ctx.web` and are

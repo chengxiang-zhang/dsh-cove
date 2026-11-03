@@ -26,7 +26,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { WorktreeError } from '../../../core/worktree/invariant.ts'
 import { isInsidePath } from '../../../core/worktree/paths.ts'
 import type {
-  CleanupWorktreeInput, CreateLaneInput, CreateWorktreeInput, InitWorktreeInput,
+  CleanupWorktreeInput, CreateLaneInput,
   LaneLookupInput, PrCreateInput,
   RemoveWorktreeInput, StatusInput, WorktreeResponse,
 } from '../../../core/worktree/types.ts'
@@ -327,72 +327,7 @@ function registerOwnedWorktreeRoutes(
       },
     }))
 
-    // POST /worktree/lane/rollback — mutation: undo a lane whose session
-    // never came up, so a failed start leaves no stray worktree behind.
-    own(ctx.webServer.register({
-      kind: 'exact',
-      path: `${API_PREFIX}/lane/rollback`,
-      handler: async (req, res) => {
-        if (req.method === 'OPTIONS') { handleOptions(res); return }
-        if (req.method !== 'POST') { writeJson(res, 405, BAD_REQUEST); return }
-        if (!canMutate(req)) { writeJson(res, 403, FORBIDDEN); return }
-        let body: Record<string, unknown> | null
-        try { body = await readJsonObject(req) } catch (error) {
-          writeJson(res, 400, { ok: false, code: 'git-failed', message: error instanceof Error ? error.message : String(error) })
-          return
-        }
-        const repoPath = stringField(body, 'repoPath')
-        const branch = stringField(body, 'branch')
-        if (repoPath === null || branch === null) { writeJson(res, 400, BAD_REQUEST); return }
-        if (await outsideRegisteredWorkspaces(ctx, repoPath)) {
-          writeJson(res, 400, { ok: false, code: 'workspace-unknown', message: 'the repository is outside every registered workspace' })
-          return
-        }
-        try {
-          await lanes.rollbackLane({ repoPath, branch })
-          writeJson(res, 200, { ok: true, value: { branch } })
-        } catch (error) {
-          const { status, body: errBody } = errorToView(error)
-          writeJson(res, status, errBody)
-        }
-      },
-    }))
   }
-
-  // POST /worktree/create
-  own(ctx.webServer.register({
-    kind: 'exact',
-    path: `${API_PREFIX}/create`,
-    handler: async (req, res) => {
-      if (req.method === 'OPTIONS') { handleOptions(res); return }
-      if (req.method !== 'POST') { writeJson(res, 405, BAD_REQUEST); return }
-      if (!canMutate(req)) { writeJson(res, 403, FORBIDDEN); return }
-      let body: Record<string, unknown> | null
-      try { body = await readJsonObject(req) } catch (error) {
-        writeJson(res, 400, { ok: false, code: 'git-failed', message: error instanceof Error ? error.message : String(error) })
-        return
-      }
-      const repoPath = stringField(body, 'repoPath')
-      const branch = stringField(body, 'branch')
-      if (repoPath === null || branch === null) { writeJson(res, 400, BAD_REQUEST); return }
-      if (await outsideRegisteredWorkspaces(ctx, repoPath)) {
-        writeJson(res, 400, { ok: false, code: 'workspace-unknown', message: 'the repository is outside every registered workspace' })
-        return
-      }
-      const input: CreateWorktreeInput = {
-        repoPath,
-        branch,
-        ...(optionalString(body, 'base') !== undefined ? { base: optionalString(body, 'base') as string } : {}),
-      }
-      try {
-        const worktree = await manager.create(input)
-        writeJson(res, 200, { ok: true, value: worktree })
-      } catch (error) {
-        const { status, body: errBody } = errorToView(error)
-        writeJson(res, status, errBody)
-      }
-    },
-  }))
 
   // POST /worktree/remove
   own(ctx.webServer.register({
@@ -423,35 +358,6 @@ function registerOwnedWorktreeRoutes(
       }
       try {
         const result = await manager.remove(input)
-        writeJson(res, 200, { ok: true, value: result })
-      } catch (error) {
-        const { status, body: errBody } = errorToView(error)
-        writeJson(res, status, errBody)
-      }
-    },
-  }))
-
-  // POST /worktree/init
-  own(ctx.webServer.register({
-    kind: 'exact',
-    path: `${API_PREFIX}/init`,
-    handler: async (req, res) => {
-      if (req.method === 'OPTIONS') { handleOptions(res); return }
-      if (req.method !== 'POST') { writeJson(res, 405, BAD_REQUEST); return }
-      if (!canMutate(req)) { writeJson(res, 403, FORBIDDEN); return }
-      let body: Record<string, unknown> | null
-      try { body = await readJsonObject(req) } catch (error) {
-        writeJson(res, 400, { ok: false, code: 'git-failed', message: error instanceof Error ? error.message : String(error) })
-        return
-      }
-      const repoPath = stringField(body, 'repoPath')
-      if (repoPath === null) { writeJson(res, 400, BAD_REQUEST); return }
-      const input: InitWorktreeInput = {
-        repoPath,
-        ...(optionalString(body, 'initialBranch') !== undefined ? { initialBranch: optionalString(body, 'initialBranch') as string } : {}),
-      }
-      try {
-        const result = await manager.init(input)
         writeJson(res, 200, { ok: true, value: result })
       } catch (error) {
         const { status, body: errBody } = errorToView(error)

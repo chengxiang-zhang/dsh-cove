@@ -27,7 +27,6 @@ export const IconChevronDownOutline14 = icon('IconChevronDownOutline14', 'IconCh
 export const IconCloseOutline16 = icon('IconCloseOutline16', 'IconCloseOutlineMedium')
 export const IconCodeOutline16 = icon('IconCodeOutline16', 'IconCodeOutlineMedium')
 export const IconCopyOutline16 = icon('IconCopyOutline16', 'IconCopyOutlineMedium')
-export const IconGlobeOutline16 = icon('IconGlobeOutline16', 'IconGlobeOutlineMedium')
 export const IconPlusOutline16 = icon('IconPlusOutline16', 'IconPlusOutlineMedium')
 export const IconRefreshOutline16 = icon('IconRefreshOutline16', 'IconRefreshOutlineMedium')
 export const IconSearchOutline16 = icon('IconSearchOutline16', 'IconSearchOutlineMedium')

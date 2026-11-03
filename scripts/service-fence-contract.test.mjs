@@ -55,14 +55,11 @@ function routeDirectories() {
  */
 const PRIVILEGED_FENCE_TOKEN = new Map([
   ['access-trust', null],
-  ['codex-bridge', 'isLoopbackRequest'],
   ['git-graph', 'accessTrustOf'],
   ['lark-inbox', 'accessTrustOf'],
-  ['memoir', 'accessTrustOf'],
   ['notify', 'accessTrustOf'],
   ['playwright-sessions', 'accessTrustOf'],
   ['remote-access', 'isTrusted'],
-  ['remote-web-ui', 'isLoopbackRequest'],
   ['right-pane', 'accessTrustOf'],
   ['schedule-mode', 'accessTrustOf'],
   ['ssh', 'accessTrustOf'],

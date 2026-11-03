@@ -83,17 +83,6 @@ export interface WorktreeErrorView {
 /** Discriminated union for HTTP responses. */
 export type WorktreeResponse<T = void> = MutationResult<T> | WorktreeErrorView
 
-/** Parameters for `POST /worktree/create`. */
-export interface CreateWorktreeInput {
-  /** Repository root (must be a registered workspace). */
-  repoPath: string
-  /** Branch name (also used as the worktree dir name under `.dsh/workspaces/`).
-   *  The branch is cut at `base` and checked out in the worktree. */
-  branch: string
-  /** Optional base commit-ish the new branch starts at; defaults to HEAD. */
-  base?: string
-}
-
 /** Parameters for `POST /worktree/lane/create` — the worktree behind a branch. */
 export interface CreateLaneInput {
   /** Repository root (any directory inside it resolves). */
@@ -223,14 +212,6 @@ export interface RemoveWorktreeInput {
    * including one the lane does not record — excuses nothing.
    */
   sessionId?: string
-}
-
-/** Parameters for `POST /worktree/init`. */
-export interface InitWorktreeInput {
-  /** Repository root. */
-  repoPath: string
-  /** Create the first branch on HEAD (default: `main`). */
-  initialBranch?: string
 }
 
 /** Parameters for `POST /worktree/pr-create`. */

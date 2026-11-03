@@ -56,7 +56,7 @@ export function register(ctx: Context, config: NoBrowserAuthConfig = {}): () => 
 
   const restore = bypassBrowserAuthentication(resolveConnection(ctx))
   ctx.logger?.warn?.(
-    'dsh-no-browser-auth: BrowserAuth skipped; Host/Origin fence still applies. Only use behind an authenticating reverse proxy or equivalent network gate. Host-side panels (Git, Agent Browser, worktree, SSH, memoir, run-target, workbench) admit a deployment-declared trusted authority by Host/Origin alone in this mode, so any peer that can reach the listener may drive them.',
+    'dsh-no-browser-auth: BrowserAuth skipped; Host/Origin fence still applies. Only use behind an authenticating reverse proxy or equivalent network gate. Host-side panels (Git, Agent Browser, worktree, SSH, run-target, workbench) admit a deployment-declared trusted authority by Host/Origin alone in this mode, so any peer that can reach the listener may drive them.',
   )
   return restore
 }

@@ -15,7 +15,11 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
  * A rename, removal, or new inject name must update this list together with
  * its runtime-module-table evidence.
  *
- * `@deepseek-ai/dsh-client-runtime` was removed from the roster: upstream
+ * `@deepseek-ai/dsh-client-ui-settings`, `@deepseek-ai/dsh-client-ui-sidebar`
+ * and `@deepseek-ai/dsh-client-ui-theme` were removed from the roster with the
+ * remote-web-ui domain: it was their only consumer (account session, gateway
+ * panel and theme overrides), and no remaining position module reads those
+ * services. `@deepseek-ai/dsh-client-runtime` was removed from the roster: upstream
  * retired it in 0.2 (the running install ships no such package, its npm line
  * stops at 0.1.1-rc.2, and the served shell lists no `dsh-client-runtime/
  * client.js` in any plugin group), and the client-modules loader skips an
@@ -27,9 +31,6 @@ const APPROVED_INJECT_MODULES = [
   '@deepseek-ai/dsh-client-connection',
   '@deepseek-ai/dsh-client-locale',
   '@deepseek-ai/dsh-client-ui-conversation',
-  '@deepseek-ai/dsh-client-ui-settings',
-  '@deepseek-ai/dsh-client-ui-sidebar',
-  '@deepseek-ai/dsh-client-ui-theme',
 ]
 
 function collectInjects() {

@@ -25,7 +25,6 @@
   },
   "include": [
     "src/index.ts",
-    "src/invariant.ts",
     "src/host/**/*.ts",
     "src/core/**/*.ts"
   ]

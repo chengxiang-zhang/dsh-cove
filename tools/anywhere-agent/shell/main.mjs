@@ -22,6 +22,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
 import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,11 +37,12 @@ import { isCloudZone } from '../src/netbird-names.mjs';
 import { DSH_ZONES } from '../src/generated/fleetConfig.mjs';
 import { createPeerResolver, parsePeers, parseSelfStatus } from '../src/netbird-status.mjs';
 import { TunnelClient } from '../src/tunnel-client.mjs';
-import { localEntry, localRowsFrom, mergeEntries, uiState } from '../src/panel-state.mjs';
+import { localEntry, markLocalEntries, mergeEntries, uiState } from '../src/panel-state.mjs';
 import { localAddresses } from '../src/local-addresses.mjs';
 import { fleetWanted, withFleetIntent } from '../src/fleet-intent.mjs';
 import { endpointFromEngineConfig, endpointHostLabel, endpointIsUsable, loadBootstrapEndpoint, normalizeEndpoint, resolveEndpoint, shouldRetryEndpointDiscovery } from '../src/endpoint.mjs';
 import { ackIdOf, badgeUrl, clampWatermark, parseWatermarks, readDecision, summarizeFeed } from '../src/notify.mjs';
+import { machineCounts, machineRows } from '../src/machine-list.mjs';
 import { resolveHelper as resolveHelperPath } from '../src/helper-path.mjs';
 import { shouldReloadOnRefresh, workspacePageAction } from '../src/view-freshness.mjs';
 import { SNAPSHOT_HEARTBEAT_MS, shouldClearProxy, shouldReadSnapshotOnHeartbeat, snapshotHeartbeatMs, viewsToPrune } from '../src/snapshot-freshness.mjs';
@@ -409,6 +411,75 @@ function loopbackUrl() {
 }
 
 /**
+ * Whether this machine's own host declares one authority, asked over loopback.
+ *
+ * The posture readout reports the Host it was asked for, so the only way to learn
+ * which fleet name this host answers to is to ask it under each candidate name: the
+ * answer `declared: true` means the running DSH trusts that authority, and a machine
+ * trusts only its own. That is the row that must open over loopback, whatever the
+ * machine happens to be called in the fleet or in the OS.
+ *
+ * @param {string} host candidate canonical authority
+ * @param {number} [timeoutMs]
+ * @returns {Promise<boolean>}
+ */
+function isLocalAuthority(host, timeoutMs = 2_000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(value);
+    };
+    const request = httpRequest(
+      { host: '127.0.0.1', port: KERNEL_PORT, path: '/api/dsh-access/session', headers: { host } },
+      (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          body += chunk;
+        });
+        response.on('end', () => {
+          try {
+            done(JSON.parse(body)?.authority?.declared === true);
+          } catch {
+            done(false);
+          }
+        });
+      },
+    );
+    request.setTimeout(timeoutMs, () => request.destroy());
+    request.on('error', () => done(false));
+    request.end();
+  });
+}
+
+/**
+ * The canonical authority this machine's own host serves, or '' when nothing answers.
+ *
+ * The fleet may name this machine after its NetBird peer while the OS host name is
+ * something else, so neither the hostname guess nor an address match can settle it.
+ * Asking the host itself can: the first candidate it declares is the one.
+ *
+ * @param {Array<{ host?: string }>} candidates the fleet's records
+ * @returns {Promise<string>} the canonical host, or ''
+ */
+async function localAuthorityOf(candidates) {
+  for (const entry of Array.isArray(candidates) ? candidates : []) {
+    const host = String(entry?.host ?? '').trim();
+    if (host === '') {
+      continue;
+    }
+    if (await isLocalAuthority(host)) {
+      return host;
+    }
+  }
+  return '';
+}
+
+/**
  * This machine's own row for the frames where no fleet record addresses it.
  *
  * Before anyone signs in the host name is the only name there is, and this row must stay
@@ -695,26 +766,25 @@ function windowBackground() {
 }
 
 /**
- * Keeps only the entries that are really DSH machines.
+ * Reads every machine of the fleet's registry, keyed by canonical host.
+ *
+ * The registry is the list (see `src/machine-list.mjs`): a machine is a
+ * `dsh.<machine>.<zone>` record that points at a peer of this network, and the
+ * probe only grades the row. A probe that fails removes nothing, so the window
+ * cannot turn an unreachable machine - or a deployment whose trust reading is
+ * broken - into "you have no other machines".
  *
  * The probe goes through the shell's own session, so it travels the same
- * app-scoped path the workspace will. It asks each candidate for the
- * remote-access posture reading, which needs no session and is deployed on every
- * machine that serves a workspace; a name that merely happens to answer on port
- * 80 (an update channel, a landing page) does not declare an authority and is
- * therefore not offered. This is the same reading the fleet audit uses.
- *
- * Reachability is decided by that reading alone. The finished-run feed is a
- * second, later capability, so a machine that has not been updated answers 404
- * for it; that must leave the machine reachable and undotted rather than push it
- * out of the list.
+ * app-scoped path the workspace will. It reads the remote-access posture, which
+ * needs no session and is deployed on every machine that serves a workspace, and
+ * the finished-run feed behind it. An entry with no result stays offline.
  */
 function probeEntries(entries) {
   const shellSession = proxySession();
   const watermarks = readWatermarks();
   return Promise.all(
-    entries.map((entry) => probeEntry(entry, shellSession, watermarks[entry.host])),
-  ).then((probed) => probed.filter((entry) => entry.reachable));
+    entries.map(async (entry) => [entry.host, await probeEntry(entry, shellSession, watermarks[entry.host])]),
+  ).then((pairs) => new Map(pairs));
 }
 
 /**
@@ -731,13 +801,44 @@ function watchedHost() {
 }
 
 /**
- * One candidate URL: does it answer as a DSH machine?
+ * Whether the answer is this plugin's posture reading: a JSON body whose
+ * `authority` object names the host the deployment thinks it is serving.
+ *
+ * The route exists on every DSH entry and on nothing else, so its presence is
+ * also the only signal this client needs to tell a DSH service from the fleet's
+ * other services - no name is special-cased for that.
+ */
+function postureOf(body) {
+  try {
+    const authority = JSON.parse(body)?.authority;
+    return authority !== null && typeof authority === 'object' && typeof authority.host === 'string';
+  } catch {
+    return false;
+  }
+}
+
+/** The declared bit of a posture answer, false when the body is not one. */
+function declaredOf(body) {
+  try {
+    return JSON.parse(body)?.authority?.declared === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One candidate URL: what does this machine say about itself?
+ *
+ * A candidate is reachable when it answers at all: any HTTP status means the
+ * service's web server is up, so a service that never had this route (every
+ * non-DSH entry of the fleet) is reachable and carries no posture reading at all.
+ * `posture` says the route answered; `declared` is the sub-fact a DSH entry shows.
  *
  * The request goes through the shell's own session, so it uses the same trust store
  * and the same app-scoped path the workspace will, and an entry whose certificate
- * the machine does not trust is a failure here rather than a broken page later.
+ * the machine does not trust fails here rather than as a broken page later.
  *
- * @returns {Promise<{ declared: boolean, statusCode?: number, reason: string }>}
+ * @returns {Promise<{ reachable: boolean, declared: boolean, statusCode?: number, reason: string }>}
  */
 function probeCandidate(url, shellSession) {
   return new Promise((resolve) => {
@@ -745,7 +846,7 @@ function probeCandidate(url, shellSession) {
     let body = '';
     const timer = setTimeout(() => {
       request.abort();
-      resolve({ declared: false, reason: 'timed out' });
+      resolve({ reachable: false, posture: false, declared: false, reason: 'timed out' });
     }, 8_000);
     request.on('response', (response) => {
       response.on('data', (chunk) => {
@@ -753,48 +854,70 @@ function probeCandidate(url, shellSession) {
       });
       response.on('end', () => {
         clearTimeout(timer);
-        let declared = false;
-        try {
-          declared = JSON.parse(body)?.authority?.declared === true;
-        } catch {
-          declared = false;
-        }
+        const posture = postureOf(body);
         resolve({
-          declared,
+          reachable: true,
+          posture,
+          declared: posture && declaredOf(body),
           statusCode: response.statusCode,
-          reason: declared ? '' : `HTTP ${response.statusCode} without an authority`,
+          reason: posture && !declaredOf(body) ? `HTTP ${response.statusCode} without a declared authority` : '',
         });
       });
     });
     request.on('error', (error) => {
       clearTimeout(timer);
-      resolve({ declared: false, reason: String(error?.message ?? error) });
+      resolve({ reachable: false, posture: false, declared: false, reason: String(error?.message ?? error) });
     });
     request.end();
   });
 }
 
-/** One candidate: is it a machine, and does it have finished runs to report? */
+/**
+ * One machine's row reading: which candidate answered, whether it declares this
+ * authority, and what the finished-run feed holds.
+ *
+ * A declared candidate is preferred so the workspace opens on the entry the
+ * deployment vouches for; otherwise the first candidate that answered keeps the
+ * row reachable and merely restricted.
+ */
 async function probeEntry(entry, shellSession, stored) {
   const candidates = Array.isArray(entry.urls) && entry.urls.length > 0 ? entry.urls : [entry.url];
   let answered = null;
   const failures = [];
   for (const url of candidates) {
     const result = await probeCandidate(url, shellSession);
+    const better = result.declared || (result.posture && answered !== null && !answered.declared) || answered === null;
+    if (result.reachable && better) {
+      answered = {
+        url,
+        posture: result.posture === true,
+        declared: result.declared === true,
+        statusCode: result.statusCode,
+        reason: result.reason,
+      };
+    }
     if (result.declared) {
-      answered = { url, statusCode: result.statusCode };
       break;
     }
-    failures.push(`${url} (${result.reason})`);
+    if (!result.reachable) {
+      failures.push(`${url} (${result.reason})`);
+    }
   }
   if (answered === null) {
     // Named on stderr because it is also the reading for "the TLS entry is not
     // trusted on this machine yet", which otherwise only shows up as a machine
     // that quietly opened on plaintext and cannot record.
-    process.stderr.write(`shell: ${entry.host} did not answer as a machine: ${failures.join('; ')}\n`);
-    return { ...entry, reachable: false };
+    process.stderr.write(`shell: ${entry.host} did not answer: ${failures.join('; ')}\n`);
+    return { reachable: false, posture: false, declared: false, reason: failures.join('; ') || 'no usable entry' };
   }
-  const probed = { ...entry, url: answered.url, reachable: true, statusCode: answered.statusCode };
+  const probed = {
+    url: answered.url,
+    reachable: true,
+    posture: answered.posture,
+    declared: answered.declared,
+    statusCode: answered.statusCode,
+    reason: answered.reason,
+  };
   // The feed can only add the dot: it cannot withdraw a machine the reading
   // above accepted, and it cannot fail this probe - an absent feed is the
   // same answer as an empty one.
@@ -1247,21 +1370,41 @@ async function resolveSnapshot(select) {
   const fleetSelf = fleetSnapshot?.self ?? null;
   const fallbackIdentity = localIdentity();
   const registeredEntries = Array.isArray(fleetSnapshot?.entries) ? fleetSnapshot.entries : [];
-  const { local: measuredLocal, fleet: fleetRows } = localRowsFrom(
-    registeredEntries,
-    localAddresses(fleetSelf),
-    loopbackUrl(),
-  );
-  const fleetEntryRows = fleetState === 'ready' ? await probeEntries(fleetRows) : [];
-  const local = localState === 'ready' ? await probeLocalEntry(measuredLocal ?? localEntry(fallbackIdentity)) : null;
+  // This machine's own authority, asked of the host itself over loopback: the fleet may
+  // name the machine after its NetBird peer while the OS host name is something else.
+  const localAuthority = localState === 'ready' ? await localAuthorityOf(registeredEntries) : '';
+  // Every record the fleet publishes is a row; a record that addresses this machine is
+  // marked local rather than collapsed, because one machine serves one record per service.
+  const fleetRows = markLocalEntries(registeredEntries, localAddresses(fleetSelf), localAuthority);
+  // The registry is the list; the probe only grades each row. When the fleet is not
+  // up there is nothing to probe, and the rows it did report stay on screen as offline
+  // rather than disappearing with the link.
+  // Local rows are not probed: this app's engine cannot dial its own overlay address,
+  // so the probe would only ever report a timeout that says nothing about the service.
+  const fleetProbes = fleetState === 'ready'
+    ? await probeEntries(fleetRows.filter((row) => row.local !== true))
+    : new Map();
+  const fleetEntryRows = machineRows(fleetRows, fleetProbes);
+  // This machine's workspace: the record whose host is the authority its own host
+  // answered for on loopback. It opens over loopback, so the page is not dialled through
+  // the overlay and the host fence admits it as a local browser.
+  const workspaceRow = localAuthority === ''
+    ? null
+    : fleetEntryRows.find((row) => row.host.toLowerCase() === localAuthority.toLowerCase()) ?? null;
+  // With a fleet list, the machine's own row is already among the records; inventing a
+  // second one from the host name would show one machine twice under two names.
+  const localRow = workspaceRow !== null
+    ? { ...workspaceRow, url: loopbackUrl(), status: 'ready', reason: '' }
+    : fleetEntryRows.length === 0 ? localEntry(fallbackIdentity) : null;
+  const local = localState === 'ready' ? await probeLocalEntry(localRow) : null;
   const entries = mergeEntries(local, fleetEntryRows);
   const state = uiState(localState, fleetState);
   // The local block names the machine the list names: whichever authority was measured,
   // or the host name while no fleet has answered for it yet. Only the name and the
   // authority travel - the measured row's socket address is loopback, which is not this
   // machine's address in the fleet.
-  const identity = measuredLocal
-    ? { machine: measuredLocal.machine, host: measuredLocal.host, url: measuredLocal.url }
+  const identity = workspaceRow
+    ? { machine: workspaceRow.machine, host: workspaceRow.host, url: loopbackUrl() }
     : fallbackIdentity;
   return {
     state,
@@ -1271,6 +1414,10 @@ async function resolveSnapshot(select) {
     self: fleetSelf,
     registered: fleetSnapshot ? fleetSnapshot.registered : entries.length,
     entries,
+    // How the fleet rows came out, so the window can say "2 台受限入口" instead of
+    // leaving a person to wonder why a machine they can open in a browser looks
+    // different here. Counting only the fleet: the local row is not a probe result.
+    machines: machineCounts(fleetEntryRows),
     proxy: fleetSnapshot ? fleetSnapshot.proxy : '',
     local: localBlock(identity),
     fleet: { state: fleetState, detail: fleetDetail },
@@ -2170,7 +2317,13 @@ function catalogOf(snapshot) {
     services.push({
       id: `machine:${entry.host}`,
       kind: 'machine',
-      name: String(entry.machine ?? entry.host ?? ''),
+      // The card names the service (`dsh`, `superset`, `clickhouse`); the group is the
+      // machine, so every service one machine publishes sits under that machine.
+      // Nothing here enumerates either label: both come from the DNS record.
+      name: String(entry.service || entry.machine || entry.host || ''),
+      group: String(entry.machine ?? ''),
+      service: String(entry.service ?? ''),
+      machine: String(entry.machine ?? ''),
       // The group says what these are (DSH services); the subtitle says which one, which
       // is the address a person would recognise. "This is the machine you are on" is a
       // corner flag, not a group of its own.
@@ -2179,6 +2332,12 @@ function catalogOf(snapshot) {
       host: String(entry.host ?? ''),
       unread: Number(entry.unread ?? 0) > 0 ? Number(entry.unread) : 0,
       needsLogin: entry.statusCode === 302,
+      // Status, never membership: a row stays on the home page either way, and the card
+      // says when a service did not answer. What a deployment declares about its own
+      // authority is not a label this window puts on the person's machine.
+      status: String(entry.status ?? ''),
+      offline: entry.status === 'offline',
+      statusReason: String(entry.reason ?? ''),
     });
   }
   for (const service of webServices()) {

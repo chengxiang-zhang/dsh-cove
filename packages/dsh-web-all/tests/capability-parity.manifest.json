@@ -7,12 +7,10 @@
       "web-all-git-branch-chip"
     ],
     "sidebar.panellist": [
-      "web-all-ssh",
-      "web-all-memoir"
+      "web-all-ssh"
     ],
     "main": [
-      "web-all-ssh",
-      "web-all-memoir"
+      "web-all-ssh"
     ],
     "sidebar.right.pane.tab": [
       "web-ui.git"
@@ -24,7 +22,6 @@
   },
   "sidebarComponents": [
     "ssh",
-    "memoir",
     "right-pane",
     "git-workbench",
     "native-panels",
@@ -42,16 +39,13 @@
     "git"
   ],
   "hostServices": [
-    "codex-bridge",
     "family-config",
     "family-namespaces",
     "git-graph",
     "lark-inbox",
     "lifecycle",
-    "memoir",
     "no-browser-auth",
     "playwright-sessions",
-    "remote-web-ui",
     "right-pane",
     "schedule-mode",
     "ssh",
@@ -61,14 +55,9 @@
     "notify"
   ],
   "routePrefixes": [
-    "/api/dsh-codex-bridge",
-    "/api/dsh-memoir",
-    "/api/gateway",
-    "/api/pair",
     "/api/schedule-mode",
     "/api/workbench",
     "/git",
-    "/login",
     "/lark-inbox/wizard",
     "/workspace-model",
     "/worktree",
@@ -78,9 +67,6 @@
     "lark_inbox_ack",
     "lark_inbox_peek",
     "lark_inbox_pop",
-    "memoir_read",
-    "memoir_record",
-    "memoir_update",
     "schedule_mode_list",
     "schedule_mode_set",
     "ssh_cluster",
@@ -94,10 +80,8 @@
     "mcp__playwright__"
   ],
   "settingsNamespaces": [
-    "dsh-codex-bridge",
     "dsh-ssh",
     "lark-inbox",
-    "remote-web-ui",
     "schedule-mode",
     "web-render",
     "workspace-model",
@@ -125,7 +109,6 @@
     "data-dsh-plugin": [
       "web-all",
       "ssh",
-      "memoir",
       "worktree",
       "git-graph",
       "lark-inbox",

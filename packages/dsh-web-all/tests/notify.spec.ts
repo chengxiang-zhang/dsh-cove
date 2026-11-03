@@ -483,7 +483,7 @@ describe('feed route fence topologies', () => {
 
   function deployment(authenticated: boolean) {
     const store = new Map<string, unknown>([
-      ['webRuntime', { trustedHosts: [CANONICAL] }],
+      ['webStartup', { trustedHosts: [CANONICAL] }],
       ['connection', { browserAuth: { isAuthenticated: vi.fn(() => authenticated) } }],
     ])
     const ctx = {

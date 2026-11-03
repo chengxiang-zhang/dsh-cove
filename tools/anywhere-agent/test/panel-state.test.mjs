@@ -6,8 +6,7 @@ import {
   LOCAL_STATES,
   UI_STATES,
   localEntry,
-  localEntryFromAuthority,
-  localRowsFrom,
+  markLocalEntries,
   mergeEntries,
   provisioningCopy,
   uiState,
@@ -77,9 +76,21 @@ test('this machine is a row even with no network, no account and no records', ()
   const row = localEntry({ machine: 'studio-mac', host: 'dsh.studio-mac.netbird', url: 'http://127.0.0.1:3080/' });
   assert.deepEqual(row, {
     host: 'dsh.studio-mac.netbird',
+    service: 'dsh',
     machine: 'studio-mac',
     ip: '',
     url: 'http://127.0.0.1:3080/',
+    statusCode: 200,
+    local: true,
+  });
+  // A name without the two labels keeps the machine fact it was given, and claims no
+  // service rather than inventing one.
+  assert.deepEqual(localEntry({ machine: 'studio-mac', host: 'studio-mac' }), {
+    host: 'studio-mac',
+    service: '',
+    machine: 'studio-mac',
+    ip: '',
+    url: '',
     statusCode: 200,
     local: true,
   });
@@ -113,52 +124,30 @@ test('the merge survives everything a wire can deliver', () => {
   assert.deepEqual(rows.map((row) => row.host), ['a', 'b']);
 });
 
-test('the fleet row that addresses this machine is this machine, whatever it is called', () => {
-  // One physical machine, two enrollments: the fleet knows it as `studio-mac` (the address the
-  // OS holds) and this app enrolled with a collision suffix. The record that points at one
-  // of the machine's addresses is this machine - no name comparison, no second row.
+test('every fleet record addressing this machine is marked local, one per service', () => {
+  // One machine serves several services, so it holds one record per service; each is
+  // this machine, and they stay separate rows because they are separate services.
   const fleet = [
-    { host: 'dsh.studio-mac.netbird', machine: 'studio-mac', ip: '100.64.1.81' },
-    { host: 'dsh.workstation-189-193.netbird', machine: 'workstation-189-193', ip: '100.64.1.93' },
-    { host: 'dsh.desk-node.netbird', machine: 'desk-node', ip: '100.64.0.74' },
+    { host: 'dsh.studio-mac.netbird', service: 'dsh', machine: 'studio-mac', ip: '100.64.1.81' },
+    { host: 'superset.studio-mac.netbird', service: 'superset', machine: 'studio-mac', ip: '100.64.1.81' },
+    { host: 'dsh.desk-node.netbird', service: 'dsh', machine: 'desk-node', ip: '100.64.0.74' },
   ];
-  const { local, fleet: others } = localRowsFrom(
-    fleet,
-    ['100.64.1.81', '100.64.1.93', '192.168.111.32'],
-    'http://127.0.0.1:3080/',
-  );
-  assert.ok(local, 'a record pointing at an address of this machine is this machine');
-  assert.equal(local.host, 'dsh.studio-mac.netbird');
-  assert.equal(local.machine, 'studio-mac', 'the row is labelled by the name the fleet reaches it by');
-  assert.equal(local.local, true);
-  assert.equal(local.url, 'http://127.0.0.1:3080/', 'this copy is the one in front of the user');
-  assert.deepEqual(others.map((row) => row.host), ['dsh.desk-node.netbird'], 'this machine is not a second machine');
-  assert.deepEqual(mergeEntries(local, others).map((row) => row.host), [
+  const rows = markLocalEntries(fleet, ['100.64.1.81', '192.168.111.32']);
+  assert.deepEqual(rows.map((row) => row.host), [
     'dsh.studio-mac.netbird',
+    'superset.studio-mac.netbird',
     'dsh.desk-node.netbird',
   ]);
+  assert.deepEqual(rows.map((row) => row.local), [true, true, false]);
+  assert.deepEqual(rows.map((row) => row.service), ['dsh', 'superset', 'dsh']);
 });
 
-test('several records that address this machine are still one machine', () => {
-  // Every enrollment of this machine publishes its own record; all of them are this machine.
-  const fleet = [
-    { host: 'dsh.b-enrollment.netbird', machine: 'b-enrollment', ip: '100.64.0.5' },
-    { host: 'dsh.a-enrollment.netbird', machine: 'a-enrollment', ip: '100.64.0.6' },
-    { host: 'dsh.desk-node.netbird', machine: 'desk-node', ip: '100.64.0.74' },
-  ];
-  const { local, fleet: others } = localRowsFrom(fleet, ['100.64.0.5', '100.64.0.6'], '');
-  assert.equal(local.host, 'dsh.a-enrollment.netbird', 'the choice is stable across refreshes');
-  assert.deepEqual(others.map((row) => row.host), ['dsh.desk-node.netbird'], 'a second enrollment is never a second machine');
-});
-
-test('with no record addressing this machine, no row claims to be it', () => {
-  const { local, fleet: others } = localRowsFrom([{ host: 'dsh.desk-node.netbird', ip: '100.64.0.74' }], ['100.64.1.81'], '');
-  assert.equal(local, null, 'identity is a fact about addresses, not a guess');
-  assert.equal(others.length, 1);
-  // The row builders survive anything a wire can deliver.
-  assert.equal(localEntryFromAuthority('', ''), null);
-  assert.equal(localEntryFromAuthority(undefined, ''), null);
-  assert.equal(localEntryFromAuthority('dsh.studio-mac.netbird', '').machine, 'studio-mac');
-  assert.equal(localEntryFromAuthority('studio-mac', '').machine, '');
-  assert.deepEqual(localRowsFrom(null, null, ''), { local: null, fleet: [] });
+test('an address that is not this machine marks nothing, and malformed input yields no rows', () => {
+  assert.deepEqual(markLocalEntries([{ host: 'dsh.desk-node.netbird', ip: '100.64.0.74' }], ['100.64.1.81']), [
+    { host: 'dsh.desk-node.netbird', ip: '100.64.0.74', local: false },
+  ]);
+  assert.deepEqual(markLocalEntries(null, null), []);
+  assert.deepEqual(markLocalEntries([{ host: '' }, null, { ip: '100.64.0.1' }], ['100.64.0.1']), []);
+  // A prefixed address still matches, the way the peer table reports it.
+  assert.equal(markLocalEntries([{ host: 'dsh.a.netbird', ip: '100.64.0.5' }], ['100.64.0.5/16'])[0].local, true);
 });

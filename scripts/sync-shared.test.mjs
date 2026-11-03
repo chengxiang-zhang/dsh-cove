@@ -31,10 +31,6 @@ test('the declared shared source is parsed from the generated header', () => {
  */
 const EXPECTED_COPIES = [
   'packages/dsh-web-all/src/client/conversation/git-graph/sse-leader.ts',
-  'packages/dsh-web-all/src/host/services/codex-bridge/http.ts',
-  'packages/dsh-web-all/src/host/services/codex-bridge/loopback.ts',
-  'packages/dsh-web-all/src/host/services/remote-web-ui/server-mode/dsh-home.ts',
-  'packages/dsh-web-all/src/host/services/remote-web-ui/server-mode/http.ts',
   'packages/dsh-web-all/src/host/services/worktree/git-runner.ts',
 ]
 

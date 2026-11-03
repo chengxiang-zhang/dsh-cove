@@ -24,19 +24,14 @@ function stubFetch(handler: () => Promise<Response>): ReturnType<typeof vi.fn> {
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('WorktreeApi failure kinds', () => {
-  it('returns null only for a host half that does not serve /worktree/tree', async () => {
-    stubFetch(async () => new Response('not found', { status: 404 }))
-    expect(await new WorktreeApi().tree()).toBeNull()
-  })
-
   it('reports a fence refusal as a permission failure, not as a broken envelope', async () => {
     stubFetch(async () => jsonResponse({ error: 'forbidden: loopback-only' }, 403))
-    await expect(new WorktreeApi().tree()).rejects.toMatchObject({ kind: 'permission', status: 403 })
+    await expect(new WorktreeApi().status({ repoPath: '/r' })).rejects.toMatchObject({ kind: 'permission', status: 403 })
   })
 
   it('reports an envelope failure instead of rendering the empty state', async () => {
     stubFetch(async () => jsonResponse({ ok: false, code: 'git-failed', message: 'git exploded' }, 500))
-    await expect(new WorktreeApi().tree()).rejects.toMatchObject({ kind: 'domain', code: 'git-failed' })
+    await expect(new WorktreeApi().status({ repoPath: '/r' })).rejects.toMatchObject({ kind: 'domain', code: 'git-failed' })
   })
 
   it('keeps the domain code so the panel can localize the refusal', async () => {
@@ -47,7 +42,7 @@ describe('WorktreeApi failure kinds', () => {
 
   it('turns a stalled request into a transport failure with the deadline in the text', async () => {
     stubFetch(async () => { throw new DOMException('The operation was aborted', 'TimeoutError') })
-    const error = await new WorktreeApi().tree().catch((caught: unknown) => caught)
+    const error = await new WorktreeApi().status({ repoPath: '/r' }).catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(WorktreeApiError)
     expect((error as WorktreeApiError).kind).toBe('transport')
     expect((error as WorktreeApiError).message).toMatch(/did not answer/)
@@ -59,8 +54,8 @@ describe('WorktreeApi failure kinds', () => {
   })
 
   it('hands each request a deadline signal', async () => {
-    const fetchMock = stubFetch(async () => jsonResponse({ ok: true, value: { projects: [] } }))
-    await new WorktreeApi().tree()
+    const fetchMock = stubFetch(async () => jsonResponse({ ok: true, value: {} }))
+    await new WorktreeApi().status({ repoPath: '/r' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
     expect(init?.signal).toBeInstanceOf(AbortSignal)

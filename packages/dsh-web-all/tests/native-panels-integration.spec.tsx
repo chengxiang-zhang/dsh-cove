@@ -2,8 +2,8 @@
 /**
  * Position-module integration: who owns which seat.
  *
- * The sidebar renders SSH and memoir as native panellist pages and must not
- * carry a worktree row anymore; the worktree browser half belongs to the
+ * The sidebar renders SSH as a native panellist page and must not carry a
+ * worktree row anymore; the worktree browser half belongs to the
  * conversation position module, which registers the branch picker (composer
  * dock) and the header lane chip, and owns the `worktree` locale namespace the
  * chip's menu and dialogs speak.
@@ -16,7 +16,6 @@ vi.mock('../src/client/conversation/subagent-model.ts', () => ({
 }))
 
 import {
-  MEMOIR_PANEL_ID,
   SSH_PANEL_ID,
   registerNativePanels,
 } from '../src/client/sidebar/native-panels.tsx'
@@ -38,10 +37,9 @@ function makeSlots() {
 }
 
 describe('sidebar position module', () => {
-  it('registers SSH and memoir as panellist rows plus main panels', () => {
+  it('registers SSH as a panellist row plus main panel', () => {
     const { seats, slots } = makeSlots()
     const selectPanel = vi.fn<(id: string | null) => void>()
-    const openSession = vi.fn<(id: string) => void>()
     const listeners = new Set<() => void>()
     const ctx = {
       slots,
@@ -61,9 +59,6 @@ describe('sidebar position module', () => {
         }
         // 0.2 selection cell: the memoir page resolves its project from here
         // and opens a memory's source session through it (sessions.open is gone).
-        if (name === 'uiWorkspace') {
-          return { selection: { getSnapshot: () => ({ sessionId: 'session-a' }), subscribe: () => () => {} }, openSession }
-        }
         return undefined
       },
       locale: { bind: () => (key: string) => key },
@@ -73,17 +68,9 @@ describe('sidebar position module', () => {
 
     const rows = seats.filter(seat => seat.name === 'sidebar.panellist')
     const mains = seats.filter(seat => seat.name === 'main')
-    expect(rows.map(row => row.options['id'])).toEqual([SSH_PANEL_ID, MEMOIR_PANEL_ID])
-    expect(rows.map(row => row.options['order'])).toEqual([30, 31])
-    expect(mains.map(main => main.options['key'])).toEqual([SSH_PANEL_ID, MEMOIR_PANEL_ID])
-    // The memoir page receives a tracker wired to the live selection sources, so
-    // the panel can load the project memory of the session the operator is in
-    // (DSH 0.2 no longer exposes sessions.list.current).
-    const memoirProps = (mains[1]!.options['inject'] as () => { cwdTracker: { getSnapshot(): string }; openSource(sessionId: string): void })()
-    expect(memoirProps.cwdTracker.getSnapshot()).toBe('/repo')
-    // Opening a memory's source session goes through the 0.2 selection API.
-    memoirProps.openSource('session-b')
-    expect(openSession).toHaveBeenCalledWith('session-b')
+    expect(rows.map(row => row.options['id'])).toEqual([SSH_PANEL_ID])
+    expect(rows.map(row => row.options['order'])).toEqual([30])
+    expect(mains.map(main => main.options['key'])).toEqual([SSH_PANEL_ID])
     // No worktree page: the sidebar is not a worktree surface anymore.
     expect(seats.some(seat => String(seat.options['id'] ?? seat.options['key'] ?? '').includes('worktree'))).toBe(false)
     dispose()

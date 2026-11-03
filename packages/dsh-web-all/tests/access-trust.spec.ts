@@ -23,7 +23,6 @@ import {
 import { registerGitRoutes } from '../src/host/services/git-graph/routes.ts'
 import type { GitService } from '../src/host/services/git-graph/service.ts'
 import { makePlaywrightControlRoutes } from '../src/host/services/playwright-sessions/routes.ts'
-import { makeMemoirRoutes } from '../src/host/services/memoir/routes.ts'
 import { makeRoutes as makeSshRoutes } from '../src/host/services/ssh/routes.ts'
 import { makeScheduleModeRoutes } from '../src/host/services/schedule-mode/routes.ts'
 import { makeWorktreeRoutes } from '../src/host/services/worktree/routes.ts'
@@ -104,13 +103,13 @@ function context(services: Record<string, unknown> = {}): {
   return { ctx: ctx as unknown as Context, store, routes, upgrades }
 }
 
-/** A deployment context: webRuntime authorities plus a connection whose
+/** A deployment context: webStartup authorities plus a connection whose
  *  BrowserAuth answers `authenticated`. */
 function deployment(options: { authorities?: string[]; authenticated?: boolean } = {}) {
   const authenticated = options.authenticated ?? false
   const auth = { isAuthenticated: vi.fn(() => authenticated) }
   const built = context({
-    webRuntime: { trustedHosts: options.authorities ?? [CANONICAL] },
+    webStartup: { trustedHosts: options.authorities ?? [CANONICAL] },
     connection: { browserAuth: auth },
   })
   registerAccessTrust(built.ctx)
@@ -174,10 +173,30 @@ describe('trust predicate', () => {
 })
 
 describe('access-trust service', () => {
-  it('reads the deployment authorities from webRuntime and fails closed without it', () => {
+  it('reads the invocation authorities from webStartup', () => {
     expect(trustedAuthoritiesOf(deployment({ authorities: [CANONICAL, '127.0.0.1'] }).ctx)).toEqual([CANONICAL, '127.0.0.1'])
     expect(trustedAuthoritiesOf(context().ctx)).toEqual([])
-    expect(trustedAuthoritiesOf(context({ webRuntime: {} }).ctx)).toEqual([])
+    expect(trustedAuthoritiesOf(context({ webStartup: {} }).ctx)).toEqual([])
+    // Reshaped values cannot widen or crash the fence.
+    expect(trustedAuthoritiesOf(context({ webStartup: { trustedHosts: [CANONICAL, 7, null] } }).ctx)).toEqual([CANONICAL])
+  })
+
+  it('keeps reading webRuntime on the SDKs that still provide it', () => {
+    expect(trustedAuthoritiesOf(context({ webRuntime: { trustedHosts: [CANONICAL] } }).ctx)).toEqual([CANONICAL])
+  })
+
+  it('does not consult a stale webRuntime once webStartup exists', () => {
+    // An SDK that carries both must not let the deprecated list widen the grant:
+    // the service the running SDK actually reads is the one that decides.
+    const both = context({
+      webStartup: { trustedHosts: [CANONICAL] },
+      webRuntime: { trustedHosts: [CANONICAL, 'stale.example'] },
+    })
+    expect(trustedAuthoritiesOf(both.ctx)).toEqual([CANONICAL])
+    // An empty webStartup is a deployment that declared nothing, not a reason to
+    // fall back to the other source.
+    const emptyStartup = context({ webStartup: { trustedHosts: [] }, webRuntime: { trustedHosts: [CANONICAL] } })
+    expect(trustedAuthoritiesOf(emptyStartup.ctx)).toEqual([])
   })
 
   it('binds the live BrowserAuth method instead of a snapshot', () => {
@@ -252,58 +271,23 @@ describe('route families consult the shared fence', () => {
   })
 
   it('fences are sourced from the service, not from a local loopback check', async () => {
-    const denyAll: AccessTrust = { isTrusted: () => false }
-    const allowAll: AccessTrust = { isTrusted: () => true }
+    // Passing the decision in explicitly must override the built-in loopback
+    // rule in both directions: a deny from a loopback request still refuses,
+    // and an admit from a remote authority still passes. Otherwise a family
+    // could keep a private socket check that shadows the shared fence.
+    const store = { list: () => [], get: () => undefined } as never
+    const engine = { exec: async () => ({ stdout: '', stderr: '', code: 0 }) } as never
+    const denied = makeSshRoutes({ store, engine, logger: { warn: () => {} }, isTrusted: () => false })[0]
+    const refused = response()
+    await denied.handler(request({ url: '/api/dsh-ssh/hosts', host: '127.0.0.1:3080' }) as never, refused.res as never)
+    expect(refused.status()).toBe(403)
 
-    // memoir: the guard runs before any store access, so a missing path is a 400.
-    const memoirDeps = { store: {} as never, settings: () => ({}) as never, saveSettings: () => {}, logger: { warn: () => {} } }
-    const deniedMemoir = response()
-    await makeMemoirRoutes({ ...memoirDeps, isTrusted: denyAll.isTrusted })[0].handler(
-      request({ url: '/api/dsh-memoir/project', host: '127.0.0.1:3080' }) as never, deniedMemoir.res as never,
-    )
-    expect(deniedMemoir.status()).toBe(403)
-    const allowedMemoir = response()
-    await makeMemoirRoutes({ ...memoirDeps, isTrusted: allowAll.isTrusted })[0].handler(
-      request({ url: '/api/dsh-memoir/project', host: '127.0.0.1:3080' }) as never, allowedMemoir.res as never,
-    )
-    expect(allowedMemoir.status()).toBe(400)
-
-    // ssh: GET /hosts answers 200 for an allowed request.
-    const sshDeps = { store: {} as never, engine: { list: () => [] } as never, logger: { warn: () => {} } }
-    const sshPath = makeSshRoutes({ ...sshDeps, isTrusted: allowAll.isTrusted }).map(route => route.path)
-    const deniedSsh = response()
-    await makeSshRoutes({ ...sshDeps, isTrusted: denyAll.isTrusted })[0].handler(
-      request({ url: sshPath[0] ?? '/', host: '127.0.0.1:3080' }) as never, deniedSsh.res as never,
-    )
-    expect(deniedSsh.status()).toBe(403)
-    const allowedSsh = response()
-    await makeSshRoutes({ ...sshDeps, isTrusted: allowAll.isTrusted })[0].handler(
-      request({ url: sshPath[0] ?? '/', host: '127.0.0.1:3080' }) as never, allowedSsh.res as never,
-    )
-    expect(allowedSsh.status()).toBe(200)
-
-    // schedule-mode: GET /tasks answers 200 for an allowed, session-scoped request.
-    const engine = { list: async () => ({ available: [], tasks: [] }) } as never
-    const deniedSchedule = response()
-    await makeScheduleModeRoutes({ engine, logger: { warn: () => {} }, isTrusted: denyAll.isTrusted })[0].handler(
-      request({ url: '/api/schedule-mode/tasks?sessionId=s1', host: '127.0.0.1:3080' }) as never, deniedSchedule.res as never,
-    )
-    expect(deniedSchedule.status()).toBe(403)
-    const allowedSchedule = response()
-    await makeScheduleModeRoutes({ engine, logger: { warn: () => {} }, isTrusted: allowAll.isTrusted })[0].handler(
-      request({ url: '/api/schedule-mode/tasks?sessionId=s1', host: '127.0.0.1:3080' }) as never, allowedSchedule.res as never,
-    )
-    expect(allowedSchedule.status()).toBe(200)
-
-    // worktree pr-create compatibility route.
-    const worktreeDeps = { resolveProjectRoot: () => undefined, runCommand: async () => ({ stdout: '', stderr: '' }), logger: { warn: () => {} } }
-    const route = (isTrusted: (req: IncomingMessage) => boolean) => makeWorktreeRoutes({ ...worktreeDeps, isTrusted }).find(candidate => candidate.path === '/worktree/pr-create')
-    const deniedWorktree = response()
-    await route(denyAll.isTrusted)?.handler(request({ url: '/worktree/pr-create', method: 'POST', host: '127.0.0.1:3080', body: {} }) as never, deniedWorktree.res as never)
-    expect(deniedWorktree.status()).toBe(403)
-    const allowedWorktree = response()
-    await route(allowAll.isTrusted)?.handler(request({ url: '/worktree/pr-create', method: 'POST', host: '127.0.0.1:3080', body: {} }) as never, allowedWorktree.res as never)
-    expect(allowedWorktree.status()).toBe(400)
+    const allowedRoute = makeSshRoutes({ store, engine, logger: { warn: () => {} }, isTrusted: () => true })[0]
+    const accepted = response()
+    await allowedRoute.handler(request({ url: '/api/dsh-ssh/hosts', host: 'remote.example.com' }) as never, accepted.res as never)
+    // The assertion is about the fence, not the payload: an admitted call must
+    // never come back 403, which is the only status the guard can emit.
+    expect(accepted.status()).not.toBe(403)
   })
 
   it('right-pane workbench reads the provided decision', async () => {

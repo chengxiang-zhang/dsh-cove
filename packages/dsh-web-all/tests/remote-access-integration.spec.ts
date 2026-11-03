@@ -38,7 +38,7 @@ function deployment(): { ctx: Context; routes: WebRoute[]; rows(): InjectionRow[
   const routes: WebRoute[] = []
   const listeners: Array<(table: InjectionRow[]) => void> = []
   const store = new Map<string, unknown>([
-    ['webRuntime', { trustedHosts: [CANONICAL] }],
+    ['webStartup', { trustedHosts: [CANONICAL] }],
     ['connection', {
       browserAuth: {
         isAuthenticated: (request: { headers: Record<string, unknown> }) => String(request.headers.cookie ?? '').includes(SESSION_COOKIE),
@@ -124,7 +124,8 @@ describe('reverse-proxied entry end to end', () => {
     expect(page.status).toBe(200)
     expect(page.body).toContain('<script src="/web-all/remote-access/boot.js"></script>')
     expect(page.body.indexOf('/web-all/remote-access/boot.js')).toBeLessThan(page.body.indexOf('<body'))
-    expect(page.body).toContain('crypto.randomUUID')
+    // The plain-HTTP origin still gets the clipboard shim; the UUID polyfill is
+    // gone because the client transport derives UUIDs from getRandomValues.
     expect(page.body).toContain('navigator')
   })
 

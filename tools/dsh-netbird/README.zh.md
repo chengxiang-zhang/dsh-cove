@@ -28,9 +28,9 @@ http://dsh.<NetBird 机器名>.netbird/
 
 DSH 进程使用 `--host 127.0.0.1 --port 3080 --no-open` 启动，并通过 `--trusted-host` 传入每台机器的规范浏览器 authority。Nginx 把规范主机代理到该 loopback 监听器，并保留 Host、Origin、cookie 和 WebSocket upgrade 请求头。DSH 只信任文档中的规范主机；局域网和 NetBird IP 直连监听仍保持关闭。3082 是默认关闭的兼容监听器，不属于该拓扑。
 
-在本 SDK 中，Web profile 的 `web` 行 `trustedHosts` 不会到达运行时围栏：connection 服务读取的是 `ctx.webRuntime.trustedHosts`，而 Web 运行时由启动参数推导该值。请在命令行传入规范 authority，不要把 IP 字面量、兼容别名或其他局域网名称写进该列表。
+在本 SDK 中，Web profile 的 `web` 行 `trustedHosts` 不会到达运行时围栏：connection 服务与插件围栏读取的是启动参数通过 `--trusted-host` 声明的 authority 列表，`@deepseek-ai/dsh-web-app` 0.2.1 起由 `ctx.webStartup.trustedHosts` 暴露（更早的 SDK 是 `ctx.webRuntime.trustedHosts`）。请在命令行传入规范 authority，不要把 IP 字面量、兼容别名或其他局域网名称写进该列表。
 
-同一份 `ctx.webRuntime.trustedHosts` 也是宿主侧插件面板的准入列表：web-all 的 Git 管理、Agent 浏览器、worktree、SSH、memoir、运行方式与右栏工作台路由共用一个宿主访问围栏——请求 socket 必须是 loopback，且 Host 为 loopback，或属于该列表并携带有效 DSH 浏览器会话（本地账号、飞书或 OIDC 签发的同一个 HttpOnly 会话，或原生启动 token）；跨站标记、缺失 Host、未声明的 Host、无有效会话一律 403。本机浏览器直接访问 `127.0.0.1:3080` 时 Host 即 loopback，因此不需要额外配置。`noBrowserAuth: true` 会把远程分支退化为仅 Host/Origin 检查，等同于把这些面板开放给任何能到达 80 端口的 peer。
+同一份已声明 authority 列表也是宿主侧插件面板的准入列表：web-all 的 Git 管理、Agent 浏览器、worktree、SSH、memoir、运行方式与右栏工作台路由共用一个宿主访问围栏——请求 socket 必须是 loopback，且 Host 为 loopback，或属于该列表并携带有效 DSH 浏览器会话（本地账号、飞书或 OIDC 签发的同一个 HttpOnly 会话，或原生启动 token）；跨站标记、缺失 Host、未声明的 Host、无有效会话一律 403。本机浏览器直接访问 `127.0.0.1:3080` 时 Host 即 loopback，因此不需要额外配置。`noBrowserAuth: true` 会把远程分支退化为仅 Host/Origin 检查，等同于把这些面板开放给任何能到达 80 端口的 peer。
 
 Nginx 代理 `127.0.0.1:3080`。最小虚拟主机模板见 [nginx.conf.template](nginx.conf.template)。必须保留 `proxy_buffering off;`：DSH 与插件的 JavaScript bundle 可能超过 nginx 内存代理缓冲区；若 worker 无权访问用户目录下的临时路径，响应会被截断，登录后的应用根节点将保持空白。
 

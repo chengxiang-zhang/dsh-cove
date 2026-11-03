@@ -61,7 +61,7 @@ function socket(): { duplex: Duplex; written(): string; destroyed(): boolean } {
 
 function harness(authenticated: boolean): { ctx: Context; upgrades: UpgradeRoute[] } {
   const store = new Map<string, unknown>([
-    ['webRuntime', { trustedHosts: [CANONICAL] }],
+    ['webStartup', { trustedHosts: [CANONICAL] }],
     ['connection', { browserAuth: { isAuthenticated: vi.fn(() => authenticated) } }],
   ])
   const upgrades: UpgradeRoute[] = []

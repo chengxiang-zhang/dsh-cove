@@ -17,7 +17,6 @@ import {
   CLIPBOARD_SHIM_SCRIPT,
   HOST_ACCESS_BOOT_PATH,
   HOST_ACCESS_SESSION_PATH,
-  UUID_POLYFILL_SCRIPT,
 } from '../src/host/services/remote-access/index.ts'
 
 interface InjectionRow {
@@ -89,7 +88,6 @@ describe('remote-access assembly wiring', () => {
 
     expect(built.inject()).toEqual([
       { kind: 'script-src', placement: 'head', src: HOST_ACCESS_BOOT_PATH },
-      { kind: 'script', placement: 'head', text: UUID_POLYFILL_SCRIPT },
       { kind: 'script', placement: 'head', text: CLIPBOARD_SHIM_SCRIPT },
     ])
 

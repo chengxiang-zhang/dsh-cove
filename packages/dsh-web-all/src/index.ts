@@ -38,7 +38,7 @@ export const inject = [
 
 /**
  * 插件 config 类型面（运行时的权威 schema 是下面导出的 `Config`）。
- * 命名空间键（doctor / remote-web-ui / dsh-ssh / …）即各能力域的设置命名空间。
+ * 命名空间键（lark-inbox / notify / dsh-ssh / …）即各能力域的设置命名空间。
  */
 export interface Config extends Record<string, unknown> {
   /** 用户 dsh 配置根（默认 $DSH_HOME 或 ~/.dsh）。 */

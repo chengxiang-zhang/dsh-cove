@@ -170,16 +170,6 @@ export class SessionLaneManager {
     return this.worktrees.laneForPath(input)
   }
 
-  /**
-   * Undo a lane whose session never came up (the platform's create failed, or
-   * the user cancelled before it landed). Removes the worktree directory, the
-   * local branch, the git admin records, the manifest entry and the registered
-   * workspace, so a failed start leaves no stray lane behind.
-   */
-  async rollbackLane(input: { repoPath: string; branch: string }): Promise<void> {
-    await this.worktrees.rollbackCreate({ repoPath: input.repoPath, name: input.branch })
-  }
-
   /** Whether the host can see that session. */
   private hasSession(sessionId: string): boolean {
     if (this.options.hasSession !== undefined) return this.options.hasSession(sessionId)

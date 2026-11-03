@@ -68,8 +68,13 @@ test('a finished sign-in connects and offers the accepted entries', async () => 
 
   assert.equal(result.done, true);
   assert.equal(result.state.state, AgentState.READY);
-  // The internal zone's service name is refused; only the dsh entry is offered.
-  assert.deepEqual(result.state.entries.map((entry) => entry.host), ['dsh.peer-a.netbird']);
+  // Every service the zone publishes is offered, grouped by its first label; nothing
+  // here enumerates service names.
+  assert.deepEqual(result.state.entries.map((entry) => entry.host), [
+    'clickhouse.peer-a.netbird',
+    'dsh.peer-a.netbird',
+  ]);
+  assert.deepEqual(result.state.entries.map((entry) => entry.service), ['clickhouse', 'dsh']);
   assert.equal(result.state.registered, 2);
   assert.equal(result.state.proxy, 'http://127.0.0.1:19002');
 });

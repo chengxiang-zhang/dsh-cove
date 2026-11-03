@@ -3,18 +3,20 @@
  * privileged web-all host route family consults (see `./trust.ts` for the
  * rule itself).
  *
- * The deployment's browser authorities come from `ctx.webRuntime`, the service
- * `dsh-web-app` provides for the active bind (`trustedHosts` = invocation-
- * derived LAN literals plus `--trusted-host`). Browser-session admission comes
- * from the connection service's private `BrowserAuth`, the same object DSH
- * uses for `/api`; `remote-web-ui` composes the web-all account session into it
- * and `no-browser-auth` may replace it when a deployment explicitly opts out.
+ * The deployment's browser authorities come from whichever service the loaded
+ * SDK generation hangs them on: `ctx.webStartup.trustedHosts` from
+ * `@deepseek-ai/dsh-web-app` 0.2.1 on (`--trusted-host`, the same list the
+ * bundle patch hands the `/api` fence), or `ctx.webRuntime.trustedHosts` on the
+ * earlier SDKs that provided it. Browser-session admission comes from the
+ * connection service's private `BrowserAuth`, the same object DSH uses for
+ * `/api`; `no-browser-auth` may replace it when a deployment explicitly opts
+ * into the network-gate mode.
  * Both are read per request so a late mount (or a settings-driven repatch) is
  * picked up without remounting.
  *
- * Fail-closed: a missing `webRuntime`, a missing/reshaped `BrowserAuth`, an
- * undeclared Host, or a request without a session predicate falls back to the
- * strict loopback rule.
+ * Fail-closed: a missing authority service, a missing/reshaped `BrowserAuth`,
+ * an undeclared Host, or a request without a session predicate falls back to
+ * the strict loopback rule.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage } from 'node:http'
@@ -39,8 +41,21 @@ interface BrowserConnectionLike {
   browserAuth?: BrowserAuthLike
 }
 
-/** Live `webRuntime` subset (`dsh-web-app`). */
-interface WebRuntimeLike {
+/**
+ * Services that carry the browser entry authorities, in SDK generation order.
+ *
+ * Two SDK generations expose the same list under different services:
+ * `@deepseek-ai/dsh-web-app` 0.2.1 and later provide `webStartup`, which is
+ * what the bundle patch hands the `/api` fence, while earlier releases provide
+ * `webRuntime` next to `webApp`. Consulting one name only leaves the list empty
+ * on the other generation, and an empty list is not a harmless fallback: every
+ * non-loopback Host then reads as undeclared, so `authority.declared` is false,
+ * the boot script is a no-op, and privileged host routes answer 403.
+ */
+const AUTHORITY_SERVICES = ['webStartup', 'webRuntime'] as const
+
+/** Subset of the authority service this domain depends on. */
+interface TrustedHostsLike {
   trustedHosts?: string[]
 }
 
@@ -57,11 +72,21 @@ function optionalService<T>(ctx: Context, name: string): T | undefined {
   }
 }
 
-/** Authorities this deployment declares as its browser entries (never trusted as a wildcard). */
+/**
+ * Authorities this deployment declares as its browser entries (never trusted as a wildcard).
+ *
+ * The first authority service the SDK provides decides, even when its list is
+ * empty: that is a deployment which declared nothing, and consulting the other
+ * name would let a stale service widen the grant.
+ */
 export function trustedAuthoritiesOf(ctx: Context): readonly string[] {
-  const runtime = optionalService<WebRuntimeLike>(ctx, 'webRuntime')
-  const hosts = runtime?.trustedHosts
-  return Array.isArray(hosts) ? hosts.filter((entry): entry is string => typeof entry === 'string') : []
+  for (const name of AUTHORITY_SERVICES) {
+    const service = optionalService<TrustedHostsLike>(ctx, name)
+    if (service === undefined) continue
+    const hosts = service.trustedHosts
+    return Array.isArray(hosts) ? hosts.filter((entry): entry is string => typeof entry === 'string') : []
+  }
+  return []
 }
 
 /**

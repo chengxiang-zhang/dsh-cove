@@ -173,55 +173,6 @@ async function readManifest(root: string) {
 // ─── create / ensureLane ─────────────────────────────────────────────────────
 
 describe('lane create', () => {
-  it('cuts the branch, records detached=false and a real head', async () => {
-    const root = await makeRoot()
-    const faux = fakeRunner({ commonDir: join(root, '.git') })
-    const { registry } = fakeRegistry()
-    const manager = makeManager({ runner: faux.runner, registry })
-
-    const view = await manager.create({ repoPath: root, branch: 'feature/x', base: 'origin/dev' })
-
-    expect(view.branch).toBe('feature/x')
-    expect(view.exists).toBe(true)
-    const addCall = faux.run.mock.calls.find(([argv]) => argv.join(' ').startsWith('worktree add'))
-    expect(addCall?.[0]).toEqual([
-      'worktree', 'add', '-b', 'feature/x', worktreeDir(root, 'feature/x'), 'origin/dev',
-    ])
-    const manifest = await readManifest(root)
-    expect(manifest.worktrees).toHaveLength(1)
-    expect(manifest.worktrees[0]?.['detached']).toBe(false)
-    expect(manifest.worktrees[0]?.['baseCommit']).toBe(SHA)
-  })
-
-  it('refuses when the branch already exists', async () => {
-    const root = await makeRoot()
-    // Pre-existing branch: the guard must fire before any `worktree add`.
-    const run = vi.fn(async (argv: readonly string[]): Promise<GitRunResult> => {
-      const joined = argv.join(' ')
-      if (joined.includes('--git-common-dir')) return { exitCode: 0, stdout: join(root, '.git'), stderr: '' }
-      if (argv[0] === 'check-ignore') return { exitCode: 0, stdout: '', stderr: '' }
-      if (joined.includes('rev-parse --verify --quiet refs/heads/')) return { exitCode: 0, stdout: SHA, stderr: '' }
-      return { exitCode: 0, stdout: '', stderr: '' }
-    })
-    const { registry } = fakeRegistry()
-    const manager = makeManager({ runner: { run } as unknown as GitRunner, registry })
-
-    await expect(manager.create({ repoPath: root, branch: 'dev' }))
-      .rejects.toMatchObject({ code: 'worktree-exists' })
-    expect(run.mock.calls.some(([argv]) => argv.join(' ').startsWith('worktree add'))).toBe(false)
-  })
-
-  it('refuses when the lane root is not ignored', async () => {
-    const root = await makeRoot()
-    const faux = fakeRunner({ commonDir: join(root, '.git'), ignored: false })
-    const { registry } = fakeRegistry()
-    const manager = makeManager({ runner: faux.runner, registry })
-
-    await expect(manager.create({ repoPath: root, branch: 'feature/x' }))
-      .rejects.toMatchObject({ code: 'worktree-not-ignored' })
-    expect(faux.run.mock.calls.some(([argv]) => argv.join(' ').startsWith('worktree add'))).toBe(false)
-  })
-
   it('ensureLane cuts a new branch and registers its workspace', async () => {
     const root = await makeRoot()
     const faux = fakeRunner({ commonDir: join(root, '.git') })
@@ -305,32 +256,6 @@ describe('lane create', () => {
 
     expect(again).toMatchObject({ branch: 'feature/x', created: false })
     expect(faux.run.mock.calls.some(([argv]) => argv.join(' ').startsWith('worktree add'))).toBe(false)
-  })
-
-  it('rollbackCreate removes the lane and leaves no manifest entry', async () => {
-    const root = await makeRoot()
-    const faux = fakeRunner({ commonDir: join(root, '.git') })
-    const { registry } = fakeRegistry()
-    const manager = makeManager({ runner: faux.runner, registry })
-    await manager.ensureLane({ repoPath: root, branch: 'feature/x' })
-
-    await manager.rollbackCreate({ repoPath: root, name: 'feature/x' })
-
-    const joined = faux.run.mock.calls.map(([argv]) => argv.join(' '))
-    expect(joined.some((line) => line.startsWith('worktree remove'))).toBe(true)
-    expect(joined.some((line) => line.startsWith('branch -D'))).toBe(true)
-    expect(joined.some((line) => line.includes('worktree prune'))).toBe(true)
-    const manifest = await readManifest(root)
-    expect(manifest.worktrees).toHaveLength(0)
-  })
-
-  it('rollbackCreate is idempotent on an already-clean repo', async () => {
-    const root = await makeRoot()
-    const faux = fakeRunner({ commonDir: join(root, '.git') })
-    const { registry } = fakeRegistry()
-    const manager = makeManager({ runner: faux.runner, registry })
-
-    await expect(manager.rollbackCreate({ repoPath: root, name: 'feature/x' })).resolves.toBeUndefined()
   })
 
   it('unregisters the lane workspace when a lane is removed', async () => {
@@ -459,23 +384,6 @@ describe('lane create', () => {
  * a single destructive git step.
  */
 describe('mutation guards', () => {
-  it('rollback refuses while a live session still works in the lane', async () => {
-    const root = await makeRoot()
-    const faux = fakeRunner({ commonDir: join(root, '.git') })
-    const { registry } = fakeRegistry()
-    const manager = makeManager({ runner: faux.runner, registry, liveSessions: ['session-lane-1'] })
-    await manager.ensureLane({ repoPath: root, branch: 'feature/x' })
-    await manager.bindSession(root, 'feature/x', 'session-lane-1' as never, true)
-    faux.run.mockClear()
-
-    await expect(manager.rollbackCreate({ repoPath: root, name: 'feature/x' }))
-      .rejects.toMatchObject({ code: 'worktree-busy' })
-
-    const ran = faux.run.mock.calls.map((call) => (call[0] as string[]).join(' '))
-    expect(ran.filter((line) => line.includes('worktree remove') || line.startsWith('branch'))).toEqual([])
-    expect((await readManifest(root)).worktrees).toHaveLength(1)
-  })
-
   it('cleanup refuses a branch the manifest does not record', async () => {
     const root = await makeRoot()
     const faux = fakeRunner({ commonDir: join(root, '.git'), existingBranches: ['ghost'] })
@@ -503,28 +411,6 @@ describe('mutation guards', () => {
     await expect(manager.cleanup({ repoPath: root, name: 'feature/x', force: true }))
       .resolves.toMatchObject({ name: 'feature/x' })
     expect((await readManifest(root)).worktrees).toHaveLength(0)
-  })
-
-  it('init refuses a directory that is not a registered workspace', async () => {
-    const root = await makeRoot()
-    const faux = fakeRunner()
-    const { registry } = fakeRegistry()
-    const manager = makeManager({ runner: faux.runner, registry })
-
-    await expect(manager.init({ repoPath: root })).rejects.toMatchObject({ code: 'workspace-unknown' })
-
-    const ran = faux.run.mock.calls.map((call) => (call[0] as string[]).join(' '))
-    expect(ran.filter((line) => line.startsWith('init'))).toEqual([])
-  })
-
-  it('still converts a registered workspace', async () => {
-    const root = await makeRoot()
-    const faux = fakeRunner()
-    const { registry } = fakeRegistry()
-    await registry.create(root)
-    const manager = makeManager({ runner: faux.runner, registry })
-
-    await expect(manager.init({ repoPath: root })).resolves.toMatchObject({ repoPath: root })
   })
 })
 

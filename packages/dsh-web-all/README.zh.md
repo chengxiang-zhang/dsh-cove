@@ -6,10 +6,10 @@
 
 ## 能力
 
-- **工作区与会话工作流**：项目记忆面板、Git worktree 管理与会话隔离、workspace-model 预设。worktree 不再有独立页面。一个 worktree 就是一条 lane：输入框的分支选择器创建该分支的 worktree，并把它的目录注册为一个工作区（这是平台约束，不是口味——注册表只把 cwd 等于工作区路径的会话算作该工作区成员，而没有任何工作区认领的空白对话，输入框是禁用的），随后用平台自己的工作区导航把对话移上去。这条注册刻意短命：lane 的对话全部归档后即注销（目录、分支与绑定都保留，再选该分支一步就能重建），启动时还会清掉旧版本留下的行。会话顶部的 lane chip 既显示当前分支，也承载它余下的生命周期——提 PR、检查是否已合并、删除目录（可勾选连本地分支一起删），删除同时注销该工作区。界面上这些词一律写成「分支目录」，不出现 worktree / lane 这类实现词。
-- **开发工作台**：输入区的 Git 分支 chip 与图谱对话框、右栏 Source Control 工作台，以及把 Codex 注册为 `llm-pi-ai` provider 的 Codex 桥接。
+- **工作区与会话工作流**：Git worktree 管理与会话隔离、workspace-model 预设。worktree 不再有独立页面。一个 worktree 就是一条 lane：输入框的分支选择器创建该分支的 worktree，并把它的目录注册为一个工作区（这是平台约束，不是口味——注册表只把 cwd 等于工作区路径的会话算作该工作区成员，而没有任何工作区认领的空白对话，输入框是禁用的），随后用平台自己的工作区导航把对话移上去。这条注册刻意短命：lane 的对话全部归档后即注销（目录、分支与绑定都保留，再选该分支一步就能重建），启动时还会清掉旧版本留下的行。会话顶部的 lane chip 既显示当前分支，也承载它余下的生命周期——提 PR、检查是否已合并、删除目录（可勾选连本地分支一起删），删除同时注销该工作区。界面上这些词一律写成「分支目录」，不出现 worktree / lane 这类实现词。
+- **开发工作台**：输入区的 Git 分支 chip 与图谱对话框，以及右栏 Source Control 工作台。
 - **HiOpen 模型路由**：不含凭据的 `llm-pi-ai` 预置提供一份精选模型目录，端点自带（在 `config/deployment.local.json` 填 `llm.hiopen.baseUrl`，再跑 `node scripts/config-render.mjs`），仓库不提交任何端点与凭据，并为 DSH Agent 精选准确模型 id、上下文/输出上限、推理档位和文本/图片模态。
-- **远程运维**：SSH 主机、终端、传输、隧道和集群执行，以及通过本地密码、飞书或通用 OIDC 登录并持久访问 DSH 原生 Web 界面。
+- **远程运维**：SSH 主机、终端、传输、隧道和集群执行。远程浏览器入口不再由本插件签发账号会话；远程可访问性由部署的 `--trusted-host` 与网络门禁共同决定，见 [docs/remote-access.md](../../docs/remote-access.md)。
 - **飞书接入**：飞书 bot 长连接收件箱与 `lark_inbox_peek`、`lark_inbox_pop`、`lark_inbox_ack` 工具、连接向导，以及 **设置 → 内置插件 → 飞书** 里的配置页。
 - **运行结束通知**：会话每结束一轮就记录一条结果，聚合到只读的 `GET /api/dsh-notify/feed`，由桌面端与手机端的机器列表据此标出未查看的结果，并可在运行停稳后把结果推送到飞书。配置在 **设置 → 内置插件 → 通知**。
 - **浏览器自动化**：按会话隔离的 Playwright 浏览器，以 `mcp__playwright__*` 工具命名空间对外提供。
@@ -74,15 +74,11 @@ Profile 覆写示例：
     noBrowserAuth: true
 ```
 
-各能力域的配置聚合在同一个 `web-all` 条目的命名空间下：`remote-web-ui`、`lark-inbox`、`notify`、`dsh-ssh`、`dsh-codex-bridge`、`workspace-model`、`web-render`、`schedule-mode`。Web GUI 为飞书与通知各提供一个配置页（**设置 → 内置插件 → 飞书 / 通知**）；飞书页只负责「怎么收」，通知页负责「怎么发」与客户端读取，其余命名空间通过 profile 覆写或设置文档编辑。
+各能力域的配置聚合在同一个 `web-all` 条目的命名空间下：`lark-inbox`、`notify`、`dsh-ssh`、`workspace-model`、`web-render`、`schedule-mode`。Web GUI 为飞书与通知各提供一个配置页（**设置 → 内置插件 → 飞书 / 通知**）；飞书页只负责「怎么收」，通知页负责「怎么发」与客户端读取，其余命名空间通过 profile 覆写或设置文档编辑。
 
 内置 `hiopen` 路由通过 DSH credentials 解析 `HIOPEN_API_KEY`；密钥只应写入 `$DSH_HOME/.credentials.yaml` 的 `refs.HIOPEN_API_KEY`，不得写进 profile 或仓库。预置只暴露精选的聊天/Agent 子集，而不是照搬 `/v1/models` 的全部条目：端点同时会列出 embedding、guard、detector 和暂时不可用的路由。端点变化时可用 profile 覆写替换或扩展 `hiopen.models`。
 
-`remote-web-ui` 命名空间默认启用 DSH 自身 origin 的集成鉴权。本地账号、飞书和通用 OIDC 会签发同一个 HttpOnly 会话，并统一覆盖 `/`、`/api` 与 `/api/remote.mux`；原生启动 token 仍可使用。移动浏览器也直接使用 `/` 下的原生 Web 界面。`publicBaseUrl` 应设置为 OAuth 回调使用的精确 HTTPS origin。`0.0.0.0:3082` 兼容监听器仍可通过 `legacyGatewayEnabled: true` 启用，但默认关闭。
-
-通用 OIDC 使用 Authorization Code、PKCE S256、state 与 nonce 校验。请配置 `issuer`、`clientId`、`clientSecret`，以及基于稳定身份的 `allowedSubjects` 和/或 `allowedEmailDomains`。飞书使用 `appId`、`appSecret` 与 `allowedOpenIds`。外部登录不能创建首个账户，必须先引导创建本地管理员；此后空 Provider 准入列表才会允许其他账户即时绑定，因此生产部署通常应设置显式准入列表，并保留该本地应急管理员。
-
-Playwright 服务域是 `mcp__playwright__*` 公共工具名的唯一所有者。启动本插件前必须移除全局 `mcp-playwright` 行；工具名重复会导致 Playwright 注册失败。默认 `launch` 模式按 DSH 会话隔离浏览器进程，最多并发两个，并回收空闲会话。`extension` 模式则把官方 [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm) 中选定的标签页独占租给一条由人确认的 DSH 会话：在该会话右栏打开「Agent 浏览器」，点连接，在扩展中批准并分配标签页。断开后外部 Chrome 继续运行。`cdp` 模式直连操作者已用 `--remote-debugging-port` 启动的浏览器：把 `cdpEndpoint` 指向它，该会话就直接驱动这个浏览器，不需要扩展、也不再有任何授权弹窗，而浏览器自己的持久 profile 会保留登录态（Chrome 136 及以后只认配合非默认 `--user-data-dir` 的远程调试，因此请保留一个专用自动化 profile 并在其中登录一次）。控制面走插件共享的宿主访问围栏——loopback 请求，或请求 Host 属于部署通过 `ctx.webRuntime.trustedHosts`（`--trusted-host`）声明且携带有效 DSH 浏览器会话的 authority。只有 `extension` 模式受审批门限制：其中任意代码工具默认隐藏，`approvalPolicy: mutations` 会在每个非只读浏览器动作前走 DSH 一次性审批。
+Playwright 服务域是 `mcp__playwright__*` 公共工具名的唯一所有者。启动本插件前必须移除全局 `mcp-playwright` 行；工具名重复会导致 Playwright 注册失败。默认 `launch` 模式按 DSH 会话隔离浏览器进程，最多并发两个，并回收空闲会话。`extension` 模式则把官方 [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm) 中选定的标签页独占租给一条由人确认的 DSH 会话：在该会话右栏打开「Agent 浏览器」，点连接，在扩展中批准并分配标签页。断开后外部 Chrome 继续运行。`cdp` 模式直连操作者已用 `--remote-debugging-port` 启动的浏览器：把 `cdpEndpoint` 指向它，该会话就直接驱动这个浏览器，不需要扩展、也不再有任何授权弹窗，而浏览器自己的持久 profile 会保留登录态（Chrome 136 及以后只认配合非默认 `--user-data-dir` 的远程调试，因此请保留一个专用自动化 profile 并在其中登录一次）。控制面走插件共享的宿主访问围栏——loopback 请求，或请求 Host 属于部署通过 `--trusted-host` 声明（从 `ctx.webStartup.trustedHosts` 读取，更早的 SDK 为 `ctx.webRuntime.trustedHosts`）且携带有效 DSH 浏览器会话的 authority。只有 `extension` 模式受审批门限制：其中任意代码工具默认隐藏，`approvalPolicy: mutations` 会在每个非只读浏览器动作前走 DSH 一次性审批。
 
 ```yaml
 - id: web-all
@@ -179,18 +175,12 @@ DSH 原生 `@deepseek-ai/dsh-schedule` 把任务绑定在创建它的会话上�
 
 ## 安全模型
 
-- 暴露本地状态或高权限操作的 Host API 共用一条访问围栏：loopback 请求，或请求 Host 属于部署通过 `ctx.webRuntime.trustedHosts`（`--trusted-host`）声明的 authority 且携带有效 DSH 浏览器会话，并且始终要求同源标记。socket 本身必须保持 loopback，因此同机反向代理把规范 Host 转发到 `127.0.0.1`。该围栏不能替代有身份认证的网络边界；`noBrowserAuth: true` 会把远程分支退化为仅 Host/Origin 检查。
+- 暴露本地状态或高权限操作的 Host API 共用一条访问围栏：loopback 请求，或请求 Host 属于部署通过 `--trusted-host` 声明的 authority（从 `ctx.webStartup.trustedHosts` 读取，更早的 SDK 为 `ctx.webRuntime.trustedHosts`）且携带有效 DSH 浏览器会话，并且始终要求同源标记。socket 本身必须保持 loopback，因此同机反向代理把规范 Host 转发到 `127.0.0.1`。该围栏不能替代有身份认证的网络边界；`noBrowserAuth: true` 会把远程分支退化为仅 Host/Origin 检查。
 - 读接口同样是特权面：worktree 索引与 lane 查询、工作区模型读接口、运行结束通知源（`GET /api/dsh-notify/feed`）、飞书凭据向导都走同一条围栏。通知源只发布会话标题、结束原因与时间，不含会话正文，也没有写接口：客户端的已读位置保存在客户端自己，宿主不保留按客户端的读取状态。这里没有第二条放行路径，worktree 的变更接口只认这条围栏。`/api/pair/*` 的配对管理更严格：除 loopback socket 外还要求 Host 为 loopback，因此同机反向代理不会把令牌签发、列表与吊销暴露给远程浏览器。
 - worktree 的 git 调用有期限且 fail-closed：`git fetch`、`ls-remote` 与祖先探测的期限是 15 秒，push 是 180 秒，因此网络卡死既不会长期占住某个仓库的操作锁，也不会让 lane 菜单一直停在加载态。`POST /worktree/status` 由宿主缓存提供（60 秒），插件的每次变更都会让它失效，因此打开 lane 菜单只是一次内存读取，只有显式点「检查是否已合并」（或带 name 的探测）才会重新跑远端判定。判定「已合并」有两条路：远端分支 tip 是 base 的祖先；或跟踪引用已被清理（GitHub 合并后删分支留下的状态）时，该 lane 已越过创建时的提交，且本地 tip 包含在 base 里。会话顶部的 lane chip 读的就是同一条规则，因此用户在徽标上看到的状态与放行删除的守卫不会互相矛盾：删除时勾选「同时删除本地分支」走那条先验合并的清理路径（目录、本地分支与清单记录一起删）；不勾选则是普通移除，只删目录、保留分支，误删后重新选该分支即可再建。清理只在上述合并判定成立后，才把被拒的 `git branch -d` 升级为 `-D`；删不掉分支时如实报错，而不是假装成功。活跃会话仍然阻止拆除 lane，只有一个例外——否则这条 lane 将永远无法拆除：清单里记录为该 lane 自己的那个会话，可以通过自己的 lane chip 请求拆除（拆除会像处理任何 lane 会话一样归档该对话）。lane 清单里没有记录的会话 id 不构成任何豁免。把对话绑定到它的 lane 之前，请求会先被完整校验、再产生任何副作用：会话必须在宿主上活着、分支必须是合法 ref、仓库清单里必须有这条 lane、且该对话自己的 cwd 必须正好解析到那个目录——否则请求被拒（`lane-mismatch`、`session-unknown`、`worktree-not-found`、`invalid-branch`），且会话的访问模式保持原样。绑定只是记录对话本来就在哪里跑，永远不是搬运对话的手段，也不可能把 `danger-full-access` 交给一个不在该 lane 里的对话。变更类路由都带显式仓库路径，而该路径必须解析到宿主已注册的工作区之内：请求侧做 `realpath`，用注册表自己的列表，配段感知的包含判断（因此名字只以 `repo` 开头的兄弟目录 `repo-other` 不会被当成在 `repo` 里）。这与 Git 工作台经过它自己的 workspace gate 施加的规则一致；不在任何工作区内的仓库会以 `workspace-unknown` 被拒，且在任何 git 步骤之前就拒绝。
-- Codex 桥（`/api/dsh-codex-bridge/*`）有意留在该围栏之外：设备码登录、代理重启与链路校验都是本机操作，远程入口应显示该模块不可用，而不是把它暴露出去。不要把它放给远程 authority。
 - 远程入口的 Host 所有权来自 `GET /web-all/remote-access/boot.js`：这是一条 parser-blocking 首页注入，由处理器按同一围栏逐请求决定。缺少该声明时 DSH 客户端把设置面留在进程内存态，设置 → 模型报 `settings are unavailable in this browser`。`GET /api/dsh-access/session` 发布无需会话的姿态读数（`authority.declared`、`session`、`owners`），供全线审计与客户端兜底探测读取。
 - 明文 HTTP 远程入口不是浏览器安全上下文，因此同一服务域向每个首页注入 `crypto.randomUUID` polyfill 与基于 `execCommand` 的 `navigator.clipboard` shim（绝不覆盖真实 clipboard 对象）。`navigator.locks` 没有 shim，该入口的 Git 流跨标签共享会退化为每个标签一条流。
 - `noBrowserAuth` 是显式 opt-in，默认值为 `false`。启用后只修改 BrowserAuth 的认证判定，Host/Origin 围栏仍然生效。只能在有身份认证的反向代理或等价的可信网络门禁后启用，禁止把它当作公网可达主机上的便利开关。
-- 集成 WebAuth 与原生 BrowserAuth 组合，并保留 DSH 的 Host/Origin 信任围栏。本地、飞书和 OIDC 有效会话统一覆盖首页、HTTP RPC 与 `/api/remote.mux`；原生启动 token 作为应急入口继续保留。若私有 BrowserAuth 兼容接口发生变化，集成会拒绝挂载而不是放行。
-- `3082` 网关是默认关闭的兼容监听器。启用时它继续使用同一账户存储；常规 NetBird 与反向代理部署直接路由到 DSH 的 `3080` origin，并需要正确配置 DSH trusted hosts。
-- 账户密码按账户存为 scrypt verifier，并使用恒定时间比较。账户和会话存储默认位于 `$DSH_HOME` 下，采用原子写入与仅 owner 可读写的 `0600` 文件。账户 API 不返回密码 verifier 或密码。授权／撤销日志及 `.blocked` sidecar 都是敏感恢复状态，必须随主 image 一起备份，不能自动删除拒绝标记。持久化失败会在当前进程拒绝认证并报告失败，不代表修改已提交。如果整个存储介质拒绝所有写入，就无法留下持久拒绝证据：重启后最后一次已提交状态可能仍有效。依赖失败的撤销操作前，应先停止服务访问、恢复存储；store 与原子 rename 均不提供电源故障 fsync 保证。
-- 登录会在 HttpOnly、SameSite=Lax cookie 中创建全新的 256 位会话 id；只有启用内置 TLS 时 cookie 才带 Secure。会话跨重启持久化，默认空闲期限为 7 天、绝对上限为 30 天，并会在登出、管理员操作、修改密码或角色、禁用账户或删除账户时被吊销。角色修改后，该账户必须重新登录；旧 cookie 不能保留此前的管理员角色。账户 image v2 将非空授权 revision 与账户状态原子存储；严格迁移旧 image 时，无该 revision 的 cookie 会失效。已有损坏或不支持的账户 image 必须人工恢复，不能自动 bootstrap。读取慢请求体后，管理员操作会再次检查权限。兼容网关在撤销时关闭已升级连接的双向流，并在一秒内检查过期；这不构成对原生 DSH 已升级 mux 连接即时撤销的证明。管理员会话列表包含用于吊销的有效不透明会话 id，因此必须把该表面视为凭据敏感面加以保护。
-- 集成账号属于可信操作者：所有已认证用户共享该 DSH 实例的工作区、会话、设置、凭据与文件系统权限。角色用于账户/会话管理和旧网关兼容策略，并不是资源隔离或多租户 RBAC。旧网关中的 user WebSocket 可访问 `/api/remote.mux`，终端和其它 upgrade 路径仍要求 admin。
 - TLS 是可选项。未配置 `serverTlsCert` 与 `serverTlsKey` 时，凭据、cookie 与流量都使用明文 HTTP，网关应只留在可信网络。`serverTlsKey` 是可读的文件系统路径而不是密钥内容，`bootstrapAdminPassword` 则是 secret schema 字段；请保护 settings source，并在创建首个账户后清空或轮换 bootstrap 凭据。首个账户会被强制为 admin，最后一个已启用管理员不能被降级、禁用或删除。
 - SSH 密钥、密码和 passphrase 属于 host 侧配置。列表投影不会返回机密字段，但凭据以未加密形式写入 DSH 主目录下原子替换、仅 owner 可读写的 `0600` 文件（保存时也修复已有文件权限），远程命令输出也不会脱敏；请相应保护系统账号和文件系统。服务器密钥校验不提供远程执行隔离，也不限制 SSH 账户权限。同一主机的连接建立采用 single-flight，认证完成后再次核对当前配置与信任；卸载后拒绝待完成与新连接。损坏的主机存储拒绝读取，不会被空表覆盖。协作 writer 对完整读改写持排他锁，最多等待两秒；竞争超时报告 `SSH_HOST_STORE_BUSY`。崩溃遗留锁不会按时间或 PID 自动抢占：必须停止全部 writer、核对所有权后人工恢复。这不是抵御同用户恶意进程的 OS 安全边界。
 - Playwright 工具可以使用本地 DSH 进程和浏览器会话的权限访问站点并修改外部系统。请保留唯一工具命名空间、检查目标 URL，并在敏感操作结束后关闭会话。
@@ -199,7 +189,7 @@ DSH 原生 `@deepseek-ai/dsh-schedule` 把任务绑定在创建它的会话上�
 ## 已知限制
 
 - 所有服务域共享一个 `web-all` 生命周期，不能作为单独的 profile 条目分别启停。
-- 共享宿主访问围栏判定的是「请求是否来自被承认的浏览器入口」，不是「它属于哪个账号」：围栏只暴露一个布尔值。因此数据归属于某个会话的面（Agent Browser 实时视图 `/playwright-sessions/ws/browser`、工作区内的 `git-status`、以会话 cwd 为键的 memoir 项目存储）对任何通过围栏、并且知道会话 id 或工作区路径的调用方可见；在宿主把调用方身份暴露给路由族之前，这些面无法按账号隔离。
+- 共享宿主访问围栏判定的是「请求是否来自被承认的浏览器入口」，不是「它属于哪个账号」：围栏只暴露一个布尔值。因此数据归属于某个会话的面（Agent Browser 实时视图 `/playwright-sessions/ws/browser`、工作区内的 `git-status`、以会话 cwd 为键的工作区数据）对任何通过围栏、并且知道会话 id 或工作区路径的调用方可见；在宿主把调用方身份暴露给路由族之前，这些面无法按账号隔离。
 - 设置界面刻意保持最小：只为飞书与通知提供配置页，其余能力域配置通过 profile 覆写或设置文档编辑。
 - 通知只记录「这个进程启动以来」的结果，不落盘：宿主重启后已记录的结果会清空，客户端未读取的编号随之失效。客户端遇到编号回退（宿主换了一个进程）会从零重读，因此新结果不会被永久隐藏；代价是重启后第一次读取会重复报告当前持有的结果。记录的是结束事件而非完整会话，正文只出现在会话日志里。
 - HiOpen 目录是保守的 Agent 可用子集。端点可用性和上游路由可能独立变化；通过模型清单但未通过聊天/工具探针的模型不会在验证前暴露。

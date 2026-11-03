@@ -18,9 +18,6 @@ import { canonicalRecordName, isCloudZone, machineOfCanonical } from './netbird-
 /** DNS record type A. Only A records name a machine address. */
 const RECORD_TYPE_A = 1;
 
-/** First label of every fleet DSH entry. */
-const ENTRY_LABEL = 'dsh';
-
 /**
  * The schemes one fleet entry is tried on, secure first.
  *
@@ -45,17 +42,25 @@ export function entryCandidateUrls(host) {
 }
 
 /**
- * Canonical name of one acceptable fleet DSH entry, otherwise null.
+ * One fleet entry: the record's meaning, or null when it names no service of a
+ * machine of this network.
  *
- * One decision, used for the registry, the openable page and the probe, so the
- * three cannot disagree.
+ * The fleet publishes one A record per (service, machine) pair under the zone:
+ * `<service>.<machine>.<zone>`, for example `dsh.zcx-t470p.netbird`. The zone's
+ * records are the catalogue, and nothing here enumerates services: adding
+ * `superset.<machine>.<zone>` is a DNS record, not a client release. The first
+ * label is the group a person thinks in, the second names the machine.
+ *
+ * The record must point at a peer of this network, so a name that resolves
+ * outside the overlay is not offered.
  *
  * @param {{ type?: number, name?: string, zone?: string, content?: string }} record
- * @param {string[]} fleetZones declared DSH zones
+ * @param {string[]} fleetZones zones this deployment distributes fleet names in
  * @param {Set<string> | string[]} peerAddresses overlay addresses of this network
- * @returns {string | null}
+ * @param {{ cloud?: boolean }} [options] which naming world the control plane uses
+ * @returns {{ host: string, service: string, machine: string, zone: string, ip: string } | null}
  */
-export function acceptedDshName(record, fleetZones, peerAddresses, options = {}) {
+export function fleetEntryOf(record, fleetZones, peerAddresses, options = {}) {
   const peers = peerAddresses instanceof Set ? peerAddresses : new Set(peerAddresses ?? []);
   const zones = Array.isArray(fleetZones) ? fleetZones : [];
 
@@ -66,62 +71,54 @@ export function acceptedDshName(record, fleetZones, peerAddresses, options = {})
   if (canonical === null) {
     return null;
   }
-  if (options.cloud === true) {
-    // Cloud peers answer under their own FQDN (`<peer>.netbird.cloud`). A
-    // record is a candidate when it names one peer of this network under the
-    // cloud zone; the probe decides whether that peer actually serves a DSH
-    // workspace, so phones and plain peers drop out of the list on their own.
-    const zone = String(record.zone ?? '').trim().toLowerCase().replace(/\.$/, '');
-    if (!isCloudZone(zone) || !canonical.endsWith(`.${zone}`)) {
-      return null;
-    }
-    // The network map may carry the name zone-relative (`peer-a`) or as the
-    // FQDN (`peer-a.netbird.cloud`); both qualify to the same canonical name,
-    // which must be exactly one peer label in front of the zone.
-    const relative = canonical.slice(0, -(zone.length + 1));
-    if (relative === '' || relative.includes('.')) {
-      return null;
-    }
-    const address = String(record.content ?? '').trim().split('/')[0];
-    if (address === '' || !peers.has(address)) {
-      return null;
-    }
-    return canonical;
-  }
-  if (canonical.split('.')[0] !== ENTRY_LABEL) {
-    return null;
-  }
-  // The entry must live in a declared DSH zone. A retired per-machine zone names
-  // the same machine but is no longer the canonical authority, so it is not
-  // offered.
-  if (!zones.some((zone) => canonical.endsWith(`.${zone}`))) {
-    return null;
-  }
-  // A DSH name has a machine label between `dsh` and the zone, so a record
-  // literally named `dsh` is not one.
-  const remainder = canonical.slice(`${ENTRY_LABEL}.`.length);
-  if (!remainder.includes('.')) {
-    return null;
-  }
-  const machine = remainder.slice(0, remainder.lastIndexOf('.'));
-  if (machine === '') {
-    return null;
-  }
   // A DNS answer never carries a prefix; a peer state may (100.64.0.11/16).
   const address = String(record.content ?? '').trim().split('/')[0];
   if (address === '' || !peers.has(address)) {
     return null;
   }
-  return canonical;
+  if (options.cloud === true) {
+    // Cloud peers answer under their own FQDN (`<peer>.netbird.cloud`); the
+    // network map may carry the name zone-relative or as the FQDN, and both
+    // qualify to one canonical name with exactly one peer label in front of the
+    // cloud zone. A cloud name carries no service label, so its group is empty.
+    const zone = String(record.zone ?? '').trim().toLowerCase().replace(/\.$/, '');
+    if (!isCloudZone(zone) || !canonical.endsWith(`.${zone}`)) {
+      return null;
+    }
+    const relative = canonical.slice(0, -(zone.length + 1));
+    if (relative === '' || relative.includes('.')) {
+      return null;
+    }
+    return { host: canonical, service: '', machine: relative, zone, ip: address };
+  }
+  const zone = zones.find((candidate) => canonical.endsWith(`.${candidate}`));
+  if (zone === undefined) {
+    // A name outside the declared zones is another zone's business: a retired
+    // per-machine zone names the same machine but is not the canonical authority.
+    return null;
+  }
+  // `<service>.<machine>` is the whole of the name in front of the zone. Fewer
+  // labels name no machine (`dsh.netbird`); more would leave it open which label
+  // is the machine, so the record is refused rather than guessed.
+  const parts = canonical.slice(0, -(zone.length + 1)).split('.');
+  if (parts.length !== 2) {
+    return null;
+  }
+  const [service, machine] = parts;
+  if (service === '' || machine === '') {
+    return null;
+  }
+  return { host: canonical, service, machine, zone, ip: address };
 }
 
 /**
- * Builds the machine registry offered to the user.
+ * Builds the service registry offered to the user: every `<service>.<machine>`
+ * entry the fleet publishes in its zones, sorted by host and deduplicated.
  *
  * @param {Array<{ type?: number, name?: string, zone?: string, content?: string }>} records
  * @param {Set<string> | string[]} peerAddresses
  * @param {string[]} fleetZones
- * @returns {{ entries: Array<{ host: string, machine: string, zone: string, ip: string, url: string }>, rejected: number }}
+ * @returns {{ entries: Array<{ host: string, service: string, machine: string, zone: string, ip: string, url: string, urls: string[] }>, rejected: number }}
  */
 export function buildRegistry(records, peerAddresses, fleetZones, options = {}) {
   const peers = peerAddresses instanceof Set ? peerAddresses : new Set(peerAddresses ?? []);
@@ -130,23 +127,17 @@ export function buildRegistry(records, peerAddresses, fleetZones, options = {}) 
   let rejected = 0;
 
   for (const record of Array.isArray(records) ? records : []) {
-    const host = acceptedDshName(record, zones, peers, options);
-    if (host === null) {
+    const entry = fleetEntryOf(record, zones, peers, options);
+    if (entry === null) {
       rejected += 1;
       continue;
     }
-    if (byHost.has(host)) {
+    if (byHost.has(entry.host)) {
       continue;
     }
-    const ip = String(record.content ?? '').trim().split('/')[0];
-    const urls = entryCandidateUrls(host);
-    byHost.set(host, {
-      host,
-      machine: options.cloud === true ? host.split('.')[0] : machineOfCanonical(host),
-      zone: options.cloud === true
-        ? host.split('.').slice(1).join('.')
-        : zones.find((zone) => host.endsWith(`.${zone}`)) ?? '',
-      ip,
+    const urls = entryCandidateUrls(entry.host);
+    byHost.set(entry.host, {
+      ...entry,
       // The plaintext entry stays the default `url`: a consumer that never probes
       // reads exactly what it read before a TLS entry existed.
       url: urls[urls.length - 1],

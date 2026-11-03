@@ -38,7 +38,7 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import { subprocessRunner as sharedSubprocessRunner, type GitRunner, type GitRunResult } from './git-runner.ts'
 import { WorktreeError, defaultMessage, isValidBranchName } from '../../../core/worktree/invariant.ts'
 import {
-  type CleanupWorktreeInput, type CreateLaneInput, type CreateWorktreeInput, type InitWorktreeInput,
+  type CleanupWorktreeInput, type CreateLaneInput,
   type LaneHandle, type LaneLookupInput, type LaneView,
   type PrCreateInput, type PrCreateResult, type RemoveWorktreeInput,
   type StatusInput, type WorktreeIndex, type WorktreeProject, type WorktreeStatusIndex,
@@ -145,23 +145,6 @@ export class WorktreeManager {
     return {
       projects: projects.sort((a, b) => a.name.localeCompare(b.name)),
     }
-  }
-
-  /**
-   * Create a linked worktree that cuts a NEW branch (`input.branch`) at
-   * `input.base`, and register it as a DSH workspace. Registration is
-   * best-effort here (a failure only surfaces as `workspaceId: null`);
-   * `createForSession` is the variant that requires it.
-   */
-  async create(input: CreateWorktreeInput): Promise<WorktreeView> {
-    if (!isValidBranchName(input.branch)) {
-      throw new WorktreeError('invalid-branch', defaultMessage('invalid-branch'), { branch: input.branch })
-    }
-    const root = await this.repoRoot(input.repoPath)
-    if (root === null) {
-      throw new WorktreeError('not-a-repository', defaultMessage('not-a-repository'), { path: input.repoPath })
-    }
-    return this.withLock(root, async () => (await this.createLocked(root, input)).view)
   }
 
   /**
@@ -285,73 +268,6 @@ export class WorktreeManager {
     }
   }
 
-  /** Shared create body; the caller holds the per-repo lock. */
-  private async createLocked(
-    root: string,
-    input: CreateWorktreeInput,
-    options: { requireWorkspace?: boolean } = {},
-  ): Promise<{ view: WorktreeView; workspaceId: WorkspaceId | null }> {
-    await this.ensureIgnored(root)
-    await this.ensureWorkspaceDir(root)
-    const dir = worktreeDir(root, input.branch)
-    if (existsSync(dir)) {
-      throw new WorktreeError('worktree-exists', defaultMessage('worktree-exists'), { dir })
-    }
-    if (await this.branchExists(root, input.branch)) {
-      throw new WorktreeError('worktree-exists', `A local branch named "${input.branch}" already exists; choose another branch name or delete that branch first.`, { branch: input.branch })
-    }
-    const base = input.base ?? 'HEAD'
-    // `-b` is what makes the lane a usable work line. Without it git checks
-    // out the base commit-ish itself, which for anything that is not a
-    // branch name leaves a DETACHED HEAD: `git push -u origin <branch>`
-    // then fails (no local branch) and `git worktree list --porcelain`
-    // reports `detached`, so the lane never matches its own name.
-    const argv = worktreeAddArgv(dir, base, false, input.branch)
-    const result = await this.runner.run(argv, root)
-    if (result.exitCode !== 0) {
-      throw new WorktreeError('git-failed', defaultMessage('git-failed'), {
-        argv: [...argv], stderr: result.stderr,
-      })
-    }
-    const head = (await this.runner.run(['rev-parse', 'HEAD'], dir)).stdout.trim()
-    const entry: WorktreeManifestEntry = {
-      name: input.branch,
-      path: dir,
-      baseCommit: head,
-      createdAt: new Date().toISOString(),
-      detached: false,
-    }
-    await this.appendManifestEntry(root, entry)
-    let workspaceId: WorkspaceId | null = null
-    try {
-      const created = await this.ctx.workspaceRegistry.create(dir, `${basename(root)} / ${input.branch}`)
-      workspaceId = created.id
-      await this.updateManifestEntry(root, input.branch, { workspaceId })
-    } catch (error) {
-      if (options.requireWorkspace === true) {
-        await this.rollbackLocked(root, input.branch)
-        throw new WorktreeError(
-          'git-failed',
-          `workspace registration failed for lane "${input.branch}": ${String(error)}`,
-          { dir },
-        )
-      }
-      console.warn('[dsh-worktree] workspace registration failed:', error)
-    }
-    return {
-      view: {
-        name: input.branch,
-        path: dir,
-        branch: input.branch,
-        head: head === '' ? null : await this.headShort(dir),
-        exists: true,
-        workspaceId,
-        sessionId: null,
-      },
-      workspaceId,
-    }
-  }
-
   /**
    * The manifest record for one lane: its directory when the repository's
    * manifest records that branch, null otherwise.
@@ -396,35 +312,6 @@ export class WorktreeManager {
     }
     await this.withLock(root, async () => {
       await this.updateManifestEntry(root, name, { sessionId, permissionPresetApplied })
-    })
-  }
-
-  /**
-   * Undo a lane creation. Used when the lane exists but its session could
-   * not be created, so a failed create never leaves half a lane behind:
-   * worktree directory, local branch, admin records, manifest entry and the
-   * registered workspace all go away.
-   */
-  async rollbackCreate(input: { repoPath: string; name: string }): Promise<void> {
-    if (!isValidBranchName(input.name)) {
-      throw new WorktreeError('invalid-branch', defaultMessage('invalid-branch'), { name: input.name })
-    }
-    const root = await this.repoRoot(input.repoPath)
-    if (root === null) {
-      throw new WorktreeError('not-a-repository', defaultMessage('not-a-repository'), { path: input.repoPath })
-    }
-    await this.withLock(root, async () => {
-      // Rollback exists for a lane whose session never came up. A lane that has
-      // a live session under it is not that case: deleting the directory and the
-      // branch out from under a running conversation is exactly what remove and
-      // cleanup refuse to do, so rollback must not be the way around them.
-      const dir = worktreeDir(root, input.name)
-      const workspace = await this.workspaceForPath(dir)
-      const busySession = await this.liveSessionOnLane(root, dir, workspace)
-      if (busySession !== undefined) {
-        throw new WorktreeError('worktree-busy', defaultMessage('worktree-busy'), { sessionId: busySession })
-      }
-      await this.rollbackLocked(root, input.name)
     })
   }
 
@@ -596,27 +483,6 @@ export class WorktreeManager {
     if (touched) await this.writeManifest(repoPath, manifest)
   }
 
-  /** Best-effort teardown of a lane that never became usable. */
-  private async rollbackLocked(root: string, name: string): Promise<void> {
-    const dir = worktreeDir(root, name)
-    if (existsSync(dir)) {
-      await this.runner.run(worktreeRemoveArgv(dir, true), root)
-    }
-    if (await this.branchExists(root, name)) {
-      await this.runner.run(branchDeleteArgv(name, true), root)
-    }
-    await this.runner.run(WORKTREE_PRUNE_ARGV, root)
-    await this.removeManifestEntry(root, name)
-    const workspace = await this.workspaceForPath(dir)
-    if (workspace !== null) {
-      try {
-        await this.ctx.workspaceRegistry.delete(workspace.id as WorkspaceId)
-      } catch (error) {
-        console.warn('[dsh-worktree] rollback workspace unregister failed:', error)
-      }
-    }
-  }
-
   /**
    * Remove a worktree without silently discarding user state. A live session
    * always blocks removal; a dirty checkout requires the caller's explicit
@@ -670,41 +536,6 @@ export class WorktreeManager {
       }
       return { name: input.name, path: dir }
     })
-  }
-
-  /**
-   * `git init -b <initialBranch>` on a directory that is not yet a git
-   * repository; idempotent (a no-op if the directory is already a repo).
-   * The host-side caller is the browser dialog that asks "convert this
-   * workspace into a git project so I can use worktrees on it".
-   */
-  async init(input: InitWorktreeInput): Promise<{ repoPath: string; initialBranch: string }> {
-    const path = resolve(input.repoPath)
-    if (!existsSync(path)) {
-      throw new WorktreeError('workspace-unknown', defaultMessage('workspace-unknown'), { path })
-    }
-    const existing = await this.repoRoot(path)
-    if (existing !== null) {
-      return { repoPath: existing, initialBranch: input.initialBranch ?? 'main' }
-    }
-    // Converting a directory into a repository mutates that directory, so it is
-    // limited to a workspace the user actually registered with the host. Without
-    // this the route is a `git init` anywhere on the machine.
-    const workspace = await this.workspaceForPath(path)
-    if (workspace === null || !samePath(workspace.path, path)) {
-      throw new WorktreeError('workspace-unknown', defaultMessage('workspace-unknown'), { path })
-    }
-    const branch = input.initialBranch ?? 'main'
-    if (!isValidBranchName(branch)) {
-      throw new WorktreeError('invalid-branch', defaultMessage('invalid-branch'), { branch })
-    }
-    const argv = gitSpawnArgv(process.platform, ['init', '-b', branch])
-    const result = await this.runner.run(argv, path)
-    if (result.exitCode !== 0) {
-      throw new WorktreeError('git-failed', defaultMessage('git-failed'), { stderr: result.stderr })
-    }
-    await this.ensureWorkspaceDir(path)
-    return { repoPath: path, initialBranch: branch }
   }
 
   // ─── PR lifecycle: create / status / cleanup ─────────────────────────────

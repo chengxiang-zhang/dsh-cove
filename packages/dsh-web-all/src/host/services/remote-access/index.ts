@@ -21,7 +21,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage } from 'node:http'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { accessTrustOf, browserSessionPredicateOf, trustedAuthoritiesOf } from '../access-trust/index.ts'
-import { CLIPBOARD_SHIM_SCRIPT, HOST_ACCESS_BOOT_PATH, UUID_POLYFILL_SCRIPT } from './boot-scripts.ts'
+import { CLIPBOARD_SHIM_SCRIPT, HOST_ACCESS_BOOT_PATH } from './boot-scripts.ts'
 import { makeRemoteAccessRoutes, type RemoteAccessDeps } from './routes.ts'
 import { registerResources } from '../resources.ts'
 
@@ -32,7 +32,6 @@ export {
   HOST_ACCESS_MARKER_MAX_AGE_SECONDS,
   HOST_ACCESS_MARKER_VALUE,
   HOST_ACCESS_SESSION_PATH,
-  UUID_POLYFILL_SCRIPT,
   hostAccessBootScript,
 } from './boot-scripts.ts'
 export { makeRemoteAccessRoutes, type RemoteAccessDeps } from './routes.ts'
@@ -52,10 +51,11 @@ export function register(ctx: Context): () => void {
   for (const route of makeRemoteAccessRoutes(deps)) own(ctx.webServer.register(route))
 
   // Row order is execution order: the parser-blocking ownership script runs
-  // first, then the two inline shims the plain-HTTP origin needs.
+  // first, then the clipboard shim the plain-HTTP origin needs. The client
+  // transport already derives UUIDs from crypto.getRandomValues, which browsers
+  // expose on insecure origins, so no randomUUID polyfill is installed.
   own(ctx.on('webserver/index-inject', (table) => {
     table.push({ kind: 'script-src', placement: 'head', src: HOST_ACCESS_BOOT_PATH })
-    table.push({ kind: 'script', placement: 'head', text: UUID_POLYFILL_SCRIPT })
     table.push({ kind: 'script', placement: 'head', text: CLIPBOARD_SHIM_SCRIPT })
   }))
   })

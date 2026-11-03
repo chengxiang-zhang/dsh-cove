@@ -7,7 +7,7 @@
  */
 import { clientBundle } from '../../shared/tsdown.client.ts'
 
-export default clientBundle('@dsh-cove/dsh-web-all', ['src/index.ts', 'src/invariant.ts'], {
+export default clientBundle('@dsh-cove/dsh-web-all', ['src/index.ts'], {
   libExternal: [
     '@deepseek-ai/dsh-client-connection',
     '@deepseek-ai/dsh-client-locale',

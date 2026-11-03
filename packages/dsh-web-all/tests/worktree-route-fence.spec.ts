@@ -25,10 +25,7 @@ const EXPECTED_PATHS = [
   '/worktree/lane',
   '/worktree/lane/create',
   '/worktree/lane/bind',
-  '/worktree/lane/rollback',
-  '/worktree/create',
   '/worktree/remove',
-  '/worktree/init',
   '/worktree/pr-create',
   '/worktree/status',
   '/worktree/cleanup',
@@ -84,13 +81,10 @@ function fakeManager(options: { record?: boolean } = {}) {
       getIndex: method('getIndex', { projects: [] }),
       laneForPath: async () => { calls.push('laneForPath'); return null },
       ensureLane: method('ensureLane'),
-      create: method('create'),
       remove: method('remove'),
-      init: method('init'),
       prCreate: method('prCreate'),
       status: method('status', {}),
       cleanup: method('cleanup'),
-      rollbackCreate: method('rollbackCreate'),
     },
   }
 }
@@ -111,9 +105,6 @@ function fakeLanes(options: { record?: boolean } = {}) {
       bindLaneSession: options.record === true
         ? async () => { calls.push('bindLaneSession'); return {} }
         : fail('bindLaneSession'),
-      rollbackLane: options.record === true
-        ? async () => { calls.push('rollbackLane') }
-        : fail('rollbackLane'),
       laneForPath: async () => { calls.push('laneForPath'); return null },
     },
   }
@@ -181,10 +172,10 @@ describe('worktree route repository scope', () => {
     const { manager, calls } = fakeManager()
     const { lanes, calls: laneCalls } = fakeLanes()
     const routes = captureRoutes(manager, lanes, { trusted: true, workspaces: ['/repo'] })
-    const route = routes.find((candidate) => candidate.path === '/worktree/create')
+    const route = routes.find((candidate) => candidate.path === '/worktree/remove')
 
     const { state, res } = fakeResponse()
-    await route?.handler(fakeRequest('POST', '/worktree/create', { repoPath: '/outside', branch: 'feature/x' }), res)
+    await route?.handler(fakeRequest('POST', '/worktree/remove', { repoPath: '/outside', name: 'feature/x' }), res)
 
     expect(state.status, 'the refusal is a domain error, not a fence 403').toBe(400)
     expect(JSON.parse(state.body)).toMatchObject({ ok: false, code: 'workspace-unknown' })

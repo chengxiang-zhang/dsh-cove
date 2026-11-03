@@ -36,11 +36,9 @@ export const FAMILY_ENTRY_ID = 'web-all'
  * 任意对象），客户端写入不会因缺键被 Host 拒绝。
  */
 export const FAMILY_NAMESPACES = [
-  'remote-web-ui',
   'lark-inbox',
   'notify',
   'dsh-ssh',
-  'dsh-codex-bridge',
   'workspace-model',
   'web-render',
   'schedule-mode',
@@ -51,7 +49,6 @@ const CORE_FIELDS = {
   dshHome: z.string(),
   agentsHome: z.string(),
   noBrowserAuth: z.boolean().default(false),
-  codexProxyDir: z.string(),
   playwright: z.object({
     mode: z.union(['launch', 'extension', 'cdp'] as const).default('launch'),
     cdpEndpoint: z.string().default(''),

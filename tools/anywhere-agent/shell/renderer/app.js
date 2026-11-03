@@ -23,9 +23,7 @@ const el = Object.fromEntries(
     'home',
     'home-sub',
     'filter',
-    'group-machines',
-    'machines-meta',
-    'grid-machines',
+    'machine-groups',
     'group-services',
     'services-meta',
     'grid-services',
@@ -261,6 +259,37 @@ function matches(service, query) {
   return `${service.name} ${service.subtitle ?? ''} ${service.host ?? ''}`.toLowerCase().includes(needle);
 }
 
+/**
+ * The fleet cards, grouped by machine: every service a machine publishes sits under
+ * that machine, and the cards inside are named by service (`dsh`, `superset`, ...).
+ *
+ * Groups are whatever the fleet's records produce - a machine added tomorrow is a
+ * new group, not a code change. This machine's group comes first, then the rest by
+ * name; inside a group the cards are ordered by service name.
+ */
+function groupByMachine(services) {
+  const groups = new Map();
+  for (const service of services) {
+    const title = String(service.group ?? '').trim() || '机器';
+    if (!groups.has(title)) {
+      groups.set(title, []);
+    }
+    groups.get(title).push(service);
+  }
+  return [...groups.entries()]
+    .map(([title, list]) => ({
+      title,
+      local: list.some((service) => service.local === true),
+      services: [...list].sort((left, right) => String(left.name).localeCompare(String(right.name))),
+    }))
+    .sort((left, right) => {
+      if (left.local !== right.local) {
+        return left.local ? -1 : 1;
+      }
+      return left.title.localeCompare(right.title);
+    });
+}
+
 function renderHome(services, tabs) {
   const query = ui.query.trim();
   const machines = services.filter((service) => service.kind === 'machine' && matches(service, query));
@@ -273,18 +302,51 @@ function renderHome(services, tabs) {
       host.append(cardFor(service, openIds.has(service.id)));
     }
   };
-  fill(el['grid-machines'], machines);
   fill(el['grid-services'], others);
-  el['group-machines'].hidden = machines.length === 0;
   el['group-services'].hidden = others.length === 0;
-  // Both groups count in 个: the noun is a workspace or a system, not hardware.
-  el['machines-meta'].textContent = machines.length > 0 ? `${machines.length} 个` : '';
   el['services-meta'].textContent = others.length > 0 ? `${others.length} 个` : '';
+
+  // Fleet cards are grouped by the service label of their DNS name
+  // (`<service>.<machine>.<zone>`). The list of groups is whatever the fleet
+  // publishes, never a list compiled into this file: `dsh`, `superset`,
+  // `clickhouse` and a service added tomorrow all arrive the same way.
+  el['machine-groups'].replaceChildren();
+  for (const group of groupByMachine(machines)) {
+    const section = document.createElement('section');
+    section.className = 'group';
+    section.dataset.serviceGroup = group.title;
+    const heading = document.createElement('h2');
+    heading.textContent = group.title;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = `${group.services.length} 个`;
+    heading.append(meta);
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    for (const service of group.services) {
+      grid.append(cardFor(service, openIds.has(service.id)));
+    }
+    section.append(heading, grid);
+    el['machine-groups'].append(section);
+  }
 
   const total = services.filter((service) => matches(service, query)).length;
   el['home-empty'].hidden = total > 0;
   if (total === 0) {
     el['home-empty-text'].textContent = query === '' ? '还没有可打开的服务' : '没有匹配的服务';
+  }
+
+  // A machine whose row is degraded is still a machine. Saying how many, here,
+  // is the difference between "the list is short" and "the list is hiding
+  // something"; the per-card line stays the detail.
+  if (el['home-sub']) {
+    const counts = snapshot?.machines ?? null;
+    const notes = [];
+    if (Number(counts?.offline ?? 0) > 0) {
+      notes.push(`${counts.offline} 个服务不可达`);
+    }
+    el['home-sub'].textContent =
+      notes.length > 0 ? `都在你的私网里 · ${notes.join(' · ')}` : '都在你的私网里 · 每张卡片开一个页签';
   }
 }
 
@@ -298,6 +360,12 @@ function cardFor(service, open) {
   }
   if (service.needsLogin || service.offline) {
     button.dataset.dim = 'true';
+  }
+  // The reason a service did not answer belongs on the card, not only in a log: a row
+  // that is here but dim has to say why, and hiding it instead would read as
+  // "you have no other machines".
+  if (service.statusReason) {
+    button.title = service.statusReason;
   }
 
   if (service.local) {
@@ -330,7 +398,7 @@ function cardFor(service, open) {
   if (service.needsLogin) {
     bits.push('需登录');
   } else if (service.offline) {
-    bits.push('离线');
+    bits.push('不可达');
   }
   sub.textContent = bits.filter((bit) => bit !== '').join(' · ');
   body.append(sub);

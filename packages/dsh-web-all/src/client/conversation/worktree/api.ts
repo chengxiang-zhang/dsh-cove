@@ -13,8 +13,8 @@
 
 import type {
   BindLaneInput, BindLaneResult,
-  CleanupWorktreeInput, CreateLaneInput, CreateLaneResult, CreateWorktreeInput,
-  InitWorktreeInput, LaneLookupInput, LaneView, PrCreateInput, PrCreateResult,
+  CleanupWorktreeInput, CreateLaneInput, CreateLaneResult,
+  LaneLookupInput, LaneView, PrCreateInput, PrCreateResult,
   RemoveWorktreeInput, StatusInput, WorktreeIndex, WorktreeResponse, WorktreeStatusIndex, WorktreeView,
 } from '../../../core/worktree/types.ts'
 import type { WorktreeErrorCode } from '../../../core/worktree/invariant.ts'
@@ -159,32 +159,11 @@ function unwrap<T>(envelope: WorktreeResponse<T>): T {
 
 /** The browser-side worktree API surface. */
 export class WorktreeApi {
-  /**
-   * GET /worktree/tree — the registered projects and their lanes.
-   * Returns null only for a host half that does not serve the route (404);
-   * a refusal, a failure or a broken envelope throws so the panel can say so
-   * instead of rendering the "no git repository workspaces" empty state.
-   */
-  async tree(): Promise<WorktreeIndex | null> {
-    const response = await request(`${API_PREFIX}/tree`, { credentials: 'same-origin' }, READ_TIMEOUT_MS)
-    if (response.status === 404) return null
-    return unwrap(await envelope<WorktreeIndex>(response))
-  }
-
-  /** POST /worktree/create */
-  async create(input: CreateWorktreeInput): Promise<WorktreeView> {
-    return unwrap(await envelope<WorktreeView>(await postJson(`${API_PREFIX}/create`, input, MUTATION_TIMEOUT_MS)))
-  }
-
   /** POST /worktree/remove */
   async remove(input: RemoveWorktreeInput): Promise<{ name: string; path: string }> {
     return unwrap(await envelope<{ name: string; path: string }>(await postJson(`${API_PREFIX}/remove`, input, MUTATION_TIMEOUT_MS)))
   }
 
-  /** POST /worktree/init */
-  async init(input: InitWorktreeInput): Promise<{ repoPath: string; initialBranch: string }> {
-    return unwrap(await envelope<{ repoPath: string; initialBranch: string }>(await postJson(`${API_PREFIX}/init`, input, MUTATION_TIMEOUT_MS)))
-  }
 
   /** POST /worktree/pr-create — push the branch and obtain a PR page. */
   async prCreate(input: PrCreateInput): Promise<PrCreateResult> {
@@ -231,8 +210,4 @@ export class WorktreeApi {
     return unwrap(await envelope<BindLaneResult>(await postJson(`${API_PREFIX}/lane/bind`, input, MUTATION_TIMEOUT_MS)))
   }
 
-  /** POST /worktree/lane/rollback — undo a lane whose session never came up. */
-  async rollbackLane(input: { repoPath: string; branch: string }): Promise<void> {
-    unwrap(await envelope<{ branch: string }>(await postJson(`${API_PREFIX}/lane/rollback`, input, MUTATION_TIMEOUT_MS)))
-  }
 }

@@ -2,7 +2,7 @@
  * Unified host request-trust fence for the web-all plugin route families.
  *
  * Every privileged host surface of this plugin (Git workbench, Agent Browser
- * control plane, worktree mutations, SSH, memoir, schedule mode, workbench
+ * control plane, worktree mutations, SSH, schedule mode, workbench
  * reads) previously carried its own ad-hoc loopback check. Those checks were
  * inconsistent: some demanded a loopback socket AND a loopback Host, others
  * only the socket — and behind a same-host reverse proxy (the documented
@@ -15,9 +15,10 @@
  *
  * 1. the socket must be loopback (the plugin never serves a public listener);
  * 2. the Host authority must be loopback, OR a deployment-declared trusted
- *    authority (`ctx.webRuntime.trustedHosts`: the invocation-derived LAN
- *    literals plus `--trusted-host`) carrying an authenticated browser
- *    session — the same admission decision DSH itself applies to `/api`;
+ *    authority (`webStartup.trustedHosts`: `--trusted-host`, or
+ *    `webRuntime.trustedHosts` on SDKs that still provide it) carrying an
+ *    authenticated browser session — the same admission decision DSH itself
+ *    applies to `/api`;
  * 3. `sec-fetch-site: cross-site` is refused;
  * 4. when an `Origin` is attached it must be same-origin with the Host.
  *

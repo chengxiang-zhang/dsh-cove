@@ -1,7 +1,7 @@
 /**
  * schedule-mode agent 工具：让模型在会话内查看/切换自动化任务的运行目标。
  *
- * 工具是全局注册（与 ssh_* / memoir_* 同层），`session_id` 缺省取调用方会话；
+ * 工具是全局注册（与 ssh_* 同层），`session_id` 缺省取调用方会话；
  * 因此「把这个任务改成每次新会话」在对话里就能完成，不需要打开面板。
  */
 import { defineTool, type GenericCallView, type ToolDefinition } from '@deepseek-ai/dsh-tools'
@@ -146,7 +146,7 @@ export function createScheduleModeTools(engine: ScheduleModeEngine): ToolDefinit
   ]
 }
 
-/** 注册工具；tools 服务不可用时静默跳过（与 ssh/memoir 约定一致）。 */
+/** 注册工具；tools 服务不可用时静默跳过（与 ssh 约定一致）。 */
 export function registerScheduleModeTools(ctx: import('@deepseek-ai/cordis').Context, engine: ScheduleModeEngine): () => void {
   return registerResources(own => {
     for (const tool of createScheduleModeTools(engine)) own(ctx.tools.register(tool))

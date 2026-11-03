@@ -31,16 +31,6 @@ export function useSessionWorkbenchScope(ctx: ClientContext, sessionId?: string)
   )
 }
 
-/** Address one workspace-scoped host route. */
-export function workbenchUrl(route: string, scope: WorkbenchScope, path = '', extra?: Record<string, string>): string {
-  return `/api/workbench/${route}?${new URLSearchParams({
-    root: scope.root ?? scope.cwd ?? '',
-    path,
-    ...(scope.sessionId ? { session: scope.sessionId } : {}),
-    ...extra,
-  })}`
-}
-
 export function workspaceRelative(scope: WorkbenchScope, path: string): string {
   const normalized = path.replaceAll('\\', '/')
   const cwd = scope.cwd?.replaceAll('\\', '/').replace(/\/+$/u, '')

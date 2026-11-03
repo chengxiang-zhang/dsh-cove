@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { acceptedDshName, buildRegistry, entryCandidateUrls, peerAddressSet, registeredServiceUrl } from '../src/discovery.mjs';
+import { buildRegistry, entryCandidateUrls, fleetEntryOf, peerAddressSet, registeredServiceUrl } from '../src/discovery.mjs';
 
 const ZONES = ['netbird'];
 const PEERS = ['100.64.1.81', '100.64.1.10'];
@@ -9,79 +9,83 @@ const PEERS = ['100.64.1.81', '100.64.1.10'];
 const CLOUD_PEERS = ['100.64.1.81', '100.64.1.10', '100.64.1.90'];
 
 test('a zone-relative A record for a machine of this network is accepted', () => {
-  const host = acceptedDshName(
+  const entry = fleetEntryOf(
     { type: 1, name: 'dsh.peer-a', zone: 'netbird', content: '100.64.1.81' },
     ZONES,
     PEERS,
   );
-  assert.equal(host, 'dsh.peer-a.netbird');
+  assert.equal(entry.host, 'dsh.peer-a.netbird');
 });
 
 test('a fully qualified record derives the same name', () => {
-  const host = acceptedDshName(
+  const entry = fleetEntryOf(
     { type: 1, name: 'dsh.peer-a.netbird', zone: 'netbird', content: '100.64.1.81' },
     ZONES,
     PEERS,
   );
-  assert.equal(host, 'dsh.peer-a.netbird');
+  assert.equal(entry.host, 'dsh.peer-a.netbird');
 });
 
 test('a non-A record is never an entry', () => {
   assert.equal(
-    acceptedDshName({ type: 5, name: 'dsh.peer-a', zone: 'netbird', content: '100.64.1.81' }, ZONES, PEERS),
+    fleetEntryOf({ type: 5, name: 'dsh.peer-a', zone: 'netbird', content: '100.64.1.81' }, ZONES, PEERS),
     null,
   );
 });
 
-test('only names whose first label is dsh are entries', () => {
-  // The fleet zone also carries internal service names (clickhouse.<machine>,
-  // auth.<machine>, browserless-mcp.<machine>). None of them may reach the user's
-  // machine list.
-  for (const name of ['clickhouse.peer-a', 'auth.peer-a', 'browserless-mcp.peer-a', 'apk.peer-a']) {
-    assert.equal(
-      acceptedDshName({ type: 1, name, zone: 'netbird', content: '100.64.1.81' }, ZONES, PEERS),
-      null,
-      name,
-    );
+test('the first label is the service, whatever it is called', () => {
+  // The zone carries one record per (service, machine). The client enumerates no
+  // service: `superset.<machine>` is as much a service as `dsh.<machine>`, and a
+  // service added tomorrow arrives as a record rather than a client release.
+  for (const name of ['dsh.peer-a', 'clickhouse.peer-a', 'auth.peer-a', 'browserless-mcp.peer-a', 'apk.peer-a']) {
+    const entry = fleetEntryOf({ type: 1, name, zone: 'netbird', content: '100.64.1.81' }, ZONES, PEERS);
+    assert.ok(entry, name);
+    assert.equal(entry.host, `${name}.netbird`);
+    assert.equal(entry.service, name.split('.')[0]);
+    assert.equal(entry.machine, 'peer-a');
+    assert.equal(entry.zone, 'netbird');
+    assert.equal(entry.ip, '100.64.1.81');
   }
 });
 
 test('a record named dsh is not a machine entry', () => {
   assert.equal(
-    acceptedDshName({ type: 1, name: 'dsh', zone: 'netbird', content: '100.64.1.81' }, ZONES, PEERS),
+    fleetEntryOf({ type: 1, name: 'dsh', zone: 'netbird', content: '100.64.1.81' }, ZONES, PEERS),
     null,
   );
 });
 
 test('a retired per-machine zone is not the canonical authority', () => {
   assert.equal(
-    acceptedDshName({ type: 1, name: 'dsh', zone: 'peer-a', content: '100.64.1.81' }, ZONES, PEERS),
+    fleetEntryOf({ type: 1, name: 'dsh', zone: 'peer-a', content: '100.64.1.81' }, ZONES, PEERS),
     null,
   );
+  // A two-label name in a retired zone is still a well-formed entry, but the zone is
+  // not the canonical authority, so the record is refused.
   assert.equal(
-    acceptedDshName({ type: 1, name: 'dsh.peer-a', zone: 'peer-a', content: '100.64.1.81' }, ZONES, PEERS),
+    fleetEntryOf({ type: 1, name: 'dsh.peer-a', zone: 'peer-a', content: '100.64.1.81' }, ZONES, PEERS),
     null,
   );
 });
 
 test('an entry pointing outside this network is refused', () => {
   assert.equal(
-    acceptedDshName({ type: 1, name: 'dsh.peer-c', zone: 'netbird', content: '100.64.1.11' }, ZONES, PEERS),
+    fleetEntryOf({ type: 1, name: 'dsh.peer-c', zone: 'netbird', content: '100.64.1.11' }, ZONES, PEERS),
     null,
   );
   assert.equal(
-    acceptedDshName({ type: 1, name: 'dsh.public', zone: 'netbird', content: '93.184.216.34' }, ZONES, PEERS),
+    fleetEntryOf({ type: 1, name: 'dsh.public', zone: 'netbird', content: '93.184.216.34' }, ZONES, PEERS),
     null,
   );
 });
 
 test('an overlay address carrying a prefix still matches a peer', () => {
-  const host = acceptedDshName(
+  const entry = fleetEntryOf(
     { type: 1, name: 'dsh.peer-b', zone: 'netbird', content: '100.64.1.10/16' },
     ZONES,
     PEERS,
   );
-  assert.equal(host, 'dsh.peer-b.netbird');
+  assert.equal(entry.host, 'dsh.peer-b.netbird');
 });
 
 test('buildRegistry keeps accepted entries sorted, deduplicated and with their machine name', () => {
@@ -98,15 +102,21 @@ test('buildRegistry keeps accepted entries sorted, deduplicated and with their m
   );
   assert.deepEqual(
     registry.entries.map((entry) => entry.host),
-    ['dsh.peer-a.netbird', 'dsh.peer-b.netbird'],
+    ['clickhouse.peer-a.netbird', 'dsh.peer-a.netbird', 'dsh.peer-b.netbird'],
+  );
+  assert.deepEqual(
+    registry.entries.map((entry) => entry.service),
+    ['clickhouse', 'dsh', 'dsh'],
   );
   assert.deepEqual(
     registry.entries.map((entry) => entry.machine),
-    ['peer-a', 'peer-b'],
+    ['peer-a', 'peer-a', 'peer-b'],
   );
-  assert.equal(registry.entries[0].url, 'http://dsh.peer-a.netbird/');
-  assert.deepEqual(registry.entries[0].urls, ['https://dsh.peer-a.netbird/', 'http://dsh.peer-a.netbird/']);
-  assert.equal(registry.rejected, 2);
+  const dshEntry = registry.entries.find((entry) => entry.host === 'dsh.peer-a.netbird');
+  assert.equal(dshEntry.url, 'http://dsh.peer-a.netbird/');
+  assert.deepEqual(dshEntry.urls, ['https://dsh.peer-a.netbird/', 'http://dsh.peer-a.netbird/']);
+  // 只有指向其他网络地址的记录被拒。
+  assert.equal(registry.rejected, 1);
 });
 
 test('a fleet entry is offered on TLS first, with plaintext as the fallback', () => {
@@ -148,29 +158,33 @@ test('a trusted entry opens, and everything else is refused', () => {
 
 test('cloud mode accepts a peer record under the cloud zone', () => {
   const options = { cloud: true };
-  const relative = acceptedDshName(
+  const relative = fleetEntryOf(
     { type: 1, name: 'peer-a', zone: 'netbird.cloud', content: '100.64.1.81' },
     ZONES,
     CLOUD_PEERS,
     options,
   );
-  assert.equal(relative, 'peer-a.netbird.cloud');
+  assert.equal(relative.host, 'peer-a.netbird.cloud');
+  // A cloud name carries no service label; its group is empty and the peer label is
+  // the machine.
+  assert.equal(relative.service, '');
+  assert.equal(relative.machine, 'peer-a');
   // The embedded client synthesizes peer FQDNs from the peer table, so the
   // record may arrive already qualified.
-  const qualified = acceptedDshName(
+  const qualified = fleetEntryOf(
     { type: 1, name: 'peer-a.netbird.cloud', zone: 'netbird.cloud', content: '100.64.1.81' },
     ZONES,
     CLOUD_PEERS,
     options,
   );
-  assert.equal(qualified, 'peer-a.netbird.cloud');
+  assert.equal(qualified.host, 'peer-a.netbird.cloud');
 });
 
 test('cloud mode refuses anything that is not one peer of this network', () => {
   const options = { cloud: true };
-  assert.equal(acceptedDshName({ type: 1, name: 'dsh.peer-a', zone: 'netbird.cloud', content: '100.64.1.81' }, ZONES, CLOUD_PEERS, options), null);
-  assert.equal(acceptedDshName({ type: 1, name: 'peer-a', zone: 'netbird', content: '100.64.1.81' }, ZONES, CLOUD_PEERS, options), null);
-  assert.equal(acceptedDshName({ type: 1, name: 'peer-a', zone: 'netbird.cloud', content: '93.184.216.34' }, ZONES, CLOUD_PEERS, options), null);
+  assert.equal(fleetEntryOf({ type: 1, name: 'dsh.peer-a', zone: 'netbird.cloud', content: '100.64.1.81' }, ZONES, CLOUD_PEERS, options), null);
+  assert.equal(fleetEntryOf({ type: 1, name: 'peer-a', zone: 'netbird', content: '100.64.1.81' }, ZONES, CLOUD_PEERS, options), null);
+  assert.equal(fleetEntryOf({ type: 1, name: 'peer-a', zone: 'netbird.cloud', content: '93.184.216.34' }, ZONES, CLOUD_PEERS, options), null);
 });
 
 test('cloud registry rows use the peer FQDN and its label', () => {

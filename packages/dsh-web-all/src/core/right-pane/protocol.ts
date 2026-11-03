@@ -1,34 +1,4 @@
-/** Shared wire vocabulary for the web-all right-pane additions (git, browser). */
-
-export type BrowserNavigateResult =
-  | { kind: 'ok'; url: string }
-  | { kind: 'blocked'; reason: 'scheme' | 'loopback' | 'self-origin' }
-  | { kind: 'invalid' }
-
-const FORBIDDEN_BROWSER_SCHEMES = /^(?:javascript|data|file|about|blob|vbscript|mailto|tel|ftp|ws|wss):/iu
-
-export function isLoopbackHostname(value: string): boolean {
-  const hostname = value.replace(/^\[|\]$/gu, '').toLowerCase()
-  if (hostname === 'localhost' || hostname === '::1' || hostname === '0.0.0.0') return true
-  const octets = hostname.split('.')
-  return octets.length === 4 && octets[0] === '127' && octets.every(part => /^\d{1,3}$/u.test(part) && Number(part) <= 255)
-}
-
-/** Detailed secure navigation verdict for the sidebar browser. */
-export function evaluateBrowserUrl(value: string, selfOrigin?: string): BrowserNavigateResult {
-  const trimmed = value.trim()
-  if (trimmed === '') return { kind: 'invalid' }
-  if (FORBIDDEN_BROWSER_SCHEMES.test(trimmed)) return { kind: 'blocked', reason: 'scheme' }
-  const candidate = /^https?:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`
-  let url: URL
-  try { url = new URL(candidate) } catch { return { kind: 'invalid' } }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return { kind: 'blocked', reason: 'scheme' }
-  if (selfOrigin) {
-    try { if (url.origin === new URL(selfOrigin).origin) return { kind: 'blocked', reason: 'self-origin' } } catch { /* ignore malformed owner origin */ }
-  }
-  if (isLoopbackHostname(url.hostname)) return { kind: 'blocked', reason: 'loopback' }
-  return { kind: 'ok', url: url.href }
-}
+/** Shared wire vocabulary for the web-all right-pane additions. */
 
 export interface GitStatusEntry {
   path: string

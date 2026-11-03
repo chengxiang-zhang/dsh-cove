@@ -6,7 +6,6 @@ import { promisify } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { BetterSidebarError } from './wire.ts'
-import { probeBrowserUrl } from './browser.ts'
 import { accessTrustOf } from '../access-trust/index.ts'
 import { isLoopbackRequest } from '../access-trust/trust.ts'
 
@@ -30,21 +29,6 @@ export function trusted(request: IncomingMessage): boolean {
 function json(response: ServerResponse, status: number, value: unknown): void {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'x-content-type-options': 'nosniff' })
   response.end(JSON.stringify(value))
-}
-
-async function jsonBody(request: IncomingMessage, maxBytes = 64 * 1024): Promise<Record<string, unknown>> {
-  const declared = Number(request.headers['content-length'] ?? 0)
-  if (Number.isFinite(declared) && declared > maxBytes) throw new BetterSidebarError('too-large', `request body exceeds ${maxBytes} bytes`)
-  const chunks: Buffer[] = []
-  let size = 0
-  for await (const chunk of request) {
-    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    size += value.length
-    if (size > maxBytes) throw new BetterSidebarError('too-large', `request body exceeds ${maxBytes} bytes`)
-    chunks.push(value)
-  }
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown> }
-  catch { throw new BetterSidebarError('bad-request', 'request body must be valid JSON') }
 }
 
 function inside(root: string, target: string): boolean {
@@ -86,12 +70,6 @@ export function register(ctx: Context): () => void {
     if (!isTrusted(request)) return json(response, 403, { error: 'forbidden' })
     const url = new URL(request.url ?? '/', 'http://dsh.local')
     try {
-      if (url.pathname === '/api/workbench/browser-probe' && request.method === 'POST') {
-        const payload = await jsonBody(request)
-        if (typeof payload.url !== 'string') throw new BetterSidebarError('bad-request', 'url is required')
-        const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 10_000)
-        try { return json(response, 200, await probeBrowserUrl(payload.url, fetch, controller.signal)) } finally { clearTimeout(timer) }
-      }
       if (url.pathname === '/api/workbench/git-status' && request.method === 'GET') {
         const target = targetFromQuery(registry, url)
         if (target.path !== '') throw new BetterSidebarError('bad-request', 'git status root must be the workspace root')

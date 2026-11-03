@@ -7,13 +7,10 @@ import { installLaneWorkspaceRetirement, type LaneRetirementManager } from '../s
 import { registerWorkspaceModelRoutes } from '../src/host/services/worktree/workspace-model-routes.ts'
 import type { WorktreeManager } from '../src/host/services/worktree/manager.ts'
 import type { WorkspaceModelManager } from '../src/host/services/worktree/workspace-model.ts'
-import { registerServerMode } from '../src/host/services/remote-web-ui/server.ts'
-import { AccountStore } from '../src/host/services/remote-web-ui/server-mode/accounts.ts'
 import { notifyFamilyConfigChange } from '../src/host/services/family-config.ts'
 
 const runtime = vi.hoisted(() => ({
   timers: new Set<unknown>(),
-  gateways: [] as Array<{ start: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn>; release(): void; reject(error: Error): void }>,
 }))
 
 vi.mock('node:timers', () => {
@@ -24,22 +21,7 @@ vi.mock('node:timers', () => {
   }
   return { setTimeout: vi.fn(timer), setInterval: vi.fn(timer) }
 })
-vi.mock('../src/host/services/remote-web-ui/server-mode/lan.ts', () => ({ lanIPv4Addresses: () => [] }))
-vi.mock('../src/host/services/remote-web-ui/server-mode/gateway.ts', () => ({
-  Gateway: class {
-    secure = false
-    port = 3082
-    start: ReturnType<typeof vi.fn>
-    close = vi.fn(async () => {})
-    constructor() {
-      let release!: () => void
-      let reject!: (error: Error) => void
-      const pending = new Promise<void>((resolve, fail) => { release = resolve; reject = fail })
-      this.start = vi.fn(() => pending)
-      runtime.gateways.push({ start: this.start, close: this.close, release, reject })
-    }
-  },
-}))
+
 
 function fixture(options: { failRoute?: number; failOn?: boolean; failPort?: boolean; failDispose?: boolean } = {}) {
   const activeRoutes = new Set<string>()
@@ -83,7 +65,6 @@ function fixture(options: { failRoute?: number; failOn?: boolean; failPort?: boo
 
 beforeEach(() => {
   runtime.timers.clear()
-  runtime.gateways.length = 0
   vi.spyOn(globalThis, 'clearTimeout').mockImplementation(handle => { runtime.timers.delete(handle) })
   vi.spyOn(globalThis, 'clearInterval').mockImplementation(handle => { runtime.timers.delete(handle) })
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -145,105 +126,5 @@ describe('worktree route acquisition rollback', () => {
       '/workspace-model/clear', '/workspace-model/set', '/workspace-model/get', '/workspace-model/list',
     ])
     expect(built.activeRoutes.size).toBe(0)
-  })
-})
-
-describe('remote server-mode acquisition rollback', () => {
-  it('restores BrowserAuth if setup fails immediately after patching it', () => {
-    const built = fixture({ failPort: true })
-    expect(() => registerServerMode(built.ctx, {}, built.env)).toThrow('port unavailable')
-    expect(built.auth).toEqual(built.originalAuth)
-    expect(runtime.timers.size).toBe(0)
-  })
-
-  it('clears both timers and restores BrowserAuth when index subscription fails', () => {
-    const built = fixture({ failOn: true })
-    expect(() => registerServerMode(built.ctx, {}, built.env)).toThrow('event acquisition failed')
-    expect(runtime.timers.size).toBe(0)
-    expect(built.auth).toEqual(built.originalAuth)
-  })
-
-  it('rolls back routes, timers, index listener and settings watcher after a later route throws', () => {
-    const built = fixture({ failRoute: 2 })
-    expect(() => registerServerMode(built.ctx, {}, built.env)).toThrow('route acquisition failed')
-    expect(built.released).toEqual(['/login'])
-    expect(built.activeRoutes.size).toBe(0)
-    expect(built.events.size).toBe(0)
-    expect(runtime.timers.size).toBe(0)
-    expect(built.auth).toEqual(built.originalAuth)
-    const attempts = built.register.mock.calls.length
-    notifyFamilyConfigChange()
-    expect(built.register).toHaveBeenCalledTimes(attempts)
-  })
-
-  it('rolls back a partial settings-driven route replacement without leaving new routes', () => {
-    const built = fixture({ failRoute: 6 })
-    const dispose = registerServerMode(built.ctx, {}, built.env)
-    expect(built.activeRoutes.size).toBe(4)
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    notifyFamilyConfigChange()
-    expect(warn).toHaveBeenCalled()
-    expect(built.activeRoutes.size).toBe(0)
-    expect(built.released).toEqual([
-      '/api/gateway', '/auth', '/api/gateway/auth/providers', '/login', '/login',
-    ])
-    dispose()
-    expect(runtime.timers.size).toBe(0)
-    expect(built.events.size).toBe(0)
-    expect(built.auth).toEqual(built.originalAuth)
-  })
-
-  it('continues cleanup after a route disposer throws', () => {
-    const built = fixture({ failDispose: true })
-    const dispose = registerServerMode(built.ctx, {}, built.env)
-    expect(() => dispose()).toThrow('service resource cleanup failed')
-    expect(built.activeRoutes.size).toBe(0)
-    expect(built.events.size).toBe(0)
-    expect(runtime.timers.size).toBe(0)
-    expect(built.auth).toEqual(built.originalAuth)
-    expect(() => dispose()).not.toThrow()
-  })
-
-  it('does not start a queued gateway after synchronous disposal', async () => {
-    vi.spyOn(AccountStore.prototype, 'isEmpty').mockReturnValue(false)
-    const built = fixture()
-    const dispose = registerServerMode(built.ctx, { legacyGatewayEnabled: true }, built.env)
-    dispose()
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(runtime.gateways).toHaveLength(0)
-  })
-
-  it('closes a gateway after asynchronous startup rejects', async () => {
-    vi.spyOn(AccountStore.prototype, 'isEmpty').mockReturnValue(false)
-    const built = fixture()
-    const dispose = registerServerMode(built.ctx, { legacyGatewayEnabled: true }, built.env)
-    await Promise.resolve()
-    const gateway = runtime.gateways[0]
-    gateway.reject(new Error('listen failed after allocating server'))
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(gateway.close).toHaveBeenCalledOnce()
-    dispose()
-    await Promise.resolve()
-    expect(gateway.close).toHaveBeenCalledOnce()
-  })
-
-  it('closes a gateway whose asynchronous start settles after disposal', async () => {
-    vi.spyOn(AccountStore.prototype, 'isEmpty').mockReturnValue(false)
-    const built = fixture()
-    const dispose = registerServerMode(built.ctx, { legacyGatewayEnabled: true }, built.env)
-    await Promise.resolve()
-    expect(runtime.gateways).toHaveLength(1)
-    const gateway = runtime.gateways[0]
-    expect(gateway.start).toHaveBeenCalledOnce()
-    dispose()
-    gateway.release()
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(gateway.close).toHaveBeenCalledOnce()
-    expect(built.activeRoutes.size).toBe(0)
-    expect(runtime.timers.size).toBe(0)
-    expect(built.auth).toEqual(built.originalAuth)
   })
 })

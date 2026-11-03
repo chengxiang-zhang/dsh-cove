@@ -23,7 +23,6 @@ import {
   HOST_ACCESS_BOOT_PATH,
   HOST_ACCESS_MARKER_COOKIE,
   HOST_ACCESS_SESSION_PATH,
-  UUID_POLYFILL_SCRIPT,
   hostAccessBootScript,
   makeRemoteAccessRoutes,
   register as registerRemoteAccess,
@@ -250,7 +249,6 @@ describe('service domain registration', () => {
     inject?.(table)
     expect(table).toEqual([
       { kind: 'script-src', placement: 'head', src: HOST_ACCESS_BOOT_PATH },
-      { kind: 'script', placement: 'head', text: UUID_POLYFILL_SCRIPT },
       { kind: 'script', placement: 'head', text: CLIPBOARD_SHIM_SCRIPT },
     ])
     expect(() => { dispose() }).not.toThrow()
@@ -259,7 +257,7 @@ describe('service domain registration', () => {
   it('serves the ownership decision through the shared fence service', async () => {
     const routes: WebRoute[] = []
     const store = new Map<string, unknown>([
-      ['webRuntime', { trustedHosts: [CANONICAL] }],
+      ['webStartup', { trustedHosts: [CANONICAL] }],
       ['connection', { browserAuth: { isAuthenticated: vi.fn(() => true) } }],
     ])
     const ctx = {
@@ -295,24 +293,6 @@ describe('injected script bodies execute', () => {
     const refused: Record<string, unknown> = {}
     new Function('globalThis', hostAccessBootScript(false))(refused)
     expect(refused.__DSH_TRANSPORT__).toBeUndefined()
-  })
-
-  it('mints a v4 uuid when the platform has no crypto.randomUUID', () => {
-    let draw = 0
-    const sandbox: Record<string, unknown> = {
-      crypto: {
-        getRandomValues: (array: Uint8Array) => {
-          for (let i = 0; i < array.length; i += 1) array[i] = (draw + i * 7) % 256
-          draw += 1
-          return array
-        },
-      },
-    }
-    new Function('globalThis', UUID_POLYFILL_SCRIPT)(sandbox)
-    const mint = (sandbox.crypto as { randomUUID(): string }).randomUUID
-    const value = mint()
-    expect(value).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u)
-    expect(mint()).not.toBe(value)
   })
 
   it('backs copy with execCommand and rejects reads when the clipboard is absent', async () => {

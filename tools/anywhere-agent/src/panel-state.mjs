@@ -25,8 +25,6 @@
  * @module anywhere-agent/panel-state
  */
 
-import { machineOfCanonical } from './netbird-names.mjs';
-
 /** Every state the window can render, in the order they are reached. */
 export const UI_STATES = [
   'provisioning',
@@ -100,15 +98,22 @@ export function provisioningCopy(step) {
  * loopback address of the host it just started - rather than from the fleet, so
  * it is present with no network, no sign-in and no records published anywhere.
  *
+ * The service and machine labels are read back out of the host name when it carries
+ * them (`<service>.<machine>.<zone>`), so this row lands in the same group and under
+ * the same name as the fleet's own record for it; `facts.machine` is the fallback for
+ * a name without labels.
+ *
  * @param {{ machine?: string, host?: string, url?: string, ip?: string }} facts
- * @returns {{ host: string, machine: string, ip: string, url: string, statusCode: number, local: true }}
+ * @returns {{ host: string, service: string, machine: string, ip: string, url: string, statusCode: number, local: true }}
  */
 export function localEntry(facts = {}) {
-  const machine = String(facts.machine ?? '');
   const host = String(facts.host ?? '');
+  const labels = host.split('.').filter((label) => label !== '');
+  const named = labels.length >= 3;
   return {
     host,
-    machine,
+    service: named ? labels[0] : '',
+    machine: named ? labels[1] : String(facts.machine ?? ''),
     ip: String(facts.ip ?? ''),
     url: String(facts.url ?? ''),
     statusCode: 200,
@@ -117,59 +122,36 @@ export function localEntry(facts = {}) {
 }
 
 /**
- * This machine's row when the fleet's own name for it is known.
- *
- * The name is not derived here: it is the authority the local host answered for, so the
- * row carries what the rest of the fleet reaches this machine by. The URL stays loopback
- * because this is the copy that is *this* machine - the fleet's copy is the same row and
- * is dropped, not shown twice.
- *
- * @param {unknown} authority the canonical name this machine answered for
- * @param {unknown} loopbackUrl this machine's own workspace URL
- * @returns {object|null} the row, or null when there is no authority
- */
-export function localEntryFromAuthority(authority, loopbackUrl) {
-  const host = typeof authority === 'string' ? authority.trim() : '';
-  if (host === '') {
-    return null;
-  }
-  return {
-    host,
-    machine: machineOfCanonical(host),
-    ip: '127.0.0.1',
-    url: String(loopbackUrl ?? ''),
-    statusCode: 200,
-    local: true,
-  };
-}
-
-/**
- * This machine's row and the fleet's rows, split by address.
+ * Marks the fleet entries that address this machine.
  *
  * A fleet row is a DNS record whose content is an overlay address; a record that points
  * at an address of this machine is this machine, whatever it is called. That is the whole
- * rule, and it needs no name comparison and no guess: one machine can hold several fleet
- * names (a second enrollment, a collision suffix), and every record that addresses it
- * collapses into the single local row.
+ * rule, and it needs no name comparison and no guess: one machine holds one record per
+ * service it serves (`dsh.<machine>`, `superset.<machine>`, ...), and every one of them is
+ * this machine - so they are marked, not collapsed. Two rows for one machine is the kind
+ * of duplicate a person reads as two machines; two rows for two services is a catalogue.
  *
  * @param {object[]} entries the fleet's registry
  * @param {string[]} addresses this machine's addresses
- * @param {unknown} loopbackUrl this machine's own workspace URL
- * @returns {{ local: object|null, fleet: object[] }} the local row, and the rows that are not it
+ * @param {string} [authority] the canonical host this machine's own host answered for
+ *   on loopback; the fleet may name this machine after its NetBird peer or its OS host
+ *   name, and the host itself is the one authority that cannot be wrong
+ * @returns {object[]} the entries, each with `local` set
  */
-export function localRowsFrom(entries, addresses, loopbackUrl) {
+export function markLocalEntries(entries, addresses, authority = '') {
   const own = new Set(
     (Array.isArray(addresses) ? addresses : [])
       .map((address) => String(address ?? '').trim().split('/')[0].replace(/%.*$/, ''))
       .filter((address) => address !== ''),
   );
-  const rows = (Array.isArray(entries) ? entries : []).filter(
-    (entry) => entry && typeof entry === 'object' && typeof entry.host === 'string' && entry.host !== '',
-  );
-  const mine = rows.filter((entry) => own.has(String(entry.ip ?? '').trim().split('/')[0]));
-  const authority = mine.map((entry) => entry.host).sort()[0] ?? '';
-  const fleet = rows.filter((entry) => !mine.some((row) => row.host === entry.host));
-  return { local: localEntryFromAuthority(authority, loopbackUrl), fleet };
+  const named = typeof authority === 'string' ? authority.trim().toLowerCase() : '';
+  return (Array.isArray(entries) ? entries : [])
+    .filter((entry) => entry && typeof entry === 'object' && typeof entry.host === 'string' && entry.host !== '')
+    .map((entry) => ({
+      ...entry,
+      local: (named !== '' && String(entry.host).toLowerCase() === named)
+        || own.has(String(entry.ip ?? '').trim().split('/')[0]),
+    }));
 }
 
 /**

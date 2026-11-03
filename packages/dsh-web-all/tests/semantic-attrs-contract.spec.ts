@@ -22,11 +22,6 @@ describe('shipped semantic attributes', () => {
     expect(terminal).toContain('data-dsh-part="terminal"')
   })
 
-  it('keeps the memoir page hooks (native panel body)', async () => {
-    const memoir = await source('src/client/sidebar/panels/memoir/panel.tsx')
-    for (const hook of ['plugin="memoir"', 'data-dsh-part="tabs"', 'data-dsh-part="toolbar"', 'data-dsh-part="entry"', 'data-dsh-part="entry-form"', 'data-dsh-part="scroll-region"']) expect(memoir).toContain(hook)
-  })
-
   it('keeps the worktree surface hooks (header chip + lane menu)', async () => {
     const chip = await source('src/client/conversation/session-lane-chip.tsx')
     for (const hook of ['WORKTREE_PLUGIN', 'WORKTREE_PART_LANE_CHIP']) expect(chip).toContain(hook)
@@ -38,7 +33,7 @@ describe('shipped semantic attributes', () => {
 
   it('marks the native panellist rows and the Feishu settings page', async () => {
     const rows = await source('src/client/sidebar/native-panels.tsx')
-    for (const id of ["SSH_PANEL_ID = 'web-all-ssh'", "MEMOIR_PANEL_ID = 'web-all-memoir'"]) expect(rows).toContain(id)
+    for (const id of ["SSH_PANEL_ID = 'web-all-ssh'"]) expect(rows).toContain(id)
     expect(rows).toContain("name: 'sidebar.panellist'")
     const settings = await source('src/client/settings/lark-inbox.tsx')
     expect(settings).toContain('data-dsh-plugin="lark-inbox"')
