@@ -244,3 +244,20 @@ dsh plugin --profile web add @dsh-cove/dsh-web-all@0.6.0
 - zcx-t470p 家目录仍 97% 满（6.1 GiB 可用），够用但下次升级前建议先清理。
 - 发布门禁里 `family settings save and reload` 这条 e2e 在 CI 上被临时 quarantine（见 commit b6b3111），
   本地仍全绿；DSH 0.2.1 无头桌面/popover 面的稳定性问题需单独收敛。
+
+## 验收标准补丁（2026-11-03，因 {{cwd}} 事故）
+
+只查「版本号 + gate 文件 + 入口 200 + 页面能打开」不算验收：`{{cwd}}` 那次崩溃在入口层面完全看不见，
+必须**每台真发一轮对话**（最小回合，例如「只回复 PONG」）并确认：
+
+1. 有正常回复（不是 `本轮运行失败`）；
+2. 没有 `unknown prompt variable` / `Invalid URL` 之类的运行期错误；
+3. 回复来自该机自己的 web 端口与当前插件版本。
+
+另外两条硬规则（本轮都踩过，记录在案）：
+
+- **装包前必须停服务**：服务在跑时替换安装树，会让运行中的进程懒加载半新半旧的模块（pc-tower 就是这么坏的）。
+- **升级后跑一轮再收工**：只看 200 就宣布完成，等于没验收。
+
+DSH 0.2.1 的 prompt 变量注册表只有 `provider` / `model`；`cwd` 已被移除，`{{cwd}}` 会让每一轮都抛错。
+预设 YAML 由 `pnpm test:scripts` 的 system-prompt-audit 门禁拦截（2026-11-03 起覆盖 `presets/**/*.yml`）。
