@@ -14,7 +14,7 @@ description: Use at the start of every non-trivial task, before writing any file
 ```
 T0 收到请求
 T1 只读侦察（≤3 次：读需求/看目录/一条复现命令）——禁止写文件、禁止 spawn
-T2 ★ 分档（本 skill）——写任何文件/派任何 agent 之前的唯一闸门
+T2 * 分档（本 skill）——写任何文件/派任何 agent 之前的唯一闸门
 T3 宣告（4 行）→ 用户可一句话改档
 T4 按档执行（加载对应路径 skill）
 T5 重估：每 5 轮 / 每里程碑 / 每次压缩后 / 触发升级条件 → 回到 T2
