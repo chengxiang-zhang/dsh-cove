@@ -22,7 +22,7 @@ English | [中文](README.zh.md)
 
 <p align="center">
   <strong>An integrated extension suite for the DeepSeek Harness (DSH) Web GUI</strong><br>
-  <em>SSH operations · Memory panel · Git workbench · Browser automation · Feishu intake · Run notifications</em>
+  <em>SSH operations · Git workbench · Browser automation · Feishu intake · Run notifications</em>
 </p>
 
 <div align="center">
@@ -33,7 +33,7 @@ English | [中文](README.zh.md)
 
 ## What it is
 
-dsh-cove is an extension suite for the DeepSeek Harness (DSH) Web GUI. SSH operations, the memory panel, the Git workbench, Feishu intake, run-finished notifications and browser automation live in one runtime entity plugin, `@dsh-cove/dsh-web-all`. Browser code is organized by DSH injection position with exactly one module owning each position, and host capabilities are service domains under the same plugin lifecycle. A DSH profile mounts this single package and never patches DSH source.
+dsh-cove is an extension suite for the DeepSeek Harness (DSH) Web GUI. SSH operations, the Git workbench, Feishu intake, run-finished notifications and browser automation live in one runtime entity plugin, `@dsh-cove/dsh-web-all`. Browser code is organized by DSH injection position with exactly one module owning each position, and host capabilities are service domains under the same plugin lifecycle. A DSH profile mounts this single package and never patches DSH source.
 
 The project is a developer preview: interfaces, configuration keys and internal contracts can change between releases. See [Versioning and releases](#versioning-and-releases).
 
@@ -57,10 +57,6 @@ The sidebar SSH entry opens a remote operations panel. Hosts support key or pass
 - **Port forwarding**: local tunnels into remote private services such as databases, APIs and admin consoles, bound to `127.0.0.1` only;
 - **Cluster runs**: one command across many hosts, filtered by alias, environment or tags;
 - **Agent access**: the agent and the panel share one host configuration, so a request in chat can run a remote command.
-
-### Memory panel
-
-The sidebar memory page reads and writes project-level memory entries: search by project and keyword, record and update entries, resolve similar-entry conflicts and inspect diagnostics. Memory is stored by the host-side memoir service domain, and the agent reaches the same data through the `memoir_read`, `memoir_record` and `memoir_update` tools.
 
 ### Git workbench
 

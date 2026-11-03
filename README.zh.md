@@ -22,7 +22,7 @@
 
 <p align="center">
   <strong>DeepSeek Harness（DSH）Web GUI 的一体化扩展套件</strong><br>
-  <em>SSH 运维 · 记忆面板 · Git 工作台 · 浏览器自动化 · 飞书接入 · 运行结束通知</em>
+  <em>SSH 运维 · Git 工作台 · 浏览器自动化 · 飞书接入 · 运行结束通知</em>
 </p>
 
 <div align="center">
@@ -33,7 +33,7 @@
 
 ## 是什么
 
-dsh-cove 是 DeepSeek Harness（DSH）Web GUI 的一体化扩展套件：SSH 运维、记忆面板、Git 工作台、飞书接入、运行结束通知与浏览器自动化等能力统一收进一个运行时实体插件 `@dsh-cove/dsh-web-all`。浏览器代码按 DSH 注入位置组织，同一位置只有一个模块负责注册与编排；host 能力是同一插件生命周期下的服务域。Profile 只挂载这一个包，不修改 DSH 源码。
+dsh-cove 是 DeepSeek Harness（DSH）Web GUI 的一体化扩展套件：SSH 运维、Git 工作台、飞书接入、运行结束通知与浏览器自动化等能力统一收进一个运行时实体插件 `@dsh-cove/dsh-web-all`。浏览器代码按 DSH 注入位置组织，同一位置只有一个模块负责注册与编排；host 能力是同一插件生命周期下的服务域。Profile 只挂载这一个包，不修改 DSH 源码。
 
 项目处于开发者预览阶段：接口、配置键与内部契约可能随版本变化，见[版本与发布](#版本与发布)。
 
@@ -57,10 +57,6 @@ dsh-cove 是 DeepSeek Harness（DSH）Web GUI 的一体化扩展套件：SSH 运
 - **端口转发**：本地隧道直连远程内网服务（数据库、API、管理后台），只监听 `127.0.0.1`；
 - **集群执行**：一条命令并发跑多台主机，按别名 / 环境 / 标签过滤；
 - **Agent 直连**：Agent 与面板共用同一份主机配置，对话里说一句即可执行远程命令。
-
-### 记忆面板
-
-侧栏「记忆」页读写项目级记忆条目：按项目与关键词检索、新增与更新、相似条目冲突提示，并带诊断视图。记忆由 host 侧 memoir 服务域存储，agent 通过 `memoir_read`、`memoir_record`、`memoir_update` 工具访问同一份数据。
 
 ### Git 工作台
 

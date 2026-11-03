@@ -1,7 +1,7 @@
 /**
  * 位置模块：侧栏（sidebar）— 唯一负责侧栏注入的位置模块。
  *
- * SSH / 记忆都是 0.2 原生面板（`sidebar.panellist` 行 + `main` 主栏 body），
+ * SSH 是 0.2 原生面板（`sidebar.panellist` 行 + `main` 主栏 body），
  * 与官方 Plugins 页同一套外观、选中语义与页面版心；右栏（right-pane）由本
  * 模块装载（Git 管理 / Agent 浏览器页签，见 right-pane.tsx）。
  *
