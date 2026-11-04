@@ -220,7 +220,7 @@ Codex：
 | 行 | `name` | `config.provider` | `config.toolName` | 状态 |
 | --- | --- | --- | --- | --- |
 | `tool-subagent-claude-code` | `@dsh-cove/dsh-web-all/preset-tools` | `claude` | `subagent_claude_code` | 启用 |
-| `tool-subagent-codex` | `@dsh-cove/dsh-web-all/preset-tools` | `codex` | `subagent_codex` | 启用 |
+| `tool-subagent-codex` | `@dsh-cove/dsh-web-all/preset-tools` | `codex` | `subagent_codex` | `disabled: true`，待宿主装配路径验收后放开 |
 
 原生的 `@deepseek-ai/dsh-subagent-claude-code` 与 `@deepseek-ai/dsh-subagent-codex` 两个 provider 包仍装在 profile 里供对照，但不进预设组合。
 
