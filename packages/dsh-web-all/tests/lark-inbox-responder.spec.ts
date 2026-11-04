@@ -742,28 +742,32 @@ describe('heartbeat', () => {
 })
 
 describe('receipt', () => {
-  it('reacts to the message being answered once its turn starts', async () => {
+  it('reacts as soon as the message is accepted, before any turn runs', async () => {
     const harnessed = harness({ receipt: true })
     harnessed.deliver(message(1, '你好'))
+    // No tick yet: the receipt means "I have your message", and a person waiting
+    // behind another turn needs that before the turn, not after it.
+    expect(harnessed.receipts).toEqual([{ messageId: 'om_1', emojiType: 'SMILE' }])
+  })
+
+  it('reacts to a message that has to queue behind a running turn', async () => {
+    const harnessed = harness({ receipt: true })
+    harnessed.deliver(message(1, '第一句'))
     harnessed.advance(1500)
     harnessed.responder.tick()
     await harnessed.flush()
-    expect(harnessed.receipts).toEqual([{ messageId: 'om_1', emojiType: 'SMILE' }])
+    // The first turn is now running; this second message cannot start for a while.
+    harnessed.deliver(message(2, '第二句'))
+    expect(harnessed.receipts.map(item => item.messageId)).toEqual(['om_1', 'om_2'])
   })
 
   it('does not react while the receipt is off, or in probe mode', async () => {
     const off = harness({ receipt: false })
     off.deliver(message(1, '你好'))
-    off.advance(1500)
-    off.responder.tick()
-    await off.flush()
     expect(off.receipts).toHaveLength(0)
 
     const probe = harness({ receipt: true, mode: 'probe' })
     probe.deliver(message(1, '你好'))
-    probe.advance(1500)
-    probe.responder.tick()
-    await probe.flush()
     // Probe mode exists to touch nothing a person can see.
     expect(probe.receipts).toHaveLength(0)
   })

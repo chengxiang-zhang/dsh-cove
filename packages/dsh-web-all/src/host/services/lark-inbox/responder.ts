@@ -376,7 +376,12 @@ export class ReplyResponder {
       now,
       debounceMs: config.debounceMs,
     })
-    if (result.attached) this.requestSweep()
+    if (result.attached) {
+      // Accepted and stored: this is the moment "I have your message" becomes true,
+      // and the moment a person is most likely to be wondering.
+      this.sendReceipt(messageId)
+      this.requestSweep()
+    }
   }
 
   /**
@@ -502,7 +507,7 @@ export class ReplyResponder {
       this.ports.log.info(
         `lark-inbox: 已提交回话回合 job=${jobId} session=${sessionId} 字符=${text.length}${marksPreamble ? ' 含前言' : ''}`,
       )
-      this.sendReceipt(jobId)
+
       if (marksPreamble) this.store.reply.markPreambleSent(convKey, this.ports.now())
     } catch (error) {
       const detail = describeError(error)
@@ -525,23 +530,25 @@ export class ReplyResponder {
   }
 
   /**
-   * Mark the message as read with a reaction, if the operator asked for that.
+   * Mark one message as read with a reaction, if the operator asked for that.
    *
-   * Fire-and-forget on purpose: the answer has not been generated yet, and a
-   * receipt that failed - a missing scope, a recalled message, a rate limit - must
-   * cost a log line rather than the reply. Skipped in probe mode, where the whole
-   * point is to touch nothing visible.
-   * @param jobId - the batch that just started running.
+   * Fired when the message is accepted, not when its turn starts. A message that
+   * arrives while another turn is running waits its turn in the queue, and that
+   * wait is exactly when a person most needs to know they were heard - reacting at
+   * submit time would stay silent for the whole queue.
+   *
+   * Fire-and-forget on purpose: a receipt that failed - a missing scope, a recalled
+   * message, a rate limit - must cost a log line rather than the reply. Skipped in
+   * probe mode, where the whole point is to touch nothing visible.
+   * @param messageId - the message the person just sent.
    */
-  private sendReceipt(jobId: string): void {
+  private sendReceipt(messageId: string): void {
     const config = this.ports.config()
     if (!config.receipt || config.mode === 'probe') return
     const sender = this.ports.sender()
     if (sender?.react === undefined) return
-    const job = this.store.reply.job(jobId)
-    if (job === undefined) return
-    void sender.react(job.replyToMessageId, REPLY_RECEIPT_EMOJI).catch((error: unknown) => {
-      this.ports.log.warn(`lark-inbox: 表情回执失败 job=${jobId}：${describeError(error)}`)
+    void sender.react(messageId, REPLY_RECEIPT_EMOJI).catch((error: unknown) => {
+      this.ports.log.warn(`lark-inbox: 表情回执失败 message=${messageId}：${describeError(error)}`)
     })
   }
 

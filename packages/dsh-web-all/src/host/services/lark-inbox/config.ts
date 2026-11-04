@@ -73,7 +73,11 @@ export interface AutoReplyConfig {
  */
 export const REPLY_DEBOUNCE_MS = 1500
 export const REPLY_TICK_MS = 2000
-export const REPLY_TURN_TIMEOUT_MS = 180_000
+// Ten minutes, not three. The first real answer took eight seconds, but the
+// messages this bot will get are work requests in a repository, and the turn cap
+// is a backstop against hanging, not a deadline for thinking. The receipt is what
+// tells the person their message landed in the meantime.
+export const REPLY_TURN_TIMEOUT_MS = 600_000
 export const REPLY_MAX_ATTEMPTS = 3
 
 export interface LarkInboxConfig {
@@ -129,9 +133,10 @@ export const Config = z.object({
   // platform actually sent, so the index can forget. Zero disables pruning for an
   // installation that wants the index as its archive.
   retentionDays: z.number().step(1).min(0).default(30),
-  // Off by default: a reaction is visible to everyone in the conversation, and
-  // whether the bot should mark itself as reading is the operator's call.
-  autoReplyReceipt: z.boolean().default(false),
+  // On by default, unlike everything else here: it touches nothing but the
+  // message the person just sent, and without it a queued message looks ignored
+  // for as long as the turn ahead of it runs.
+  autoReplyReceipt: z.boolean().default(true),
 }) as unknown as z<LarkInboxConfig>
 
 /**
