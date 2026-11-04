@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { evaluateJobs, readInboxProfile } from './lark-autoreply-check.mjs'
+import { dedupePromiseDays, evaluateJobs, readInboxProfile } from './lark-autoreply-check.mjs'
 
 const NOW = 1_700_000_000_000
 const STUCK = 10 * 60_000
@@ -219,4 +219,19 @@ test('a sender outside the allowlist fails the criterion', () => {
 test('an unreadable profile is unknown, not a pass', () => {
   const criteria = byId(evaluateJobs({ jobs: [], messages: [], now: NOW, stuckMs: STUCK }))
   assert.equal(criteria.allowlist.ok, null)
+})
+
+
+test('the dedupe promise is the retention window, not "forever"', () => {
+  // The idempotency keys live in the tables retention prunes, so a green check must
+  // not imply a stronger promise than the records can keep.
+  assert.equal(dedupePromiseDays(30), 30)
+  assert.equal(dedupePromiseDays(0), 0)
+  assert.equal(dedupePromiseDays(undefined), 30)
+  assert.equal(dedupePromiseDays(Number.NaN), 0)
+})
+
+test('retentionDays is read from the profile like every other setting', () => {
+  const parsed = readInboxProfile('  lark-inbox:\n    retentionDays: 7\n')
+  assert.equal(parsed.retentionDays, 7)
 })

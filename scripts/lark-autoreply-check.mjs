@@ -85,8 +85,26 @@ export function readInboxProfile(text) {
     if (key === 'autoReplyMode' && scalar !== '') result.mode = scalar
     if (key === 'autoReplyCwd' && scalar !== '') result.cwd = scalar
     if (key === 'autoReplyReceipt') result.receipt = scalar === 'true'
+    if (key === 'retentionDays' && scalar !== '') result.retentionDays = Number(scalar)
   }
   return result
+}
+
+/**
+ * How long the "one reply per message" promise actually holds.
+ *
+ * The idempotency keys live in the same tables retention prunes: `event_id` and
+ * `message_id` in the queue, the message membership in the ledger. Once those rows
+ * are gone a redelivery looks like a new message, so the honest promise is the
+ * retention window - not "forever", which is what a green check would otherwise
+ * imply.
+ * @param {number|undefined} retentionDays - configured retention, when readable.
+ * @returns the promise in days; 0 means records are never pruned.
+ */
+export function dedupePromiseDays(retentionDays) {
+  if (retentionDays === undefined) return 30
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0
+  return retentionDays
 }
 
 /** Non-terminal states; a job here should be moving. */
@@ -352,6 +370,7 @@ function main(argv) {
       liveConfig = undefined
     }
   }
+  const promise = dedupePromiseDays(liveConfig?.retentionDays)
   const criteria = evaluateJobs({
     jobs,
     messages,
@@ -362,7 +381,10 @@ function main(argv) {
     now: Date.now(),
     stuckMs: stuckMinutes * 60_000,
   })
-  process.stdout.write(`账本 ${db}（最近 ${sinceHours} 小时：${jobs.length} 个作业 / ${messages.length} 条消息）\n\n`)
+  process.stdout.write(`账本 ${db}（最近 ${sinceHours} 小时：${jobs.length} 个作业 / ${messages.length} 条消息）\n`)
+  process.stdout.write(promise === 0
+    ? '去重承诺：永久（终态记录不清理，任何重投都只会回一条）\n\n'
+    : `去重承诺：${promise} 天 —— 超过这个期限的重投不再保证只回一条\n\n`)
   let failed = 0
   for (const criterion of criteria) {
     const mark = criterion.ok === null ? 'SKIP' : criterion.ok ? 'PASS' : 'FAIL'
