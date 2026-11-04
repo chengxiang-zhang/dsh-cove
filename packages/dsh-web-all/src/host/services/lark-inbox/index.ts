@@ -35,6 +35,10 @@ import { LarkGateway, type GatewayHealth, type GatewaySdk } from './gateway.ts'
 import { InboxStore } from './inbox-store.ts'
 import { ReplyResponder, type ReplyEnginePorts } from './responder.ts'
 import { bindReplySession } from './session-binding.ts'
+import { createResponderWatchdog } from './responder-watchdog.ts'
+
+/** How often the answer path checks that it is still attached. */
+const WATCHDOG_INTERVAL_MS = 30_000
 import { makeLarkWizardRoutes } from './host-routes.ts'
 import { accessTrustOf } from '../access-trust/index.ts'
 import { registerInboxTools, type InboxReplyCapability, type InboxReplySender } from './tools.ts'
@@ -180,6 +184,37 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
    * away for no reason.
    * @returns the engine port set, which throws on first use when unavailable.
    */
+  /**
+   * Build the answer path over an existing runtime and start it.
+   *
+   * Separate from `sync()` because the watchdog has to be able to restore just
+   * this half: a reload that lost the responder must not force the gateway and the
+   * queue to be rebuilt as well.
+   * @param store - the runtime's queue, already open.
+   */
+  const attachResponder = (store: InboxStore): void => {
+    const responder = new ReplyResponder(store, {
+      engine: enginePorts(),
+      sender: () => replyCapability.sender,
+      config: () => {
+        const resolved = autoReplyConfig(effectiveConfig(current()))
+        // An empty working directory means "the host's own", which is what keeps a
+        // fresh installation useful without asking the operator for a path first.
+        return { ...resolved, cwd: resolved.cwd === '' ? process.cwd() : resolved.cwd }
+      },
+      now: () => Date.now(),
+      log: {
+        info: message => log.info(message),
+        warn: message => log.warn(message),
+        error: message => log.error(message),
+      },
+      setInterval: (run, ms) => setInterval(run, ms),
+      clearInterval: handle => { clearInterval(handle as ReturnType<typeof setInterval>) },
+    })
+    activeResponder = responder
+    responder.start()
+  }
+
   const enginePorts = (): ReplyEnginePorts => {
     const controller = (): SessionControllerFace => {
       const face = optionalService<SessionControllerFace>(ctx, 'sessionController')
@@ -409,26 +444,7 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
         try { await gateway.stop() } finally { store.close() }
       },
     }
-    const responder = new ReplyResponder(store, {
-      engine: enginePorts(),
-      sender: () => replyCapability.sender,
-      config: () => {
-        const resolved = autoReplyConfig(effectiveConfig(current()))
-        // An empty working directory means "the host's own", which is what keeps a
-        // fresh installation useful without asking the operator for a path first.
-        return { ...resolved, cwd: resolved.cwd === '' ? process.cwd() : resolved.cwd }
-      },
-      now: () => Date.now(),
-      log: {
-        info: message => log.info(message),
-        warn: message => log.warn(message),
-        error: message => log.error(message),
-      },
-      setInterval: (run, ms) => setInterval(run, ms),
-      clearInterval: handle => { clearInterval(handle as ReturnType<typeof setInterval>) },
-    })
-    activeResponder = responder
-    responder.start()
+    attachResponder(store)
     log.info('dsh-lark-inbox: 使用飞书应用 %s', describeFeishuCredentials(credentials))
     void gateway.start().catch(error => log.error('dsh-lark-inbox: 网关启动失败：%s', error instanceof Error ? error.message : String(error)))
     if (active.announceToAgent) {
@@ -468,6 +484,32 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
     own(onFamilyConfigChange(() => {
       try { sync() } catch (error) { log.warn('dsh-lark-inbox: 配置变更后重建失败：%s', error instanceof Error ? error.message : String(error)) }
     }))
+
+    // A failed reload can leave the domain alive with no responder: messages keep
+    // arriving and nothing answers them. The watchdog restores only that half, and
+    // says so, because a reload that did not land is something the operator needs
+    // to know about.
+    const watchdog = createResponderWatchdog({
+      expected: () => {
+        const live = runtime
+        if (live === undefined) return false
+        return effectiveConfig(current()).enabled !== false
+      },
+      present: () => activeResponder !== undefined,
+      repair: () => {
+        const live = runtime
+        if (live === undefined) return
+        attachResponder(live.store)
+      },
+      log: { warn: message => log.warn(message) },
+    })
+    const watchdogTimer = setInterval(() => {
+      try { watchdog.check() } catch (error) {
+        log.warn('lark-inbox: 回话链路自检失败：%s', error instanceof Error ? error.message : String(error))
+      }
+    }, WATCHDOG_INTERVAL_MS)
+    watchdogTimer.unref?.()
+    own(() => { clearInterval(watchdogTimer) })
 
     const wizard = new LarkWizard({
       qrDir: deps.wizardQrDir,
