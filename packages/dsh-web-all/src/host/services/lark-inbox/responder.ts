@@ -205,6 +205,7 @@ export class ReplyResponder {
     } catch (error) {
       this.ports.log.error(`lark-inbox: 恢复回话作业失败：${describeError(error)}`)
     }
+    this.adoptUnattached()
     const interval = this.ports.setInterval
     if (interval !== undefined) {
       this.timer = interval(() => { this.tick() }, this.ports.config().tickMs)
@@ -228,12 +229,43 @@ export class ReplyResponder {
         startedAt: this.startedAt,
         sweptAt: now,
         mode: this.ports.config().mode,
-        answered: this.ports.config().mode === 'off' ? 0 : this.store.reply.stats().replied,
+        answered: this.ports.config().mode === 'off' ? 0 : this.store.reply.answeredCount(),
         open: this.store.reply.stats().collecting + this.store.reply.stats().submitting + this.store.reply.stats().running + this.store.reply.stats().replying,
         failed: this.store.reply.stats().failed,
       })
     } catch (error) {
       this.ports.log.warn(`lark-inbox: 心跳写入失败：${describeError(error)}`)
+    }
+  }
+
+  /**
+   * Take ownership of messages a previous process stored but never attached.
+   *
+   * The store and the ledger are separate writes, so a crash - or a failure in the
+   * gap - leaves a message that is durable, deduplicated and owned by nothing.
+   * Redelivery cannot heal it: the platform's copy is dropped as a duplicate before
+   * admission runs again. Without this scan the message is lost forever, silently,
+   * with a row in the queue that looks like work somebody will get to.
+   *
+   * Bounded on both axes: only recent messages (an outage window, not an archive)
+   * and only a handful, because answering a day of backlog is not a recovery.
+   */
+  private adoptUnattached(): void {
+    const limit = 5
+    const within = 3_600_000
+    let adopted = 0
+    try {
+      for (const envelope of this.store.unattachedPending(limit)) {
+        const received = Date.parse(envelope.receivedAt)
+        if (Number.isFinite(received) && this.ports.now() - received > within) continue
+        this.admit(envelope)
+        adopted += 1
+      }
+    } catch (error) {
+      this.ports.log.warn(`lark-inbox: 接管遗留消息失败：${describeError(error)}`)
+    }
+    if (adopted > 0) {
+      this.ports.log.warn(`lark-inbox: 接管了 ${adopted} 条上次进程未接管的入站消息`)
     }
   }
 
@@ -314,7 +346,7 @@ export class ReplyResponder {
     const stats = this.store.reply.stats()
     return {
       mode: this.ports.config().mode,
-      answered: stats.replied,
+      answered: this.store.reply.answeredCount(),
       open: stats.collecting + stats.submitting + stats.running + stats.replying,
       failed: stats.failed,
     }
@@ -452,10 +484,15 @@ export class ReplyResponder {
       const now = this.ports.now()
       this.beat()
       for (const job of this.store.reply.dueJobs(now)) {
-        if (job.state === 'collecting') this.submit(job, now)
-        else if (job.state === 'running') this.expire(job, now)
-        else if (job.state === 'submitting') this.expireSubmit(job, now)
-        else if (job.state === 'replying') void this.deliver(job, now)
+        try {
+          if (job.state === 'collecting') this.submit(job, now)
+          else if (job.state === 'running') this.expire(job, now)
+          else if (job.state === 'submitting') this.expireSubmit(job, now)
+          else if (job.state === 'replying') void this.deliver(job, now)
+        } catch (error) {
+          // One poisoned job must not park every other conversation's work.
+          this.ports.log.error(`lark-inbox: 推进 ${job.jobId} 失败：${describeError(error)}`)
+        }
       }
     } finally {
       this.sweeping = false
@@ -515,6 +552,14 @@ export class ReplyResponder {
     const config = this.ports.config()
     try {
       await this.ports.engine.ensureSession({ sessionId, cwd: config.cwd })
+      // The bind can take arbitrarily long. If the job was closed while it hung - a
+      // submit timeout, a stop - starting the turn now would run work for a request
+      // the person was already told had failed.
+      const live = this.store.reply.job(jobId)
+      if (live === undefined || live.state !== 'submitting') {
+        this.ports.log.warn(`lark-inbox: ${jobId} 建会话返回时作业已不在提交态（${live?.state ?? '已删除'}），放弃这一次回合`)
+        return
+      }
       // Marked running before the prompt is handed over, not after it returns:
       // the engine may open and finish the turn while this call is still pending,
       // and those events must find a running job or the answer is lost.
@@ -685,8 +730,14 @@ export class ReplyResponder {
     // first try is one attempt, and a ledger that says zero cannot be used to read
     // how much retrying an installation actually needed.
     const attempts = this.store.reply.bumpSendAttempt(job.jobId)
+    // Claim the send before making it: a call that never returns must not be re-issued
+    // by the next sweep, which is how one stuck send became six. The retry time is
+    // pushed forward now and replaced by the real backoff if the call fails.
+    this.store.reply.deferSend(job.jobId, job.lastError ?? '', this.ports.now() + SEND_GRACE_MS, this.ports.now())
     const attempt = await sender.send(chatId, body, {
-      replyToMessageId: job.replyToMessageId,
+      // An unprompted message has no message to answer; an empty id would send
+      // `im.message.reply` with `message_id: ''` instead of starting a new message.
+      ...(job.replyToMessageId === '' ? {} : { replyToMessageId: job.replyToMessageId }),
       idempotencyKey: job.jobId,
     })
     if (attempt.ok) {

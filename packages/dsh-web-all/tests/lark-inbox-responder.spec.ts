@@ -614,7 +614,7 @@ describe('notification path hand-off', () => {
 
 describe('restart recovery', () => {
   /** Build a job and walk it to the state under test, using the ledger directly. */
-  function seed(harnessed: Harness, state: 'submitting' | 'running' | 'replying'): void {
+  function seed(harnessed: Harness, state: 'submitting' | 'running' | 'replying', attempted = false): void {
     const now = 1_700_000_000_000
     harnessed.store.append(message(9, '旧消息'))
     harnessed.store.reply.ensureBinding({ convKey: CHAT, chatId: CHAT, chatType: 'p2p', sessionId: replySessionId(CHAT, 1), now })
@@ -633,6 +633,9 @@ describe('restart recovery', () => {
     harnessed.store.reply.bindTurn('fj_om_9', 1, now)
     if (state === 'running') return
     harnessed.store.reply.finishTurn('fj_om_9', 'answer', '答案', 'completed', now)
+    // A reply that was mid-send has one attempt on the clock; a reply that never got
+    // that far is a different case and is covered separately below.
+    if (attempted) harnessed.store.reply.bumpSendAttempt('fj_om_9')
   }
 
   it('closes a turn that was running when the process died as interrupted, without re-running it', async () => {
@@ -674,13 +677,26 @@ describe('restart recovery', () => {
 
   it('treats a send older than the platform window as uncertain instead of resending', async () => {
     const harnessed = harness()
-    seed(harnessed, 'replying')
+    seed(harnessed, 'replying', true)
     harnessed.advance(51 * 60_000)
     harnessed.responder.start()
     harnessed.responder.tick()
     await harnessed.flush()
     expect(harnessed.sent).toHaveLength(0)
     expect(harnessed.store.reply.job('fj_om_9')?.state).toBe('reply_uncertain')
+  })
+
+  it('still sends a reply the previous process never attempted, however old it is', async () => {
+    const harnessed = harness()
+    seed(harnessed, 'replying', false)
+    // Long past the platform's idempotency window, but nothing was ever sent, so
+    // there is nothing to duplicate - the person is still owed this answer.
+    harnessed.advance(5 * 3_600_000)
+    harnessed.responder.start()
+    harnessed.responder.tick()
+    await harnessed.flush()
+    expect(harnessed.sent).toHaveLength(1)
+    expect(harnessed.store.reply.job('fj_om_9')?.state).toBe('replied')
   })
 })
 

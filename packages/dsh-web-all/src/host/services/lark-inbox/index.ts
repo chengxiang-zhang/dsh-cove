@@ -175,6 +175,8 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
    * so the subscription reads this field instead of capturing an instance.
    */
   let activeResponder: ReplyResponder | undefined
+  /** The responder the runtime being built owns, so a late teardown cannot free it. */
+  let ownResponder: ReplyResponder | undefined
 
   /**
    * Build the three engine calls the answer path needs.
@@ -194,7 +196,7 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
    * @param store - the runtime's queue, already open.
    */
   const attachResponder = (store: InboxStore): void => {
-    const responder = new ReplyResponder(store, {
+    const responder: ReplyResponder = new ReplyResponder(store, {
       engine: enginePorts(),
       sender: () => replyCapability.sender,
       config: () => {
@@ -225,6 +227,7 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
       },
     })
     activeResponder = responder
+    ownResponder = responder
     responder.start()
   }
 
@@ -447,8 +450,12 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
       store,
       gateway,
       stop: async () => {
-        const responder = activeResponder
-        activeResponder = undefined
+        // Only the responder this runtime owns. Reading the shared field here would
+        // let a teardown that resumed after a rebuild dispose the replacement - and
+        // the sweep of inbound messages would then be answered by nobody until the
+        // watchdog noticed.
+        const responder = ownResponder
+        if (activeResponder === responder) activeResponder = undefined
         responder?.dispose()
         if (retentionTimer !== undefined) {
           clearInterval(retentionTimer)

@@ -357,8 +357,13 @@ export class ReplyStore {
         .get(input.eventId) as unknown as { job_id?: unknown } | undefined
       if (existing !== undefined) return { jobId: text(existing.job_id), opened: false, attached: false }
 
+      // Only a request batch may collect messages. A proactive job has no message
+      // behind it and its prompt never quotes one, so joining a real question to it
+      // would answer the wrong thing - or, with SILENT, mark the question done and
+      // send nothing.
       const open = this.db.prepare(`SELECT job_id, next_attempt_at FROM reply_jobs
-        WHERE conv_key = ? AND state = 'collecting'`).get(input.convKey) as unknown as JobRow | undefined
+        WHERE conv_key = ? AND state = 'collecting' AND kind = 'request'`)
+        .get(input.convKey) as unknown as JobRow | undefined
 
       let jobId: string
       let opened = false
@@ -586,6 +591,31 @@ export class ReplyStore {
    * @returns true when this call moved it.
    */
   revertRun(jobId: string, error: string, nextAttemptAt: number, now: number): boolean {
+    const job = this.job(jobId)
+    if (job === undefined) return false
+    // A newer batch may already hold the conversation's collecting slot, and the
+    // update below would then violate `ux_jobs_collecting` and throw out of the whole
+    // sweep - parking every job behind it. Fold this one into that batch instead: the
+    // person gets one answer covering both questions.
+    const collecting = this.db.prepare(`SELECT job_id FROM reply_jobs
+      WHERE conv_key = ? AND state = 'collecting' AND kind = 'request' AND job_id <> ?`)
+      .get(job.convKey, jobId) as unknown as { job_id?: unknown } | undefined
+    if (collecting !== undefined) {
+      const target = text(collecting.job_id)
+      return this.transaction(() => {
+        const base = numberOrZero((this.db.prepare('SELECT COUNT(*) AS n FROM reply_job_messages WHERE job_id = ?')
+          .get(target) as unknown as { n?: unknown }).n)
+        const members = this.db.prepare('SELECT event_id FROM reply_job_messages WHERE job_id = ? ORDER BY seq ASC')
+          .all(jobId) as unknown as Array<{ event_id?: unknown }>
+        for (const [index, member] of members.entries()) {
+          this.db.prepare('UPDATE reply_job_messages SET job_id = ?, seq = ? WHERE event_id = ?')
+            .run(target, base + index, text(member.event_id))
+        }
+        this.db.prepare('DELETE FROM reply_jobs WHERE job_id = ?').run(jobId)
+        this.db.prepare('UPDATE reply_jobs SET last_error = ?, updated_at = ? WHERE job_id = ?').run(error, now, target)
+        return true
+      })
+    }
     const result = this.db.prepare(`UPDATE reply_jobs
       SET state = 'collecting', last_error = ?, next_attempt_at = ?, deadline_at = NULL, updated_at = ?
       WHERE job_id = ? AND state IN ('submitting','running') AND turn IS NULL`).run(error, nextAttemptAt, now, jobId)
@@ -700,8 +730,11 @@ export class ReplyStore {
    */
   markSent(jobId: string, messageId: string | undefined, now: number): void {
     this.transaction(() => {
+      // Guarded: a slow request can settle after the job was already closed, and a
+      // late success must not resurrect it.
       this.db.prepare(`UPDATE reply_jobs SET state = 'replied', reply_message_id = ?, updated_at = ?
-        WHERE job_id = ?`).run(messageId === undefined || messageId === '' ? null : messageId, now, jobId)
+        WHERE job_id = ? AND state IN ('replying','running')`)
+        .run(messageId === undefined || messageId === '' ? null : messageId, now, jobId)
       this.db.prepare(`UPDATE inbox_events SET status = 'done', updated_at = ?
         WHERE event_id IN (SELECT event_id FROM reply_job_messages WHERE job_id = ?)`).run(now, jobId)
     })
@@ -716,7 +749,7 @@ export class ReplyStore {
   markSendFailed(jobId: string, error: string, now: number): void {
     this.transaction(() => {
       this.db.prepare(`UPDATE reply_jobs SET state = 'failed', last_error = ?, updated_at = ?
-        WHERE job_id = ?`).run(error, now, jobId)
+        WHERE job_id = ? AND state IN ('replying','running')`).run(error, now, jobId)
       this.db.prepare(`UPDATE inbox_events SET status = 'dead', updated_at = ?
         WHERE event_id IN (SELECT event_id FROM reply_job_messages WHERE job_id = ?)`).run(now, jobId)
     })
@@ -856,7 +889,18 @@ export class ReplyStore {
         interrupted += 1
         continue
       }
-      const age = now - job.updatedAt
+      // Nothing was ever sent, so there is nothing to duplicate: this is a reply the
+      // person is still owed, not an uncertain one.
+      if (job.sendAttempts === 0) {
+        this.db.prepare('UPDATE reply_jobs SET next_attempt_at = ?, updated_at = ? WHERE job_id = ?')
+          .run(0, now, job.jobId)
+        resendable += 1
+        continue
+      }
+      // Measured from the attempt, not from the last write: `updated_at` moves on
+      // every recovery, so using it would let each restart push the window forward
+      // and re-send indefinitely.
+      const age = now - (job.submittedAt ?? job.createdAt)
       if (age >= uncertainAfterMs) {
         this.markReplyUncertain(job.jobId, '重启前已在发送，无法确定是否送达', now)
         uncertain += 1
@@ -918,6 +962,20 @@ export class ReplyStore {
         WHERE state IN ('replied','failed','cancelled','reply_uncertain') AND updated_at < ?`).run(olderThan)
       return { jobs: Number(jobs.changes), messages: Number(messages.changes) }
     })
+  }
+
+  /**
+   * How many answers actually reached a person.
+   *
+   * Not `stats().replied`: a proactive batch that chose `SILENT` also settles as
+   * replied, and counting it here would let the acceptance readings claim delivery
+   * that never happened.
+   * @returns the number of delivered answers.
+   */
+  answeredCount(): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM reply_jobs
+      WHERE state = 'replied' AND outcome = 'answer'`).get() as unknown as { n?: unknown }
+    return numberOrZero(row.n)
   }
 
   /**

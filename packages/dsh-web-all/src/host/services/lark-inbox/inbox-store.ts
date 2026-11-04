@@ -201,6 +201,23 @@ export class InboxStore {
   }
 
   /**
+   * Pending messages no reply batch ever took ownership of.
+   *
+   * A message is stored before it is attached, so a crash - or a failure in that
+   * gap - leaves a row that is durable, deduplicated, and belongs to nothing.
+   * Redelivery cannot heal it: the platform's copy is dropped as a duplicate before
+   * admission runs again. Only a scan can find these.
+   * @param limit - how many to hand back.
+   * @returns the envelopes, oldest first.
+   */
+  unattachedPending(limit: number): LarkInboxEnvelope[] {
+    const rows = this.db.prepare(`SELECT event_id, file, attempts, payload, status FROM inbox_events
+      WHERE status = 'pending' AND event_id NOT IN (SELECT event_id FROM reply_job_messages)
+      ORDER BY received_at ASC, rowid ASC LIMIT ?`).all(Math.max(1, Math.min(50, limit))) as unknown as InboxRow[]
+    return rows.map(row => JSON.parse(String(row.payload)) as LarkInboxEnvelope)
+  }
+
+  /**
    * Read one event by its id, whatever its status.
    * @param eventId - the platform event id (also the primary key).
    * @returns the item, or undefined when the queue never held it.
