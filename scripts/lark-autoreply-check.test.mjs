@@ -64,14 +64,34 @@ test('a message that just arrived is not yet a finding', () => {
   assert.equal(criteria.consuming.ok, true)
 })
 
-test('one answered turn satisfies every criterion', () => {
+test('one answered turn with a live heartbeat satisfies every criterion', () => {
   const criteria = byId(evaluateJobs({
     jobs: [job()],
     messages: [{ messageId: 'om_1', jobId: 'fj_1' }],
+    heartbeat: { startedAt: NOW - 60_000, sweptAt: NOW - 2000, mode: 'self', answered: 1, open: 0, failed: 0 },
     now: NOW,
     stuckMs: STUCK,
   }))
   for (const criterion of Object.values(criteria)) assert.equal(criterion.ok, true)
+})
+
+test('an empty ledger still reports a missing heartbeat as a failure', () => {
+  // This is the shape that let a dead answer path look like an idle bot.
+  const criteria = byId(evaluateJobs({ jobs: [], messages: [], now: NOW, stuckMs: STUCK }))
+  assert.equal(criteria.alive.ok, false)
+  assert.match(criteria.alive.detail, /没有心跳/)
+})
+
+test('a heartbeat that stopped moving fails even though jobs look fine', () => {
+  const criteria = byId(evaluateJobs({
+    jobs: [job()],
+    messages: [{ messageId: 'om_1', jobId: 'fj_1' }],
+    heartbeat: { startedAt: NOW - 3_600_000, sweptAt: NOW - STUCK - 60_000, mode: 'self', answered: 1, open: 0, failed: 0 },
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  assert.equal(criteria.alive.ok, false)
+  assert.match(criteria.alive.detail, /已经不动了/)
 })
 
 test('a job left open past the deadline fails the silence criterion', () => {

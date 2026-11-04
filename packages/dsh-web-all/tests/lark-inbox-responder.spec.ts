@@ -63,6 +63,8 @@ interface EngineHooks {
   bindHangs?: boolean
   /** Makes the reaction call throw, as a missing scope does. */
   receiptFails?: boolean
+  /** Makes the heartbeat sink throw, as a read-only home does. */
+  heartbeatFails?: boolean
 }
 
 interface Harness {
@@ -72,6 +74,7 @@ interface Harness {
   sessions: Array<{ sessionId: string; cwd: string }>
   cancels: string[]
   receipts: Array<{ messageId: string; emojiType: string }>
+  heartbeats: Array<Record<string, unknown>>
   sent: Array<{ to: string; text: string; target?: { replyToMessageId?: string; idempotencyKey?: string } }>
   sendResult: { ok: boolean; error?: string; retryable?: boolean }
   /** Knobs for the races a real engine can produce. */
@@ -95,6 +98,7 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
   const sent: Harness['sent'] = []
   const sendResult: Harness['sendResult'] = { ok: true }
   const receipts: Array<{ messageId: string; emojiType: string }> = []
+  const heartbeats: Array<Record<string, unknown>> = []
   const hooks: EngineHooks = { receiptFails: false }
   const config: AutoReplyConfig = {
     mode: 'self',
@@ -139,6 +143,10 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
       },
     }),
     config: () => config,
+    heartbeat: state => {
+      if (hooks.heartbeatFails === true) throw new Error('read-only home')
+      heartbeats.push(state as unknown as Record<string, unknown>)
+    },
     now: () => clock,
     log: { info() {}, warn() {}, error() {} },
   }
@@ -151,6 +159,7 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
     cancels,
     sent,
     receipts,
+    heartbeats,
     sendResult,
     engineHooks: hooks,
     config,
@@ -695,6 +704,38 @@ describe('status tool', () => {
   it('reports the not-running reason instead of an empty ledger', async () => {
     const tool = createAutoReplyStatusTool(() => undefined)
     await expect(tool.execute({})).resolves.toMatchObject({ error: expect.stringContaining('未运行') })
+  })
+})
+
+describe('heartbeat', () => {
+  it('writes one when it starts and again when a turn settles', async () => {
+    const harnessed = harness()
+    harnessed.responder.start()
+    expect(harnessed.heartbeats.length).toBeGreaterThanOrEqual(1)
+    const started = harnessed.heartbeats[0]
+    expect(started).toMatchObject({ mode: 'self', answered: 0, open: 0, failed: 0 })
+    expect(typeof started.startedAt).toBe('number')
+
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    runTurn(harnessed, 1, { text: '在的' })
+    await harnessed.flush()
+    // A settle writes immediately rather than waiting for the throttle: the
+    // reader outside the process should see the answer land.
+    expect(harnessed.heartbeats.at(-1)).toMatchObject({ answered: 1 })
+  })
+
+  it('keeps sweeping when the heartbeat cannot be written', async () => {
+    const harnessed = harness()
+    harnessed.engineHooks.heartbeatFails = true
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    // A read-only home is not a reason to stop answering people.
+    expect(harnessed.prompts).toHaveLength(1)
   })
 })
 

@@ -102,7 +102,30 @@ export interface ResponderPorts {
   /** Timer seam; omitted means the owner drives {@link ReplyResponder.tick}. */
   readonly setInterval?: (run: () => void, ms: number) => unknown
   readonly clearInterval?: (handle: unknown) => void
+  /**
+   * Somewhere outside the process to say "the answer path is alive".
+   *
+   * Without it, "is the responder mounted" is an inference - the tables exist, so
+   * something ran once - and an inference is what let a dead answer path look
+   * healthy for an hour. Best-effort: a failed write must not stop a sweep.
+   */
+  readonly heartbeat?: (state: ResponderHeartbeat) => void
 }
+
+/** What the answer path writes down about itself, for readers outside the process. */
+export interface ResponderHeartbeat {
+  /** Epoch milliseconds when this responder started. */
+  readonly startedAt: number
+  /** Epoch milliseconds of the most recent sweep. */
+  readonly sweptAt: number
+  readonly mode: ReplyMode
+  readonly answered: number
+  readonly open: number
+  readonly failed: number
+}
+
+/** How often the heartbeat is refreshed at most, to keep a 2s sweep off the disk. */
+export const HEARTBEAT_INTERVAL_MS = 30_000
 
 /** What the operator-facing status reports. */
 export interface ResponderStatus {
@@ -133,6 +156,8 @@ export class ReplyResponder {
   private sweepQueued = false
   private timer: unknown
   private disposed = false
+  private readonly startedAt = Date.now()
+  private lastHeartbeatAt = Number.NEGATIVE_INFINITY
   /** Turn numbers seen per session, used to attribute a batch to its turn. */
   private readonly turnCursor = new Map<string, TurnCursor>()
   /** Assistant text per job, filled as messages arrive and consumed at turn end. */
@@ -173,7 +198,32 @@ export class ReplyResponder {
     if (interval !== undefined) {
       this.timer = interval(() => { this.tick() }, this.ports.config().tickMs)
     }
+    this.beat(true)
     this.requestSweep()
+  }
+
+  /**
+   * Write down that this responder exists, throttled.
+   * @param force - write regardless of the throttle, for start and for settles.
+   */
+  private beat(force = false): void {
+    const sink = this.ports.heartbeat
+    if (sink === undefined) return
+    const now = this.ports.now()
+    if (!force && now - this.lastHeartbeatAt < HEARTBEAT_INTERVAL_MS) return
+    this.lastHeartbeatAt = now
+    try {
+      sink({
+        startedAt: this.startedAt,
+        sweptAt: now,
+        mode: this.ports.config().mode,
+        answered: this.ports.config().mode === 'off' ? 0 : this.store.reply.stats().replied,
+        open: this.store.reply.stats().collecting + this.store.reply.stats().submitting + this.store.reply.stats().running + this.store.reply.stats().replying,
+        failed: this.store.reply.stats().failed,
+      })
+    } catch (error) {
+      this.ports.log.warn(`lark-inbox: 心跳写入失败：${describeError(error)}`)
+    }
   }
 
   /**
@@ -384,6 +434,7 @@ export class ReplyResponder {
     this.sweeping = true
     try {
       const now = this.ports.now()
+      this.beat()
       for (const job of this.store.reply.dueJobs(now)) {
         if (job.state === 'collecting') this.submit(job, now)
         else if (job.state === 'running') this.expire(job, now)
@@ -555,6 +606,7 @@ export class ReplyResponder {
       // Probe mode exists so the seam can be read without speaking to a person:
       // the ledger records what would have been sent, and nothing leaves the host.
       this.store.reply.markSent(job.jobId, undefined, now)
+      this.beat(true)
       this.ports.log.info(`lark-inbox: probe 模式，未发送 ${job.jobId}：${body.slice(0, 60)}`)
       return
     }
@@ -571,6 +623,9 @@ export class ReplyResponder {
     })
     if (attempt.ok) {
       this.store.reply.markSent(job.jobId, attempt.messageId, this.ports.now())
+      // Written here rather than when the turn closed: the outside reader should
+      // see the answer land, not the moment its text became known.
+      this.beat(true)
       return
     }
     const detail = attempt.error ?? '未知错误'
@@ -582,6 +637,7 @@ export class ReplyResponder {
       return
     }
     this.store.reply.markSendFailed(job.jobId, detail, this.ports.now())
+    this.beat(true)
     this.ports.log.error(`lark-inbox: 回复发送失败 ${job.jobId}：${detail}`)
   }
 

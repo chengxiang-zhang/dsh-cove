@@ -9,6 +9,7 @@
  *
  * Four criteria, each with the reading behind it:
  *
+ *   alive       the answer path says so itself, recently
  *   answered    at least one turn produced text and was delivered
  *   consuming   no inbound message is waiting past the deadline for anything
  *   no-silence  nothing is sitting in a non-terminal state past its deadline
@@ -30,11 +31,21 @@
  *
  * Exit: 0 all applicable criteria hold, 1 something failed, 2 usage or IO error.
  */
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
+
+/**
+ * @typedef {object} ResponderHeartbeat
+ * @property {number} startedAt
+ * @property {number} sweptAt
+ * @property {string} mode
+ * @property {number} answered
+ * @property {number} open
+ * @property {number} failed
+ */
 
 /** Non-terminal states; a job here should be moving. */
 const OPEN_STATES = new Set(['collecting', 'submitting', 'running', 'replying'])
@@ -63,11 +74,13 @@ const CLOSED_STATES = new Set(['replied', 'failed', 'cancelled', 'reply_uncertai
  * @param {JobFacts[]} input.jobs - every job in the window.
  * @param {Array<{messageId: string, jobId: string}>} input.messages - batch members.
  * @param {Array<{eventId: string, receivedAt: number}>} [input.waiting] - inbound messages still pending.
+ * @param {ResponderHeartbeat} [input.heartbeat] - what the live process last wrote about itself.
+ * @param {string} [input.heartbeatPath] - where that file lives, for the report.
  * @param {number} input.now - current epoch milliseconds.
  * @param {number} input.stuckMs - how long an open job, or an unanswered message, may sit.
  * @returns {Array<{id: string, label: string, ok: boolean|null, detail: string, sql: string}>} criteria in report order.
  */
-export function evaluateJobs({ jobs, messages, waiting = [], now, stuckMs }) {
+export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbeatPath, now, stuckMs }) {
   const answered = jobs.filter(job => job.state === 'replied' && job.outcome === 'answer')
 
   const stuck = jobs.filter(job => OPEN_STATES.has(job.state) && now - job.updatedAt > stuckMs)
@@ -86,7 +99,25 @@ export function evaluateJobs({ jobs, messages, waiting = [], now, stuckMs }) {
 
   const waitingTooLong = waiting.filter(item => now - item.receivedAt > stuckMs)
 
+  // The heartbeat is the only reading that comes from the live process rather than
+  // from what it left behind. Everything else here can look healthy in a process
+  // whose answer path is not mounted at all - that is exactly how a dead bot looked
+  // like an idle one.
+  const beat = heartbeat ?? undefined
+  const beatAge = beat === undefined ? undefined : now - beat.sweptAt
+
   return [
+    {
+      id: 'alive',
+      label: '回话链路在跑（有心跳）',
+      ok: beatAge === undefined ? false : beatAge < stuckMs,
+      detail: beat === undefined
+        ? '没有心跳文件：自动回话从未在本进程挂起来（或插件加载的是旧代码）'
+        : beatAge < stuckMs
+          ? `最后心跳 ${Math.round((beatAge ?? 0) / 1000)} 秒前，mode=${beat.mode}，已回复 ${beat.answered}，进行中 ${beat.open}`
+          : `心跳停在 ${Math.round((beatAge ?? 0) / 60000)} 分钟前，mode=${beat.mode}：链路还在，但已经不动了`,
+      sql: `select * from json_each(readfile('${heartbeatPath ?? 'responder.json'}'))`,
+    },
     {
       id: 'answered',
       label: '至少一条回复真的发出去了',
@@ -193,6 +224,8 @@ function main(argv) {
   let jobs = []
   let messages = []
   let waiting = []
+  let heartbeat
+  let heartbeatPath
   try {
     const tables = handle.prepare("select name from sqlite_master where type='table'").all()
     const names = new Set(tables.map(row => String(row.name)))
@@ -219,6 +252,16 @@ function main(argv) {
       messageId: String(row.message_id),
       jobId: String(row.job_id),
     }))
+    heartbeatPath = join(dirname(db), 'responder.json')
+    if (existsSync(heartbeatPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(heartbeatPath, 'utf8'))
+        if (typeof parsed?.sweptAt === 'number') heartbeat = parsed
+      } catch {
+        // A corrupt heartbeat is reported as "no heartbeat", never as a pass.
+        heartbeat = undefined
+      }
+    }
     // Inbound messages nothing is attached to. Not filtered by `since`: a message
     // that has been waiting for days is the finding, not an old record.
     waiting = handle.prepare("SELECT event_id, received_at FROM inbox_events WHERE status = 'pending'")
@@ -227,7 +270,15 @@ function main(argv) {
     handle.close()
   }
 
-  const criteria = evaluateJobs({ jobs, messages, waiting, now: Date.now(), stuckMs: stuckMinutes * 60_000 })
+  const criteria = evaluateJobs({
+    jobs,
+    messages,
+    waiting,
+    ...(heartbeat === undefined ? {} : { heartbeat }),
+    ...(heartbeatPath === undefined ? {} : { heartbeatPath }),
+    now: Date.now(),
+    stuckMs: stuckMinutes * 60_000,
+  })
   process.stdout.write(`账本 ${db}（最近 ${sinceHours} 小时：${jobs.length} 个作业 / ${messages.length} 条消息）\n\n`)
   let failed = 0
   for (const criterion of criteria) {

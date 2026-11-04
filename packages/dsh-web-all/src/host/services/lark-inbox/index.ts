@@ -20,8 +20,9 @@
  * `$DSH_HOME` consumes it.
  */
 
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { familyNamespace, onFamilyConfigChange, updateFamilyNamespace } from '../family-config.ts'
 import type {} from '@deepseek-ai/dsh-settings'
@@ -210,6 +211,18 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
       },
       setInterval: (run, ms) => setInterval(run, ms),
       clearInterval: handle => { clearInterval(handle as ReturnType<typeof setInterval>) },
+      heartbeat: state => {
+        // A reader outside this process (the acceptance script) has no way to ask
+        // whether the answer path is mounted; this file is that answer. Written
+        // best-effort: losing a heartbeat must never cost a sweep.
+        try {
+          const path = join(resolveQueueDir(effectiveConfig(current()), deps.dshHome ?? dshHome(env)), 'responder.json')
+          mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+          writeFileSync(path, JSON.stringify(state), { encoding: 'utf8', mode: 0o600 })
+        } catch (error) {
+          log.warn('dsh-lark-inbox: 心跳写入失败：%s', error instanceof Error ? error.message : String(error))
+        }
+      },
     })
     activeResponder = responder
     responder.start()
