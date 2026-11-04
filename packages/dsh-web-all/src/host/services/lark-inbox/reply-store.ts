@@ -444,6 +444,28 @@ export class ReplyStore {
   }
 
   /**
+   * Put a turn that never bound itself back into the batch.
+   *
+   * The job is marked running *before* the prompt is handed over, because the
+   * engine can open the turn and finish it before the call returns; a later mark
+   * would orphan those events. That ordering needs an undo for the synchronous
+   * failure: a job that never bound a turn is still a submission that failed, and
+   * retrying it is correct. Once a turn is bound, the run happened and only the
+   * turn's own end may close it.
+   * @param jobId - the job.
+   * @param error - why the submission failed.
+   * @param nextAttemptAt - earliest time to try again.
+   * @param now - current time.
+   * @returns true when this call moved it.
+   */
+  revertRun(jobId: string, error: string, nextAttemptAt: number, now: number): boolean {
+    const result = this.db.prepare(`UPDATE reply_jobs
+      SET state = 'collecting', last_error = ?, next_attempt_at = ?, deadline_at = NULL, updated_at = ?
+      WHERE job_id = ? AND state IN ('submitting','running') AND turn IS NULL`).run(error, nextAttemptAt, now, jobId)
+    return Number(result.changes) === 1
+  }
+
+  /**
    * Put a failed submission back for a later retry.
    *
    * Attempts are counted by {@link claimSubmit}; this only schedules the retry,

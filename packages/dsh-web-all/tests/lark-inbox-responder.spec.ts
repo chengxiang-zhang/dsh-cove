@@ -53,6 +53,12 @@ function message(index: number, body: string, overrides: Partial<LarkInboxEnvelo
   }
 }
 
+/** Set by a test that needs the engine to act before `prompt` resolves. */
+interface EngineHooks {
+  beforePromptResolves?: (sessionId: string, requestId: string) => void
+  promptFails?: Error
+}
+
 interface Harness {
   store: InboxStore
   responder: ReplyResponder
@@ -61,6 +67,8 @@ interface Harness {
   cancels: string[]
   sent: Array<{ to: string; text: string; target?: { replyToMessageId?: string; idempotencyKey?: string } }>
   sendResult: { ok: boolean; error?: string; retryable?: boolean }
+  /** Knobs for the races a real engine can produce. */
+  engineHooks: EngineHooks
   /** A second responder over the same ledger, as a settings-driven rebuild makes. */
   rebuild(): ReplyResponder
   advance(ms: number): void
@@ -77,6 +85,7 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
   const cancels: string[] = []
   const sent: Harness['sent'] = []
   const sendResult: Harness['sendResult'] = { ok: true }
+  const hooks: EngineHooks = {}
   const config: AutoReplyConfig = {
     mode: 'self',
     openIds: [OWNER],
@@ -92,7 +101,13 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
   const ports: ConstructorParameters<typeof ReplyResponder>[1] = {
     engine: {
       async ensureSession(input) { sessions.push(input) },
-      async prompt(input) { prompts.push(input) },
+      async prompt(input) {
+        prompts.push(input)
+        // The real engine can open and finish the turn before this promise
+        // settles, which is exactly the ordering the responder must survive.
+        hooks.beforePromptResolves?.(input.sessionId, input.requestId)
+        if (hooks.promptFails !== undefined) throw hooks.promptFails
+      },
       cancel(sessionId) { cancels.push(sessionId) },
     },
     sender: () => ({
@@ -116,6 +131,7 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
     cancels,
     sent,
     sendResult,
+    engineHooks: hooks,
     rebuild: () => new ReplyResponder(store, { ...ports, setInterval: () => 0 }),
     advance: ms => { clock += ms },
     // The submit half is async by design; one macrotask turn drains it.
@@ -300,6 +316,47 @@ describe('batching', () => {
     await harnessed.flush()
     expect(harnessed.sent).toHaveLength(2)
     expect(harnessed.sent[1].target?.replyToMessageId).toBe('om_3')
+  })
+})
+
+describe('engine ordering', () => {
+  it('captures a turn that finishes before the prompt call returns', async () => {
+    const harnessed = harness()
+    harnessed.engineHooks.beforePromptResolves = (sessionId, requestId) => {
+      harnessed.responder.handleSessionEvent(sessionId, { type: 'turn/start', data: { turn: 1 } })
+      harnessed.responder.handleSessionEvent(sessionId, { type: 'user/message', data: { source: { kind: 'user', rpcId: requestId } } })
+      harnessed.responder.handleSessionEvent(sessionId, {
+        type: 'assistant/message',
+        data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '立刻答完' }] } },
+      })
+      harnessed.responder.handleSessionEvent(sessionId, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+    }
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+
+    // Those events must land on a running job, or the answer is dropped and the
+    // person waits for a timeout sentence instead of their reply.
+    expect(harnessed.sent).toHaveLength(1)
+    expect(harnessed.sent[0].text).toBe('立刻答完')
+    expect(harnessed.store.reply.job('fj_om_1')).toMatchObject({ outcome: 'answer' })
+  })
+
+  it('puts a job whose prompt threw before binding a turn back into the batch', async () => {
+    const harnessed = harness()
+    harnessed.engineHooks.promptFails = new Error('gateway down')
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+
+    const job = harnessed.store.reply.job('fj_om_1')
+    expect(job?.state).toBe('collecting')
+    expect(job?.lastError).toContain('gateway down')
+    // Retried rather than reported as a broken turn: nothing ran, so there is
+    // nothing to explain to the person yet.
+    expect(harnessed.sent).toHaveLength(0)
   })
 })
 

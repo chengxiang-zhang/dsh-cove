@@ -429,6 +429,10 @@ export class ReplyResponder {
     const config = this.ports.config()
     try {
       await this.ports.engine.ensureSession({ sessionId, cwd: config.cwd })
+      // Marked running before the prompt is handed over, not after it returns:
+      // the engine may open and finish the turn while this call is still pending,
+      // and those events must find a running job or the answer is lost.
+      this.store.reply.markRunning(jobId, this.ports.now() + config.turnTimeoutMs, this.ports.now())
       await this.ports.engine.prompt({ requestId: jobId, sessionId, text })
       // One line per submitted turn: without it the first live run leaves no trace
       // to read, and "no reply" is indistinguishable from "never submitted".
@@ -436,7 +440,6 @@ export class ReplyResponder {
         `lark-inbox: 已提交回话回合 job=${jobId} session=${sessionId} 字符=${text.length}${marksPreamble ? ' 含前言' : ''}`,
       )
       if (marksPreamble) this.store.reply.markPreambleSent(convKey, this.ports.now())
-      this.store.reply.markRunning(jobId, this.ports.now() + config.turnTimeoutMs, this.ports.now())
     } catch (error) {
       const detail = describeError(error)
       const attempts = (this.store.reply.job(jobId)?.submitAttempts ?? 0)
@@ -449,7 +452,11 @@ export class ReplyResponder {
         return
       }
       const backoff = Math.min(30_000, 2 ** attempts * 1000)
-      this.store.reply.deferSubmit(jobId, detail, this.ports.now() + backoff, this.ports.now())
+      // A submitted-but-unbound job goes back to the batch; one that already bound
+      // a turn is left to that turn's own end.
+      if (!this.store.reply.revertRun(jobId, detail, this.ports.now() + backoff, this.ports.now())) {
+        this.ports.log.warn(`lark-inbox: ${jobId} 提交失败且已绑定回合，等待回合自身结束：${detail}`)
+      }
     }
   }
 
