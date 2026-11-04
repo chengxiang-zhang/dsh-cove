@@ -224,9 +224,59 @@ Codex：
 
 原生的 `@deepseek-ai/dsh-subagent-claude-code` 与 `@deepseek-ai/dsh-subagent-codex` 两个 provider 包仍装在 profile 里供对照，但不进预设组合。
 
-迁移还要关掉活 profile 里的四个原生行：`~/.dsh/profiles/web/cordis.patch.yml` 的 `subagent-claude-code`、`subagent-codex`、`tool-subagent-claude-code`、`tool-subagent-codex` 每行加 `disabled: true`。这一步不是可选的：互斥门看到原生 provider 仍在注册就拒绝挂载，本能力完全不生效，`/api/external-session/*` 一直 404。该 profile 的 `patchReload` 是 `live`，改这几行热重载生效，不需要重启宿主；`~/.dsh/profiles/web/node_modules/@dsh-cove/dsh-web-all` 是指向本仓 `packages/dsh-web-all` 的符号链接，重启后加载的就是本仓代码。
+活 profile（`~/.dsh/profiles/web/cordis.patch.yml`）要同时改两处，缺一处迁移就不完整。
 
-回滚：删掉那四个 `disabled` 恢复原生行，并把预设两行的 `name` 换回 `@deepseek-ai/dsh-tool-subagent`、`provider` 换回 `claude-code` / `codex`，重新生成 patch 并重启 DSH 生效。两侧数据文件不同（本能力写 `~/.dsh/dsh-external-session.json`，原生不写这个文件），回滚不迁移、不覆盖对方数据。
+**一、关掉四个原生行**，每行加 `disabled: true`；以下是这四行连同各自原有的 config，其余行保持原样：
+
+```yaml
+- id: subagent-claude-code
+  name: '@deepseek-ai/dsh-subagent-claude-code'
+  disabled: true
+  config:
+    permissionMode: auto
+
+- id: subagent-codex
+  name: '@deepseek-ai/dsh-subagent-codex'
+  disabled: true
+  config:
+    model: gpt-6-astra
+
+- insert:
+    - id: tool-subagent-claude-code
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: claude-code
+        toolName: subagent_claude_code
+        backgroundMode: one-shot
+        maxDepth: provider-managed
+
+    - id: tool-subagent-codex
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: codex
+        toolName: subagent_codex
+        backgroundMode: one-shot
+        maxDepth: provider-managed
+```
+
+这一步不是可选的：互斥门看到原生 provider 仍在注册就拒绝挂载，本能力完全不生效，`/api/external-session/*` 一直 404。该 profile 的 `patchReload` 是 `live`，改这几行热重载生效，不需要重启宿主。
+
+**二、给实体行配 `claudeBin`**：
+
+```yaml
+- id: web-all
+  config:
+    externalSession:
+      claudeBin: /Users/leo/.local/bin/claude
+```
+
+托管启动器的 PATH 逐字是 `/Users/leo/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`，不含 `~/.local/bin`，因此在这个 PATH 下 `command -v claude` 为 not-found；`codex` 恰好在该 PATH 内（`/Users/leo/.nvm/versions/node/v22.22.0/bin/codex`），不需要 `codexBin` 覆盖。不配 `claudeBin` 的后果是每次续轮 `POST /api/external-session/continue` 返回 HTTP 501 与 `{"ok":false,"error":{"code":"provider-missing",…}}`；配上之后，同一 PATH、同一会话续轮回 HTTP 200，第 2 轮 `status` 为 `completed` 且 `result` 就是重启前那个标记，说明确实是 `claude --resume` 答出来的。透传链的静态旁证：在配了该键的 profile 上跑 `dsh --profile web --dump-config`，输出里能读到 `externalSession.claudeBin`，即 `src/index.ts` → `services/index.ts` → `config.ts` 这条链是通的。
+
+`~/.dsh/profiles/web/node_modules/@dsh-cove/dsh-web-all` 是指向本仓 `packages/dsh-web-all` 的符号链接，重启后加载的就是本仓代码。
+
+回滚：删掉那四个 `disabled` 与 `externalSession`，并把预设两行的 `name` 换回 `@deepseek-ai/dsh-tool-subagent`、`provider` 换回 `claude-code` / `codex`，重新生成 patch 并重启 DSH 生效。两侧数据文件不同（本能力写 `~/.dsh/dsh-external-session.json`，原生不写这个文件），回滚不迁移、不覆盖对方数据。
 
 ## 14. 验收判据
 
