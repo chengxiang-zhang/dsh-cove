@@ -91,3 +91,11 @@
     - 回滚：删除 `skills/design-dispatch/`，persona 与 `design-orchestrator` 的两句话回退即可，然后 `node scripts/render-preset.mjs`。
 
 13. **Codex 不接 kaon（2026-11-03 用户裁决）**：`kaon/gpt-6-astra` 在 kaon 侧 `404 no available route`；`kaon/gpt-6-astra-pro` 有路由但走 OpenRouter 公共额度，实测 3/3 `rate_limit_exceeded`；`kaon/gpt-5.5` 可用但换了模型等于换了能力。结论：**订阅不可用就换 claude，不做同引擎换计费**。已删除 profile 的两行（`subagent-acp-astra-kaon` / `tool-subagent-astra-kaon`）、仓内 `codex-acp-kaon.sh`、以及 `install.sh` / `preflight.sh` 里的对应分支。回滚：`/tmp/cordis.patch.yml.bak-drop-kaon-20261103` + `git checkout` 该轮改动。
+
+16. **派发写域 + 断言机械化（2026-11-04，用户裁决"改预设而不是每次手工"）**：来源是一次真实派发——`subagent_opus55` 返回约 4000 字设计正文，产物 30 处 `file:line` 里只有 8 处被本机跑过，而**抄写与评分压在同一个人身上**：Lead 把正文吸进上下文重写一遍，再人肉逐条复现。用户选了"让它直接写盘"，并指出这属于预设缺陷，不该每次靠人自觉。
+    - 规则改动（`skills/design-dispatch/SKILL.md` §5）：**删掉**「派发默认只读 → `git status` 必须为空」（它把"不许写"当成安全，实际代价是手抄）；**删掉**「对"被接受的结论"抽样复核」（机械全量判定取代抽样）；**删掉**「质量门只信确定性信号」独立条目（内容并入新条目）。**新增**三条：写域由 packet 声明（`只读` 或 `写域=<路径>`，对的是"域"不是"空"）、产物自带 `claims.jsonl`、写的人不当评分人。§3 第 6 段同步要求断言另存一份，否则仍要手抄。**净行实测 106→109（+3）**：没做到规则 #2 的"净负"，因为三条新规则都是硬约束；schema 已外移到脚本头注释，避免它在 SKILL.md 与脚本里各写一份。
+    - 新件：`skills/design-dispatch/scripts/verify-claims.mjs`。两种断言（`file-line` / `command`），只有 `verified|unverified` 两态（沿用预设既有的 已证实/未证实，不新增第三态）；`--report` 直接产出"未证实"清单贴回产物。**折行处理**：范围匹配先归一化（去注释装饰、合行、压空白）——首版没做，探针当场把我自己一条正确的折行引用判成未通过，属工具缺陷不是断言错误。
+    - 探针（规则 #1 / #3）：`node skills/design-dispatch/scripts/verify-claims.mjs --selftest` → **14/14**（7 条正例 + 7 条负例，含"折行短语必须绑定""相距行不得绑定""denylist 拦 `rm` / `git push`"）。真实断言复跑：把 2026-11-04 那批 9 条断言写成 claims 后 **8/9 verified**，唯一未过的是那条我人工也复现不出的 `140k` 字符上限——工具判定与人工判定逐条一致。
+    - 已知边界：`command` 只能跑 argv（`shell: false`），denylist 防误删误推，**不是沙箱**（`node -e`、解释器、名单外的二进制仍能干真事）；断言来自我们选择给了写权限的 agent，这条只防手滑不防恶意。折行归一化会让跨行短语匹配，但不制造跨远行的假通过（合行保序）。
+    - 备份：用 git（`git show HEAD:...`），**不落 `.bak-*`**——`scripts/verify-preset-refs.mjs` 的 `DEBRIS_PATTERNS` 明确禁止备份垃圾进预设。
+    - 回滚：`git checkout 8c78ba5 -- packages/dsh-web-all/presets/code-vibe/skills/design-dispatch/SKILL.md`，删 `scripts/verify-claims.mjs`，删本条。persona 与 `agent.cordis.yml` **未改**，所以不需要 `render-preset.mjs`。
