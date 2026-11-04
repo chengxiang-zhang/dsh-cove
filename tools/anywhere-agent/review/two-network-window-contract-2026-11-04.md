@@ -1,154 +1,103 @@
-# 链接去向契约：内网开页签、公网交给系统浏览器（2026-11-04）
+# 双网络窗口契约：公网直连、内网走 agent、页面链接开成页签（2026-11-04）
 
-> 状态：已实现，源码检出内真实 Electron 窗口验收 19 条全绿（修前同一脚本 10 条失败，见第四节）；本机重新打包的 `Anywhere Work.app`（0.7.1，CFBundleVersion 90-dirty）用 `--packaged` 复验同样 19 条全绿。**`/Applications/Anywhere Work.app` 还是 0.6.2（build 45）的旧壳，未安装覆盖**：需要安装新包并重启应用后，这段行为才在正在运行的应用里生效。
+> 状态：已实现并已安装。本机真实 Electron 窗口验收 16 条全绿（源码检出与安装路径的 `--packaged` 各一遍，见第四节），整套桌面单测 272 条全绿。安装值为 0.7.1 / CFBundleVersion 94；旧包按序保留在 `/Applications/Anywhere Work.app.retired-20261104`、`-1`、`-2`、`-3`，回滚是一条命令：`rm -rf "/Applications/Anywhere Work.app" && mv "/Applications/Anywhere Work.app.retired-20261104" "/Applications/Anywhere Work.app"`。
 > 适用范围：`tools/anywhere-agent/shell`（桌面客户端壳）与 `tools/anywhere-agent/src`。DSH Web 页面本身不需要任何改动。
 
-## 一、报告的现象与根因
+## 一、产品事实：这个窗口有两个网络
 
-现象：在桌面端里点页面返回的链接，**内网地址能打开，公网地址打不开**。内网地址打开的方式也不对：它开成一个没有页签条、没有关闭按钮的裸窗口，绕过了整个窗口形态。
+桌面客户端不是"只能进私网"的窗口，它是一个同时接两条网的浏览器：**机器自己的网络**（公网、办公网，操作系统本来就能到）和**机队的 NetBird 私网**（只有 agent 的 loopback 代理能到，操作系统不认识那些名字）。
 
-根因是壳从来没有回答过"页面请求打开一个地址"这件事。DSH 客户端的外部链接入口是 `openExternalLink`，装配在 `@deepseek-ai/dsh-client-ui-chat` 的 `lib/client.js`：
-
-```js
-openExternalLink: (url) => {
-  if (linkOpening.getSnapshot() === 'sidebar' && ctx.get('sidebarRightTabs')?.get('browser') !== void 0) ctx.sidebarRight.openTab('browser', { params: { url } });
-  else window.open(url, '_blank', 'noopener,noreferrer');
-},
-```
-
-`window.open` 在 Electron 里没有 `setWindowOpenHandler` 时，默认就是**新建一个 `BrowserWindow`**。那个窗口和主窗口同一个 partition（`persist:anywhere-shell`），而 partition 的代理是 agent 的 loopback 端口——只走 NetBird 的 userspace 栈，**通不了公网**。于是：
-
-| 点的是什么 | 修前行为 |
-| --- | --- |
-| 内网地址（`target=_blank` / `window.open`） | 新建一个裸 `BrowserWindow` 打开，页签条和关闭按钮都不在 |
-| 公网地址（同上） | 同上，只是那个窗口里页面加载失败，看起来像"链接坏了" |
-| 公网地址（无 `target`，普通导航） | 直接把当前工作区页面顶掉，工作区页变成一张打不开的公网页，**没有地址栏可以回来** |
-
-同一份壳的修前行为可复现（`poc/link-routing.mjs`，本机 Electron 44.9.0，页面由本地服务器提供）：
-
-```
-the machine page is up
-  ok   machine a opened its page
-  ok   one window, as before
-
-an overlay link opens as a tab in this window
-  FAIL no second window was created: 2
-  FAIL the link became a tab: ["home","svc:machine:dsh.a.netbird"]
-  FAIL the page area shows the linked page: {"id":2,"url":"http://127.0.0.1:56458/a","visible":true}
-
-a link to another machine stays in this window too
-  FAIL no second window was created: 3
-
-a public link goes to the platform browser
-  FAIL no second window was created: 4
-  FAIL the hand-off was recorded: []
-
-a plain navigation to a public page does not replace the page on screen
-  FAIL the hand-off was recorded: []
-  FAIL the page on screen was kept: {"id":2,"url":"http://news.invalid/x","visible":true}
-```
+一个 Chromium session 只有一个代理设置，所以"这条请求走哪张网"必须逐请求决定。此前整个 session 的代理被设成 agent 的 loopback 代理（`proxyRules`），结果是**所有**请求都塞进覆盖网：公网页面（飞书登录页、datasage 报告）在窗口里必然加载失败。把"公网地址一律外跳系统浏览器"当作绕法也不成立——登录链（应用 → Casdoor → 飞书 → 回到内网应用）必须在同一个浏览会话里闭环，跳到系统浏览器后回不到 `.netbird` 地址。
 
 ## 二、契约
 
-1. **地址决定去向，不看链接的 `target` 属性。** 同一个地址无论以 `target=_blank` 还是原地导航出现，答案一致。判定是一个纯函数：`src/link-routing.mjs` 的 `classifyLink(url, published)`，返回 `tab` / `external` / `ignore`。
-2. **什么算内网（开成页签）**：loopback（`127.0.0.0/8`、`::1`、`localhost`）、覆盖网与私网地址字面量（`100.64/10`、`10/8`、`172.16/12`、`192.168/16`、`169.254/16`、`fc00::/7`、`fe80::/10`）、单标签名字（`tx`、`superset`——只有覆盖网 DNS 答得出来）、机队 zone（`config/fleet.json` 的 `DSH_ZONES` 与 `CLOUD_DNS_DOMAIN`）、目录与机器列表里发布过的 host、通道文档自己声明的 overlay 前缀 host。
-3. **什么算公网（交给系统浏览器）**：其余所有 http(s) 地址。窗口的代理只承载覆盖网，公网页在这里必然打不开；系统浏览器没有这个限制，所以那里才是它的家。
-4. **什么都不打开**：`javascript:`、`about:blank`、`data:`、空地址、不成形的 URL。`mailto:` / `tel:` / `sms:` 交给系统（它们本来就是给别的应用开的）。
-5. **弹窗一律拒绝。** 壳不再产生第二个 `BrowserWindow`：`window.open` / `target=_blank` 的请求被 `setWindowOpenHandler` 接住，返回 `{ action: 'deny' }`，地址按第 2、3 条路由。
-6. **同源导航放行，异源导航不许顶掉页面。** 页面自己的 SPA 路由、查询串、表单提交（同源）不受影响；会换 origin 的导航一律 `preventDefault()` 后走同一套路由。这样公网地址不可能把机器页面换掉。
-7. **内网链接是新页签，不是新窗口。** 页签 `kind: 'link'`，**地址就是它的身份**：同一地址只开一个页签（再点就是切过去），写进 `tabs.json` 跟着重启恢复；地址失效的恢复项丢弃。
-8. **挂掉的链接页签是错误页，不是死点击。** 它和目录里的服务用同一个失败页与「重试」；重试走**唯一**的显式重载路径（见 9）。
-9. **只有用户能替换页面。** 显式刷新（菜单 / 托盘 / `⌘R` / 错误页重试）现在对"屏幕上那页"生效——机器工作区、目录服务页、链接页都算；`webContents.reload()` 仍然只有 `reloadActiveWorkspace()` 一处。链接页签不新开重载路径，`test/view-freshness.test.mjs` 的"一条重载路径"结构门继续成立。
+1. **流量按地址逐请求分流**（`src/proxy-pac.mjs` 生成 PAC）：覆盖网名字 → `PROXY <agent 代理>`；其它一律 `DIRECT`。覆盖网名字是：单标签名（`tx`、`superset`）、机队 zone（`DSH_ZONES` + `CLOUD_DNS_DOMAIN`）、部署发布过的 host（服务目录、机器列表、通道文档的 overlay 前缀），以及 `100.64/10` 地址字面量。**loopback 永远 DIRECT**：本机工作区不依赖私网，私网断了它也要能开。
+2. **公网页面就是本窗口的页面**。没有"公网一律外跳"的特例：登录跳转（应用 → Casdoor → 飞书 → 回到内网应用）在同一个页签里走完并回到原处。
+3. **链接**：web 地址 → 页签（`kind: 'link'`，**地址即身份**，同一地址一个页签，写进 `tabs.json` 跟着重启恢复）；`mailto:` / `tel:` / `sms:` → 交给系统（它们是别的应用的地址）；其它 scheme（`javascript:`、`about:`、`data:`）丢弃。弹窗一律 deny 后开成页签，本窗口不产生裸 `BrowserWindow`。
+4. **导航交给页面**。只拦非 http(s) 的导航（否则点一个 `mailto:` 会把页面导航成一屏空白），同源与异源都由页面自己走——SSO 回环依赖这一点。
+5. **页签恢复先等事实就位**：等机器列表（有界 45 秒）与等代理生效，然后才恢复并激活最后一个页签。否则会出现两种静默损坏：目录还没到就把机器页签当"已下线"丢掉；页面在代理生效前发出请求，覆盖网名字撞系统 DNS 失败，页签一起来就是错误页。
+6. **只有用户能替换页面**：显式刷新（菜单 / 托盘 / `⌘R` / 错误页重试）命中"屏幕上那页"，`webContents.reload()` 仍只有一处。
 
 ## 三、改动清单
 
 | 文件 | 改动 |
 | --- | --- |
-| `src/link-routing.mjs`（新增） | 纯判定：`classifyLink(url, { zones, hosts })` → `{ route, url, host, reason }`；loopback / 覆盖网与私网字面量 / 单标签名 / 机队 zone / 已发布 host 五类算内网 |
-| `src/tabs.mjs` | 新增 `linkTabId()` / `openLink()`；`restore()` 认 `kind: 'link'` 且只恢复 http(s) 地址；模块不变量补上"一个地址一个页签" |
-| `shell/main.mjs` | `installPageLinkRouting(view)` 装到**每个**原生页面（机器工作区与目录服务页）：`setWindowOpenHandler` 一律 deny 后路由，`will-navigate` 只放行同源；`linkContext()` 汇总 zone / 目录 host / 机队 host；`routePageLink()` 记录 `shell: link <route> <url> (<reason>)`；`openLinkTab()`；`tabsPayload()` 给链接页签带 `url` 与 host 兜底标题；`activateTab()` / `tabs:reload` 认链接页签；`reloadActiveWorkspace()` 扩成"屏幕上那页"；`handOffToBrowser()` 统一交给系统浏览器，并在验收模式下写 `--external-log` |
-| `shell/renderer/app.js` | 链接页签算"拥有页面区"（原生页才能压在上面）；页签图标用地球、tooltip 显示地址；标题 tooltip 显示地址 |
-| `test/link-routing.test.mjs`（新增） | 13 条：loopback / 覆盖网与私网范围边界（`100.127.x` 内、`100.128.x` 外）/ 机队 zone 与大小写、尾点 / 已发布 host 带端口 / 公网 / `mailto:` / 必须忽略的 scheme / reason / 缺省与脏配置 / host 解析 |
-| `test/tabs.test.mjs` | 3 条：链接一地址一页签、非 web 地址不开页签、链接页签随重启恢复且坏地址被丢弃 |
-| `poc/link-routing.mjs`（新增） | 19 条真实窗口验收（含重启恢复），见下 |
-
-`--external-log <file>` 是**验收缝**：验收运行时把"交给系统浏览器"记录成文件里的一行，而不是真的在跑检查的人桌面上弹出浏览器。产品路径（不给这个参数）行为不变。
+| `src/proxy-pac.mjs`（新增） | 生成 PAC：`pacScript({ upstream, zones, hosts })` → 脚本源码；`pacDataUrl()` → Chromium 接受的 `data:` URL；`proxyEntryOf()` 把代理 URL 变成 `PROXY host:port`；PAC 里的常量放在顶层（helper 函数看不到函数内 `var`） |
+| `src/link-routing.mjs` | 只回答"这条链接怎么开"：web 地址 → 页签；系统 scheme → 外跳；其余忽略。网络分流不再在这里判断 |
+| `shell/main.mjs` | `applyAgentProxy` 改为安装 PAC（zone / host 变化时重建，签名相同则不动）；`overlayContext()` 汇总 zone 与已发布 host；`installPageLinkRouting()`：弹窗 deny→页签、导航只拦非 http(s)；`restoreTabs()` 等机器列表与代理；`tabs:reload` 的链接页签走唯一重载路径；`--external-log` 验收缝 |
+| `shell/renderer/app.js` | 链接页签算"拥有页面区"（原生页才能压在上面）、地球图标、地址 tooltip |
+| `src/tabs.mjs` | 链接页签：`linkTabId()` / `openLink()` / `restore()` 认 `kind: 'link'`；"一个地址一个页签"写进模块不变量 |
+| `test/proxy-pac.test.mjs`（新增） | 10 条：在最小 PAC 运行时里执行生成的脚本，断言覆盖网走代理、公网直连、loopback 直连、zone 是后缀匹配、发布 host 忽略大小写与端口、无可用代理时不生成脚本 |
+| `test/link-routing.test.mjs` / `test/tabs.test.mjs` | 链接方向与页签模型（含链接页签重启恢复）；恢复先等列表的顺序由文本门钉住 |
+| `poc/public-and-overlay.mjs`（新增） | 16 条真实窗口验收，见下 |
 
 ## 四、验收证据
 
-命令（本机，本机 Electron 44.9.0；仓库不 vendor Electron）：
+命令（本机 Electron 44.9.0；仓库不 vendor Electron）：
 
 ```sh
-node tools/anywhere-agent/poc/link-routing.mjs --electron /path/to/Electron
-node tools/anywhere-agent/poc/link-routing.mjs --packaged --electron "/path/to/Anywhere Work.app/Contents/MacOS/Electron"
-node --test tools/anywhere-agent/test/link-routing.test.mjs tools/anywhere-agent/test/tabs.test.mjs
+node tools/anywhere-agent/poc/public-and-overlay.mjs --electron /path/to/Electron
+node tools/anywhere-agent/poc/public-and-overlay.mjs --packaged --electron "/path/to/Anywhere Work.app/Contents/MacOS/Electron"
 node --test tools/anywhere-agent/test/*.test.mjs
 ```
 
-页面由本地静态服务器提供，所以"在这个窗口里加载了"是服务端看到的请求，"交给系统浏览器"是 `--external-log` 里的那一行，都不是推断。修后 19 条全绿：
+验收脚本起两个服务器：一个是被代理转发的"覆盖网"（stub agent proxy，只记录到达它的请求），一个是直连可达的"公网"（由 Chromium 的 resolver 规则指到本机）。所以"走了哪张网"不是推断，是两份日志的差别。16 条全绿：
 
 ```
-the machine page is up
-  ok   machine a opened its page
-  ok   one window, as before
+the machine page loads through the agent
+  ok   the page came up
+  ok   the request went through the agent proxy
+  ok   one window, as always
 
-an overlay link opens as a tab in this window
+a sign-in flow through a public identity provider completes in the tab
+  ok   the flow came back to the machine
+  ok   the provider was reached directly, not through the agent
+  ok   the signed-in page is the one in the tab
+
+a public link opens as a tab, directly
   ok   no second window was created
   ok   the link became a tab
-  ok   the page area shows the linked page
-  ok   the linked page was requested once
+  ok   the public page loaded directly
+  ok   the public page did not go through the agent
 
-a link to another machine stays in this window too
-  ok   no second window was created
-  ok   the fleet-zone link became a tab
-
-a dead link tab stays a tab, with the error page and its retry
-  ok   retry asked for that page through the explicit-reload path
-  ok   the dead link is still one tab
-
-a public link goes to the platform browser
-  ok   no second window was created
-  ok   the public link did not become a tab
-  ok   the hand-off was recorded
-  ok   the public page was never loaded here
-
-a plain navigation to a public page does not replace the page on screen
-  ok   no second window was created
+a public link without a target navigates in this tab
+  ok   the page on screen is the public one
   ok   no tab was added
+
+a scheme another application owns is handed over
   ok   the hand-off was recorded
   ok   the page on screen was kept
+  ok   no web address was handed to another application
 
-a restart brings the link tabs back, and only the link tabs
-  ok   the page this machine linked to came back
-  ok   the other machine link came back too
-  ok   no public address is a tab, then or now
+a restart brings the link tab back
+  ok   the public link tab came back
+  ok   the machine tab came back
 
 all checks passed
-handed to the platform browser:
-  http://public.invalid/report
-  http://news.invalid/x
+handed to the platform:
+  mailto:someone@example.com
+through the agent: dsh.a.netbird /a, dsh.a.netbird /sso, dsh.a.netbird /after, ...
 ```
 
-单测：`test/link-routing.test.mjs` + `test/tabs.test.mjs` 26 条全绿；`node --test tools/anywhere-agent/test/*.test.mjs` 为 268 passed / 1 failed，唯一失败是 `make-dmg.test.mjs`——本机受限文件沙箱下 `hdiutil create` 被拒（`hdiutil: create failed - 操作不被允许`），与本次改动无关，见第六节。
+安装路径复验：`0.7.1` / CFBundleVersion 94，`codesign --verify --deep --strict` 通过，用 `/Applications/Anywhere Work.app/Contents/MacOS/Electron` 跑 `--packaged` 同样 16 条全绿。
 
-打包产物：`ELECTRON_DIST=... bash tools/anywhere-agent/scripts/package-mac.sh` 建出 `tools/anywhere-agent/build/Anywhere Work.app`（0.7.1，CFBundleVersion 90-dirty）；payload 的 `app/src` 里带着 `src/link-routing.mjs`，打包脚本自带的"每个相对 import 都解析得到"检查通过，`--packaged` 跑同一份脚本 19 条全绿。本机构建时 `render-icon.cjs` 的 Electron 进程被沙箱杀掉（`Trace/BPT trap: 5`），所以这一份本地包沿用运行时自带图标——与链接路由无关，真实发布在 macOS runner 上构建。
+真机启动（日志 `~/Library/Logs/Anywhere-Work.log`）：`shell: session proxy http://127.0.0.1:19001 for 2 zone(s), 32 host(s)` → 机队 31 台可达 → `shell: select dsh.leo-mac.netbird -> found`，无 `did-fail-load`，5 个机器页签从 `tabs.json` 恢复。
 
-## 五、为什么边界画在地址上
+桌面单测 `node --test tools/anywhere-agent/test/*.test.mjs` 为 272 passed / 0 failed。
 
-- **窗口没有自己的网络**：壳的 partition 代理是 agent 的 loopback 端口，只走 NetBird userspace 栈。公网地址不是"懒得支持"，是在这个进程里**不可能**加载成功。把它留在这里，用户看到的永远是失败页，而同一个地址在系统浏览器里是可用的——这就是把边界放在地址上的理由。
-- **裸窗口是第二个浏览器形态**：`BrowserWindow` 没有页签条、没有关闭语义、没有回列表的路，等于在窗口形态之外长出了另一个窗口形态。deny + 页签是与现有形态一致的做法，也是 `review/intranet-browser-design-2026-10-30.md` 第 3 节早就写下的定案（"页面里的 `window.open` / `target=_blank` → 新标签"）。
-- **让地址成为页签的身份**：链接页签不来自目录，没有服务 id；用地址当 id 就同时得到了去重、恢复和"再点一次切过去"，不需要额外状态。
-- **同源与异源分开**：SPA 的路由变化是页面自己的事，拦它等于把 DSH 页面弄坏；异源导航才是"要离开这个页面"的信号。HTTP 30x 重定向走 `will-redirect`，不经过这条判定，所以服务端跳转（例如 http→https）行为不变。
-- **不新开重载路径**：错误页的重试如果自己调 `reload()`，就把"只有用户能替换页面"变成一句口号。重试的语义是"再要一次这一页"，正好就是显式刷新，所以走同一条路。
+## 五、为什么把"网络"和"链接"分成两层
+
+- **网络是一层、链接是一层，问题不同**：能不能到由地址决定（代理分流）；怎么开由页面意图决定（同一张网里的一个链接）。上一版把两者混成一个 `classifyLink`，于是"公网"既被判成"不可达"又被判成"不许在这里开"，SSO 这类**必须在这里开**的公网页面就无处安放。
+- **PAC 而不是外跳**：外跳把登录状态带出窗口，回程地址是覆盖网名字，系统浏览器解析不了。PAC 只决定每条请求走哪条路，页面、cookie、重定向链都留在同一个会话里。
+- **loopback 例外**：本机工作区必须在私网断开时也能打开，它是唯一不依赖机队名字的入口。
+- **恢复要等事实**：`tabs.json` 与机器列表、代理三者到达顺序不确定；先恢复会静默丢页签或让第一页撞 DNS。等待有界（45 秒），因为"这台机器确实没有别的机器"也是一个合法终态。
 
 ## 六、未验证
 
 | 项 | 说明 |
 | --- | --- |
-| 安装覆盖 | 本机已建出新包并用 `--packaged` 验过，但**没有装到 `/Applications`**：那里的 `Anywhere Work.app` 还是 0.6.2（build 45），运行中的进程更是那个旧包。装上新包并重启 App 后，这段行为才在正在使用的应用里生效 |
-| Windows | 无 Windows 机器；判定与路由都是平台无关的，但真实窗口行为未在该平台验证 |
-| `mailto:` / `tel:` | 单测覆盖判定；验收运行只把"交给系统"记录成日志，没有真的唤起邮件客户端 |
-| DSH 侧栏浏览器模式 | DSH 客户端设置里若把链接改为在侧栏浏览器页签打开（`linkOpening = 'sidebar'`），链接不经过壳，本契约不适用；该模式本次未改、未验证 |
-| 宿主自跳的公网登录流 | 若某部署的工作区页面会跳转到公网 IdP，这次会把它交给系统浏览器（修前是原地加载失败）。本机机队是 password / network-gate，没有这种流，未做真实验收 |
-| 弹窗型页面 | `window.open` 一律 deny，所以依赖弹窗的应用（例如需要打印预览窗口的第三方看板）会改为开一个页签；本机目录里的服务未逐个走查 |
-| `make-dmg.test.mjs` | 本机受限文件沙箱下 `hdiutil create` 被拒，属环境限制，与本次改动无关；`view-freshness.test.mjs` 的"一条重载路径"结构门在本次改动后仍通过 |
+| 真实飞书登录的人工点击 | 契约在夹具里验到"公网身份提供方 + 回到内网应用"的完整回环；本会话没有在真实 datasage/Casdoor 上由人手点一次（屏幕捕获权限被拒，无法留截图） |
+| Windows | 无 Windows 机器；PAC、路由与重载路径都是平台无关的，但真实窗口未在该平台验证 |
+| 依赖弹窗的页面 | `window.open` 一律 deny 后开页签；依赖 popup 返回结果（`window.opener` 回传）的第三方页面会失去那条回传通道，本机目录里的服务未逐个走查 |
+| 其它网卡/路由形态 | PAC 只区分"覆盖网名字"与"其它"；机器自己网络里需要代理才能到的地址（例如办公网出口代理）不在本契约内 |
+| `make-dmg.test.mjs` | 受限文件沙箱下 `hdiutil` 会被拒；本会话放开权限后整套单测包含它在内为 272/272 通过 |
