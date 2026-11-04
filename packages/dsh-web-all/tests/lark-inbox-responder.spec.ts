@@ -700,6 +700,48 @@ describe('probe mode', () => {
   })
 })
 
+describe('send serialisation', () => {
+  it('does not let the next sweep re-send a reply that is already in flight', async () => {
+    const harnessed = harness()
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    runTurn(harnessed, 1, { text: '在的' })
+    await harnessed.flush()
+    expect(harnessed.sent).toHaveLength(1)
+
+    // A second batch is what makes the race visible: the first job's send is only
+    // protected while its retry time is in the future.
+    harnessed.advance(100)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    expect(harnessed.sent).toHaveLength(1)
+    expect(harnessed.store.reply.job('fj_om_1')?.state).toBe('replied')
+  })
+
+  it('leaves a stalled send retryable once its grace expires', async () => {
+    const harnessed = harness()
+    harnessed.sendResult.ok = false
+    harnessed.sendResult.error = 'rate limited'
+    harnessed.sendResult.retryable = true
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    runTurn(harnessed, 1, { text: '在的' })
+    await harnessed.flush()
+    expect(harnessed.store.reply.job('fj_om_1')?.state).toBe('replying')
+
+    harnessed.sendResult.ok = true
+    harnessed.advance(31_000)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    expect(harnessed.sent).toHaveLength(2)
+    expect(harnessed.store.reply.job('fj_om_1')?.state).toBe('replied')
+  })
+})
+
 describe('send failures', () => {
   it('retries a retryable failure with the same idempotency token', async () => {
     const harnessed = harness()

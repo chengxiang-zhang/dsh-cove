@@ -566,13 +566,25 @@ export class ReplyStore {
    * @param replyText - what to send.
    * @param endReason - the engine's own reason, kept for diagnosis.
    * @param now - current time.
+   * @param nextAttemptAt - when a sweep may retry the send. Pass a future time
+   *   when the caller sends immediately: otherwise the next sweep picks the job up
+   *   while that send is still in flight and the platform sees two requests. The
+   *   duplicate collapses on its `uuid`, but a slow send would still be issued
+   *   twice, and a stalled one would be issued again before anyone knows it failed.
    * @returns true when this call moved the job.
    */
-  finishTurn(jobId: string, outcome: ReplyOutcome, replyText: string, endReason: string, now: number): boolean {
+  finishTurn(
+    jobId: string,
+    outcome: ReplyOutcome,
+    replyText: string,
+    endReason: string,
+    now: number,
+    nextAttemptAt = 0,
+  ): boolean {
     const result = this.db.prepare(`UPDATE reply_jobs
       SET state = 'replying', outcome = ?, reply_text = ?, last_error = NULL, end_reason = ?,
-          next_attempt_at = 0, updated_at = ?
-      WHERE job_id = ? AND state = 'running'`).run(outcome, replyText, endReason, now, jobId)
+          next_attempt_at = ?, updated_at = ?
+      WHERE job_id = ? AND state = 'running'`).run(outcome, replyText, endReason, nextAttemptAt, now, jobId)
     return Number(result.changes) === 1
   }
 

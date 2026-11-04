@@ -46,6 +46,9 @@ export const REPLY_TEXT_LIMIT = 6000
 /** How long a cancelled turn is given to report its own end before it is closed. */
 export const TIMEOUT_GRACE_MS = 15_000
 
+/** How long a sweep waits before assuming an in-flight send is not coming back. */
+export const SEND_GRACE_MS = 30_000
+
 /** Marker written to `last_error` while a cancelled turn's end is still expected. */
 const TIMEOUT_MARKER = 'timeout-requested'
 
@@ -562,11 +565,14 @@ export class ReplyResponder {
   private closeTurn(job: ReplyJob, outcome: ReplyOutcome, text: string, endReason = ''): boolean {
     const now = this.ports.now()
     const body = clampReplyText(text, REPLY_TEXT_LIMIT)
-    if (!this.store.reply.finishTurn(job.jobId, outcome, body, endReason, now)) return false
+    // Claim the send before dropping the draft: a turn that was already closed by
+    // another path must not leave its text pinned in memory for the process's
+    // lifetime.
+    this.drafts.delete(job.jobId)
+    if (!this.store.reply.finishTurn(job.jobId, outcome, body, endReason, now, now + SEND_GRACE_MS)) return false
     this.ports.log.info(
       `lark-inbox: 回合结案 job=${job.jobId} outcome=${outcome} 原因=${endReason === '' ? '-' : endReason} 字符=${body.length}`,
     )
-    this.drafts.delete(job.jobId)
     const closed = this.store.reply.job(job.jobId)
     if (closed !== undefined) void this.deliver(closed, now)
     return true
@@ -582,7 +588,14 @@ export class ReplyResponder {
     const type = typeof record.type === 'string' ? record.type : ''
     const data = typeof record.data === 'object' && record.data !== null ? record.data as Record<string, unknown> : {}
     const running = this.store.reply.runningJobForSession(sessionId)
-    if (running === undefined) return
+    if (running === undefined) {
+      // The job may already be closed (a timeout that the turn's own end reached
+      // late). Forget the turn number anyway, so nothing can rebind a later batch
+      // to a turn that ended.
+      const data = typeof event === 'object' && event !== null ? event as Record<string, unknown> : {}
+      if (data.type === 'turn/end') this.turnCursor.delete(sessionId)
+      return
+    }
 
     if (type === 'turn/start') {
       const turn = typeof data.turn === 'number' ? data.turn : undefined
