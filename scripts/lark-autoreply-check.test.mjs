@@ -157,6 +157,72 @@ test('a closed batch with no body fails the explanation criterion', () => {
   assert.equal(criteria.explained.ok, false)
 })
 
+test('an answer delivered as a reaction has something to say', () => {
+  // The shape a real acknowledgement leaves behind: no body, no message id, no send
+  // attempt - because the reaction on the person's own message was the whole answer.
+  const criteria = byId(evaluateJobs({
+    jobs: [job({
+      replyText: undefined,
+      replyMessageId: undefined,
+      replyVia: 'reaction',
+      sendAttempts: 0,
+      endReason: 'ack-reaction',
+    })],
+    messages: [{ messageId: 'om_1', jobId: 'fj_1' }],
+    heartbeat: { startedAt: NOW - 60_000, sweptAt: NOW - 1000, mode: 'self', answered: 1, open: 0, failed: 0 },
+    liveConfig: { mode: 'self', openIds: ['ou_owner'], hasOpenIdsKey: true },
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  assert.equal(criteria.explained.ok, true)
+  // And the delivery count says so out loud, without letting it count as a delivery.
+  assert.match(criteria.answered.detail, /1 条以表情回答/)
+  assert.equal(criteria.answered.ok, false)
+})
+
+test('a reaction row that also claims a text send cannot pass', () => {
+  // A message id or a send attempt contradicts "no text went out". Passing this would
+  // hide the one confusion the criterion exists to catch.
+  for (const overrides of [
+    { replyMessageId: 'om_sent_1', sendAttempts: 0 },
+    { replyMessageId: undefined, sendAttempts: 1 },
+    { replyMessageId: 'om_sent_1', sendAttempts: 2 },
+  ]) {
+    const criteria = byId(evaluateJobs({
+      jobs: [job({ replyText: undefined, replyVia: 'reaction', ...overrides })],
+      messages: [],
+      now: NOW,
+      stuckMs: STUCK,
+    }))
+    assert.equal(criteria.explained.ok, false, JSON.stringify(overrides))
+    assert.match(criteria.explained.detail, /自相矛盾/)
+    assert.match(criteria.explained.detail, /fj_1/)
+  }
+})
+
+test('a ledger with no reply_via column behaves exactly as before', () => {
+  // Every row from before the acknowledgement path reads as text, so an empty body is
+  // still a defect rather than an answer.
+  const criteria = byId(evaluateJobs({
+    jobs: [job({ state: 'failed', outcome: undefined, replyText: undefined })],
+    messages: [],
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  assert.equal(criteria.explained.ok, false)
+
+  const fine = byId(evaluateJobs({
+    jobs: [job()],
+    messages: [{ messageId: 'om_1', jobId: 'fj_1' }],
+    heartbeat: { startedAt: NOW - 60_000, sweptAt: NOW - 1000, mode: 'self', answered: 1, open: 0, failed: 0 },
+    liveConfig: { mode: 'self', openIds: ['ou_owner'], hasOpenIdsKey: true },
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  assert.equal(fine.explained.ok, true)
+  assert.doesNotMatch(fine.answered.detail, /表情/)
+})
+
 test('a cancelled batch is allowed to have nothing to say', () => {
   const criteria = byId(evaluateJobs({
     jobs: [job({ state: 'cancelled', outcome: undefined, replyText: undefined })],
@@ -407,8 +473,11 @@ function makeLedger({ withColumns = true, jobs = [], messages = [], steerStates 
   const extraMember = withColumns ? ", steer_state TEXT NOT NULL DEFAULT 'none'" : ''
   db.exec('CREATE TABLE inbox_events (event_id TEXT PRIMARY KEY, received_at INTEGER NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL)')
   db.exec('CREATE TABLE conv_bindings (conv_key TEXT PRIMARY KEY)')
+  // `send_attempts` is part of the ledger from its first release, so it is here even in
+  // the "old ledger" variant; only the columns added later are conditional.
   db.exec(`CREATE TABLE reply_jobs (job_id TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'request', state TEXT NOT NULL,
     outcome TEXT, reply_to_message_id TEXT NOT NULL DEFAULT '', reply_text TEXT, reply_message_id TEXT,
+    send_attempts INTEGER NOT NULL DEFAULT 0,
     end_reason TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL${extraJob})`)
   db.exec(`CREATE TABLE reply_job_messages (message_id TEXT NOT NULL, job_id TEXT NOT NULL${extraMember})`)
 
@@ -428,7 +497,16 @@ function makeLedger({ withColumns = true, jobs = [], messages = [], steerStates 
     if (withColumns) db.prepare("INSERT INTO reply_job_messages (message_id, job_id, steer_state) VALUES (?, 'fj_1', ?)").run(`om_${state}_${Math.random()}`, state)
   }
   for (const row of via) {
-    if (withColumns) db.prepare('UPDATE reply_jobs SET reply_via = ? WHERE job_id = ?').run(row.replyVia, row.jobId)
+    if (!withColumns) continue
+    // "Answered by reaction" is a whole shape, not one column: nothing was sent and
+    // nothing was tried. Writing only `reply_via` would produce the self-contradictory
+    // row the explanation criterion now reports on purpose.
+    if (row.replyVia === 'reaction') {
+      db.prepare('UPDATE reply_jobs SET reply_via = ?, reply_message_id = NULL, send_attempts = 0 WHERE job_id = ?')
+        .run('reaction', row.jobId)
+    } else {
+      db.prepare('UPDATE reply_jobs SET reply_via = ? WHERE job_id = ?').run(row.replyVia, row.jobId)
+    }
   }
   for (let index = 0; index < carried; index += 1) {
     if (withColumns) db.prepare('UPDATE reply_jobs SET carry_until = ? WHERE job_id = ?').run(Date.now() + 15_000, jobs[index]?.jobId ?? 'fj_1')
@@ -452,13 +530,33 @@ function passingLedger(options = {}) {
   })
 }
 
+/**
+ * A ledger with one reaction answer and one text answer.
+ *
+ * Both, because `answered` still demands the platform's own message id and a reaction
+ * has none: a ledger whose *only* answer was a reaction reports zero deliveries and
+ * fails that criterion. That verdict is deliberately unchanged here, so a plausible
+ * installation - some answers in prose, some acknowledged - is what these cases model.
+ */
+function reactionLedger(options = {}) {
+  return makeLedger({
+    jobs: [
+      { jobId: 'fj_reaction', state: 'replied', outcome: 'answer', endReason: 'ack-reaction' },
+      { jobId: 'fj_text', state: 'replied', outcome: 'answer' },
+    ],
+    messages: [{ messageId: 'om_r', jobId: 'fj_reaction' }, { messageId: 'om_t', jobId: 'fj_text' }],
+    via: [{ jobId: 'fj_reaction', replyVia: 'reaction' }],
+    ...options,
+  })
+}
+
 /** Run the CLI the way a caller does, with a profile pinned so nothing leaks in. */
 function runCheck(ledger, extra = []) {
   return spawnSync(process.execPath, [SCRIPT, '--db', ledger.db, '--profile', ledger.profile, ...extra], { encoding: 'utf8' })
 }
 
 test('the readings are printed even though they are not part of the verdict', () => {
-  const ledger = passingLedger({ steerStates: ['consumed'], carried: 1, via: [{ jobId: 'fj_1', replyVia: 'reaction' }], vetoed: 0 })
+  const ledger = reactionLedger({ steerStates: ['consumed'], carried: 1, vetoed: 0 })
   try {
     const run = runCheck(ledger)
     assert.equal(run.status, 0, run.stdout + run.stderr)
@@ -551,7 +649,7 @@ test('a profile path that does not exist fails instead of falling back', () => {
 })
 
 test('--require-ack accepts a ledger that shows a reaction', () => {
-  const ledger = passingLedger({ via: [{ jobId: 'fj_1', replyVia: 'reaction' }] })
+  const ledger = reactionLedger()
   try {
     const run = runCheck(ledger, ['--require-ack'])
     assert.equal(run.status, 0, run.stdout + run.stderr)
@@ -591,7 +689,7 @@ test('--require-ack calls a ledger without the column unreadable, not empty', ()
 })
 
 test('both requirements given means both must hold', () => {
-  const both = passingLedger({ steerStates: ['consumed'], via: [{ jobId: 'fj_1', replyVia: 'reaction' }] })
+  const both = reactionLedger({ steerStates: ['consumed'] })
   try {
     const run = runCheck(both, ['--require-steer', '--require-ack'])
     assert.equal(run.status, 0, run.stdout + run.stderr)

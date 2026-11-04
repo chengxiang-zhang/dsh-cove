@@ -240,9 +240,44 @@ const CLOSED_STATES = new Set(['replied', 'failed', 'cancelled', 'reply_uncertai
  * @property {string} [outcome]
  * @property {string} replyToMessageId
  * @property {string} [replyText]
+ * @property {string} [replyMessageId]
+ * @property {string} [endReason]
+ * @property {'text'|'reaction'} [replyVia] - how the answer reached the person.
+ * @property {number} [sendAttempts] - how many times a text send was tried.
  * @property {number} updatedAt
  * @property {number} createdAt
  */
+
+/**
+ * Whether this job's answer was a reaction rather than text.
+ *
+ * A reaction carries no body by design, and that is only a *complete* answer when
+ * nothing else happened: the ledger must show no message id (nothing was sent) and no
+ * send attempt (none was tried). Any one of those contradicts "answered with a
+ * reaction", and a row that contradicts itself is a defect worth naming.
+ * @param {JobFacts} job - one ledger row.
+ * @returns true when the reaction is the whole answer.
+ */
+export function answeredByReaction(job) {
+  return (job.replyVia ?? 'text') === 'reaction'
+    && (job.replyMessageId ?? '') === ''
+    && (job.sendAttempts ?? 0) === 0
+}
+
+/**
+ * Whether a row claims a reaction *and* a text delivery.
+ *
+ * This is not a lenient-reading question: `reply_via='reaction'` says no text went
+ * out, so a message id or a send attempt on the same row means one of the two
+ * writers is wrong. Reporting it as a pass would hide exactly the confusion this
+ * criterion exists to catch.
+ * @param {JobFacts} job - one ledger row.
+ * @returns true when the row cannot be true.
+ */
+export function contradictoryReaction(job) {
+  return (job.replyVia ?? 'text') === 'reaction'
+    && ((job.replyMessageId ?? '') !== '' || (job.sendAttempts ?? 0) > 0)
+}
 
 /**
  * Decide the four criteria from ledger facts.
@@ -283,11 +318,26 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
   // An unprompted notice that chose silence is a delivered outcome, not a gap; the
   // ledger marks it with `silent` so it can be told apart from a turn that broke.
   const choseSilence = job => job.kind === 'proactive' && job.outcome === 'empty' && (job.endReason ?? '') === 'silent'
+  // "Has something to say" is prose *or* a reaction that is the whole answer. The
+  // second form carries no text by design, so the old "empty body means silence" test
+  // reported a correct answer as a defect the first time the model chose to
+  // acknowledge. `answeredByReaction` demands all three quiet signals together, so
+  // this is not a blanket "empty body is fine".
   const unexplained = jobs.filter(job =>
     job.state !== 'cancelled'
     && (CLOSED_STATES.has(job.state) || job.state === 'replied')
     && (job.replyText ?? '').trim() === ''
+    && !answeredByReaction(job)
     && !choseSilence(job))
+  // A row that says both "answered by reaction" and "sent text" cannot be true, and
+  // is reported separately: it is not a missing body, it is a contradiction.
+  const contradictory = jobs.filter(job =>
+    (CLOSED_STATES.has(job.state) || job.state === 'replied') && contradictoryReaction(job))
+  // Reported next to the delivery count so an operator can see the shape of the
+  // answers; it deliberately does not change whether a delivery happened, which still
+  // requires the platform's own message id.
+  const reactionAnswers = rows => rows.filter(job =>
+    job.kind !== 'proactive' && job.state === 'replied' && job.outcome === 'answer' && answeredByReaction(job))
 
   const waitingTooLong = waiting.filter(item => now - item.receivedAt > stuckMs)
 
@@ -331,7 +381,7 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
       ok: jobs.length === 0 ? null : answered.length > 0,
       detail: jobs.length === 0
         ? '账本为空：还没有人发消息，或 responder 没有运行'
-        : `${answered.length} 条已回复（共 ${jobs.length} 个作业）`,
+        : `${answered.length} 条已回复（共 ${jobs.length} 个作业）${reactionAnswers(jobs).length === 0 ? '' : `，其中 ${reactionAnswers(jobs).length} 条以表情回答`}`,
       sql: "select count(*) from reply_jobs where state='replied' and outcome='answer'",
     },
     {
@@ -387,11 +437,13 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
     {
       id: 'explained',
       label: '每个结案作业都有话可说',
-      ok: unexplained.length === 0,
-      detail: unexplained.length === 0
-        ? '所有结案作业都带正文或说明'
-        : `${unexplained.length} 个作业结案却没有正文：${unexplained.map(job => `${job.jobId}(${job.state})`).join(', ')}`,
-      sql: "select job_id from reply_jobs where state in ('replied','failed','reply_uncertain') and coalesce(reply_text,'')=''",
+      ok: unexplained.length === 0 && contradictory.length === 0,
+      detail: contradictory.length > 0
+        ? `${contradictory.length} 个作业自相矛盾（claim 了表情回答，却又发过文字或有 message id）：${contradictory.map(job => `${job.jobId}(${job.state})`).join(', ')}`
+        : unexplained.length === 0
+          ? '所有结案作业都带正文、说明，或是一条完整成立的表情回答'
+          : `${unexplained.length} 个作业结案却没有正文：${unexplained.map(job => `${job.jobId}(${job.state})`).join(', ')}`,
+      sql: "select job_id from reply_jobs where state in ('replied','failed','reply_uncertain') and coalesce(reply_text,'')='' and reply_via is not 'reaction'",
     },
   ]
 }
@@ -522,6 +574,12 @@ function main(argv) {
       process.stdout.write('这通常意味着插件加载的是旧代码，或 responder 没有挂起来。\n')
       process.exit(1)
     }
+    // `reply_via` arrived with the acknowledgement path, so an older ledger does not
+    // have it. Reading it conditionally is what keeps this tool honest on both: an
+    // absent column means every answer was text, which is exactly what the previous
+    // build wrote.
+    const jobColumnNames = new Set(handle.prepare('PRAGMA table_info(reply_jobs)').all().map(row => String(row.name)))
+    const hasReplyVia = jobColumnNames.has('reply_via')
     const shapeJob = row => ({
       jobId: String(row.job_id),
       kind: String(row.kind ?? 'request'),
@@ -531,10 +589,12 @@ function main(argv) {
       ...(row.reply_text === null || row.reply_text === '' ? {} : { replyText: String(row.reply_text) }),
       ...(row.reply_message_id === null || row.reply_message_id === '' ? {} : { replyMessageId: String(row.reply_message_id) }),
       ...(row.end_reason === null ? {} : { endReason: String(row.end_reason) }),
+      replyVia: hasReplyVia && String(row.reply_via ?? 'text') === 'reaction' ? 'reaction' : 'text',
+      sendAttempts: Number(row.send_attempts ?? 0),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
     })
-    const columns = `job_id, kind, state, outcome, reply_to_message_id, reply_text, reply_message_id, end_reason, created_at, updated_at`
+    const columns = `job_id, kind, state, outcome, reply_to_message_id, reply_text, reply_message_id, end_reason, created_at, updated_at, send_attempts${hasReplyVia ? ', reply_via' : ''}`
     // Open jobs are read without the window: a job stuck for two days is exactly the
     // failure worth catching, and filtering it out hid it behind any recent success.
     const openStates = "'collecting','submitting','running','replying'"
