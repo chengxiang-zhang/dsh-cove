@@ -32,6 +32,7 @@ import { gateEvent, type GateInput, type GatingConfig } from '../../../core/lark
 import { toEnvelope, type LarkInboxEnvelope } from '../../../core/lark-inbox/queue.ts'
 import { FEISHU_SETTINGS_NAMESPACE, currentFeishuCredentials, createFeishuTextSender, describeFeishuCredentials, type FeishuCredentials } from '../feishu/index.ts'
 import { Config, LARK_INBOX_SETTINGS_NAMESPACE, autoReplyConfig, effectiveConfig, resolveQueueDir, type LarkInboxConfig } from './config.ts'
+import { createAuditSink } from './audit.ts'
 import { LarkGateway, type GatewayHealth, type GatewaySdk } from './gateway.ts'
 import { InboxStore } from './inbox-store.ts'
 import { ReplyResponder, type ReplyEnginePorts } from './responder.ts'
@@ -225,6 +226,13 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
           log.warn('dsh-lark-inbox: 心跳写入失败：%s', error instanceof Error ? error.message : String(error))
         }
       },
+      // The answer path's own trail, next to the ledger it describes. The sink swallows
+      // its own failures; this wrapper exists so a future one that does not still cannot
+      // reach the answering path. Built once per responder: the queue directory is part
+      // of the rebuild key, so a settings change re-targets it.
+      audit: createAuditSink({
+        dir: resolveQueueDir(effectiveConfig(current()), deps.dshHome ?? dshHome(env)),
+      }),
     })
     activeResponder = responder
     ownResponder = responder

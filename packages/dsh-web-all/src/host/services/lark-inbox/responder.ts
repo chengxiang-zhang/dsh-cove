@@ -58,6 +58,7 @@ import {
   type SteerVerdict,
 } from '../../../core/lark-inbox/reply-machine.ts'
 import type { AutoReplyConfig } from './config.ts'
+import type { AuditEvent, AuditSink } from './audit.ts'
 import type { InboxStore } from './inbox-store.ts'
 import type { ReplyJob } from './reply-store.ts'
 
@@ -179,6 +180,15 @@ export interface ResponderPorts {
    */
   readonly heartbeat?: (state: ResponderHeartbeat) => void
   /**
+   * The answer path's own trail of decisions, appended next to the ledger.
+   *
+   * Optional and strictly best-effort: the implementation this file is given swallows
+   * its own failures, and nothing here waits on it. It exists because the decisions
+   * that matter - why a message was folded in, why an acknowledgement was refused -
+   * are not recoverable from the ledger after the fact.
+   */
+  readonly audit?: AuditSink
+  /**
    * Waiting seam for the steer retries.
    *
    * Injected so a test can retry without actually waiting; production omits it and
@@ -293,6 +303,24 @@ export class ReplyResponder {
   }
 
   /**
+   * Record one decision on the answer path's own trail.
+   *
+   * Guarded here as well as inside the sink, because every call site is on a path
+   * whose job is to answer a person: a seam that throws must not reach them, even if
+   * a future implementation forgets to swallow.
+   * @param event - what was decided.
+   */
+  private audit(event: AuditEvent): void {
+    const sink = this.ports.audit
+    if (sink === undefined) return
+    try {
+      sink(event)
+    } catch {
+      // See `ports.audit`: the trail is never allowed to cost an answer.
+    }
+  }
+
+  /**
    * Write down that this responder exists, throttled.
    * @param force - write regardless of the throttle, for start and for settles.
    */
@@ -399,6 +427,7 @@ export class ReplyResponder {
     try {
       this.sweep()
     } catch (error) {
+      this.audit({ event: 'error', detail: { where: 'tick', error: describeError(error) } })
       this.ports.log.error(`lark-inbox: 回话推进失败：${describeError(error)}`)
     }
   }
@@ -512,6 +541,17 @@ export class ReplyResponder {
       deliver: config.mode !== 'probe',
     })
     if (result.attached) {
+      this.audit({
+        event: 'admit',
+        jobId: result.jobId,
+        convKey,
+        detail: {
+          opened: result.opened,
+          messageId,
+          chars: envelope.content.length,
+          deliver: config.mode !== 'probe',
+        },
+      })
       // Accepted and stored: this is the moment "I have your message" becomes true,
       // and the moment a person is most likely to be wondering.
       this.sendReceipt(messageId)
@@ -547,6 +587,12 @@ export class ReplyResponder {
     const inflight = gate.inflight
     if (inflight === undefined) return false
     if (!verdict.steer) {
+      this.audit({
+        event: 'steer',
+        ...(inflight === undefined ? {} : { jobId: inflight.jobId }),
+        convKey,
+        detail: { outcome: 'refused', reason: verdict.reason, messageId },
+      })
       if (this.shouldLogRefusal(verdict)) {
         this.ports.log.info(
           `lark-inbox: 消息 ${envelope.eventId} 未并入当前回合：${verdict.reason}`,
@@ -559,6 +605,12 @@ export class ReplyResponder {
       // product of this mode, and one day of them is what says whether the gates and
       // the timing are right before a message can change an answer mid-flight.
       const left = inflight.deadlineAt === undefined ? -1 : inflight.deadlineAt - now
+      this.audit({
+        event: 'steer',
+        jobId: inflight.jobId,
+        convKey,
+        detail: { outcome: 'shadow', turn: inflight.turn, deadlineLeftMs: left, messageId },
+      })
       this.ports.log.info(
         `lark-inbox: steer-shadow job=${inflight.jobId} turnBound=${inflight.turn ?? '-'} deadlineLeft=${left} steered=${this.store.reply.steerCount(inflight.jobId)} message=${messageId}`,
       )
@@ -575,8 +627,20 @@ export class ReplyResponder {
     })) {
       // A redelivery, or the turn ended while this message was being admitted. Both
       // mean the ordinary path is the right one.
+      this.audit({
+        event: 'steer',
+        jobId: inflight.jobId,
+        convKey,
+        detail: { outcome: 'promoted-skipped', reason: 'already-attached-or-closed', messageId },
+      })
       return false
     }
+    this.audit({
+      event: 'steer',
+      jobId: inflight.jobId,
+      convKey,
+      detail: { outcome: 'promoted', turn: inflight.turn, messageId, requestId },
+    })
     this.sendReceipt(messageId)
     void this.steerAsync({
       jobId: inflight.jobId,
@@ -680,6 +744,18 @@ export class ReplyResponder {
             debounceMs: this.ports.config().debounceMs,
             deliver: this.ports.config().mode !== 'probe',
           })
+          this.audit({
+            event: 'steer',
+            jobId: input.jobId,
+            detail: {
+              outcome: 'returned',
+              requestId: input.requestId,
+              messageId: input.messageId,
+              attempts: attempt,
+              error: describeError(error),
+              ...(returned === undefined ? { returnFailed: true } : { batchJobId: returned.jobId }),
+            },
+          })
           this.ports.log.warn(
             `lark-inbox: 插话未送达，改回下一批 job=${input.jobId} 原因=${describeError(error)}`
             + (returned === undefined ? '（退回失败）' : ` 批次=${returned.jobId}`),
@@ -726,6 +802,11 @@ export class ReplyResponder {
       // The job that owned it stopped before the engine picked it up, so it surfaced
       // inside a later job's turn. Record where it went, but leave that job's binding
       // alone: its own request id is what decides which turn it owns.
+      this.audit({
+        event: 'steer',
+        jobId: consumed.jobId,
+        detail: { outcome: 'stranded', reason: 'consumed-by-later-job', requestId, turn, otherJobId: running.jobId },
+      })
       this.ports.log.warn(
         `lark-inbox: 残留插话在别的回合被消费 steer=${requestId} 原作业=${consumed.jobId} 回合=${turn}`,
       )
@@ -733,16 +814,31 @@ export class ReplyResponder {
     }
     if (consumed.priorState !== 'pending') {
       // Already accounted for; only the turn it appeared in was missing.
+      this.audit({
+        event: 'steer',
+        jobId: running.jobId,
+        detail: { outcome: 'duplicate', priorState: consumed.priorState, requestId, turn },
+      })
       this.ports.log.warn(`lark-inbox: 插话重复出现 steer=${requestId} 状态=${consumed.priorState} 回合=${turn}`)
       return true
     }
     if (consumed.jobTurn !== turn) {
       this.store.reply.rebindTurn(running.jobId, turn, now)
+      this.audit({
+        event: 'steer',
+        jobId: running.jobId,
+        detail: { outcome: 'carried', requestId, fromTurn: consumed.jobTurn, toTurn: turn },
+      })
       this.ports.log.info(
         `lark-inbox: steer-carried job=${running.jobId} turn=${consumed.jobTurn ?? '-'}→${turn}`,
       )
       return true
     }
+    this.audit({
+      event: 'steer',
+      jobId: running.jobId,
+      detail: { outcome: 'consumed', requestId, turn },
+    })
     this.ports.log.info(`lark-inbox: steer-consumed job=${running.jobId} turn=${turn}`)
     return true
   }
@@ -773,6 +869,11 @@ export class ReplyResponder {
         now,
       })) {
         this.drafts.delete(job.jobId)
+        this.audit({
+          event: 'steer',
+          jobId: job.jobId,
+          detail: { outcome: 'carried', turn: job.turn, pending, carryChars: carryText.length },
+        })
         this.ports.log.info(
           `lark-inbox: 回合结束但待消费插话 ${pending} 条，保留槽位等下一回合 job=${job.jobId} turn=${job.turn ?? '-'}`,
         )
@@ -783,7 +884,14 @@ export class ReplyResponder {
       // This turn is closing for a reason that ends the exchange - a stop, a timeout,
       // a carry that ran out - so nothing here will ever consume them.
       const stranded = this.store.reply.strandPending(job.jobId, now)
-      if (stranded > 0) this.ports.log.warn(`lark-inbox: ${stranded} 条插话随回合结束搁置 job=${job.jobId}`)
+      if (stranded > 0) {
+        this.audit({
+          event: 'steer',
+          jobId: job.jobId,
+          detail: { outcome: 'stranded', reason: kind === '' ? 'unknown' : kind, pending: stranded },
+        })
+        this.ports.log.warn(`lark-inbox: ${stranded} 条插话随回合结束搁置 job=${job.jobId}`)
+      }
     }
     this.settleTurn(job, data)
   }
@@ -880,6 +988,12 @@ export class ReplyResponder {
           else if (job.state === 'replying') void this.deliver(job, now)
         } catch (error) {
           // One poisoned job must not park every other conversation's work.
+          this.audit({
+            event: 'error',
+            jobId: job.jobId,
+            convKey: job.convKey,
+            detail: { where: 'sweep', state: job.state, error: describeError(error) },
+          })
           this.ports.log.error(`lark-inbox: 推进 ${job.jobId} 失败：${describeError(error)}`)
         }
       }
@@ -1145,6 +1259,12 @@ export class ReplyResponder {
       idempotencyKey: job.jobId,
     })
     if (attempt.ok) {
+      this.audit({
+        event: 'send',
+        jobId: job.jobId,
+        convKey: job.convKey,
+        detail: { ok: true, attempt: attempts, messageId: attempt.messageId, chars: body.length },
+      })
       this.store.reply.markSent(job.jobId, attempt.messageId, this.ports.now())
       // Written here rather than when the turn closed: the outside reader should
       // see the answer land, not the moment its text became known.
@@ -1171,6 +1291,12 @@ export class ReplyResponder {
       }
       this.ports.log.error(`lark-inbox: 回复 ${job.jobId} 已尝试 ${Math.round(age / 3_600_000)} 小时仍发不出，放弃`)
     }
+    this.audit({
+      event: 'send',
+      jobId: job.jobId,
+      convKey: job.convKey,
+      detail: { ok: false, attempt: attempts, error: detail, retryable: attempt.retryable === true },
+    })
     this.store.reply.markSendFailed(job.jobId, detail, this.ports.now())
     this.beat(true)
     this.ports.log.error(`lark-inbox: 回复发送失败 ${job.jobId}：${detail}`)
@@ -1247,6 +1373,11 @@ export class ReplyResponder {
     if (type === 'turn/start') {
       const turn = typeof data.turn === 'number' ? data.turn : undefined
       if (turn !== undefined) this.turnCursor.set(sessionId, { turn, at: this.ports.now() })
+      this.audit({
+        event: 'turn',
+        jobId: running.jobId,
+        detail: { phase: 'start', turn },
+      })
       return
     }
 
@@ -1281,6 +1412,14 @@ export class ReplyResponder {
     const turn = typeof data.turn === 'number' ? data.turn : undefined
     if (turn === undefined || running.turn === undefined || turn !== running.turn) return
     this.turnCursor.delete(sessionId)
+    const endReason = typeof data.reason === 'object' && data.reason !== null
+      ? (data.reason as Record<string, unknown>).kind
+      : undefined
+    this.audit({
+      event: 'turn',
+      jobId: running.jobId,
+      detail: { phase: 'end', turn, reason: typeof endReason === 'string' ? endReason : 'unknown' },
+    })
     this.settleOrCarry(running, data)
   }
 
@@ -1390,6 +1529,12 @@ export class ReplyResponder {
             // of through the send step, which would have nothing to deliver.
             this.store.reply.markSent(job.jobId, undefined, now)
             this.beat(true)
+            this.audit({
+              event: 'ack',
+              jobId: job.jobId,
+              convKey: job.convKey,
+              detail: { outcome: 'chosen', messageId: target, emoji: REPLY_ACK_EMOJI, verdict: 'allowed' },
+            })
             this.ports.log.info(`lark-inbox: 以表情回执结案 job=${job.jobId} message=${target}`)
             return
           }
@@ -1400,20 +1545,44 @@ export class ReplyResponder {
           if (live === undefined || live.state !== 'running') {
             // Another path already settled it - a timeout, a stop - and that path owns
             // what the person is told. Sending our sentence now would be a second answer.
+            this.audit({
+              event: 'ack',
+              jobId: job.jobId,
+              convKey: job.convKey,
+              detail: { outcome: 'chosen', settledElsewhere: true, state: live?.state ?? 'deleted' },
+            })
             this.ports.log.warn(
               `lark-inbox: 表情已发但作业已由别的路径结案 job=${job.jobId} 状态=${live?.state ?? '已删除'}，不重复发文字`,
             )
             return
           }
+          this.audit({
+            event: 'ack',
+            jobId: job.jobId,
+            convKey: job.convKey,
+            detail: { outcome: 'close-refused', state: live.state },
+          })
           this.ports.log.warn(`lark-inbox: 表情已发但结案被拒 job=${job.jobId} 状态=${live.state}，改发兜底文字`)
         }
       } catch (error) {
+        this.audit({
+          event: 'ack',
+          jobId: job.jobId,
+          convKey: job.convKey,
+          detail: { outcome: 'react-failed', error: describeError(error) },
+        })
         this.ports.log.warn(`lark-inbox: 表情回执失败 job=${job.jobId}：${describeError(error)}`)
       }
     }
     // No reaction available, or it could not be made to count: the acknowledgement
     // still has to arrive as words. A `false` here means the job left this path's
     // hands entirely, which is the one case with nothing left to say.
+    this.audit({
+      event: 'ack',
+      jobId: job.jobId,
+      convKey: job.convKey,
+      detail: { outcome: 'fallback', text: ACK_FALLBACK_TEXT },
+    })
     if (!this.closeTurn(job, 'answer', ACK_FALLBACK_TEXT, 'ack-fallback')) {
       this.ports.log.warn(
         `lark-inbox: 兜底文字未能结案 job=${job.jobId}（状态 ${this.store.reply.job(job.jobId)?.state ?? '已删除'}）：该作业已不由本路径拥有`,
@@ -1480,6 +1649,12 @@ export class ReplyResponder {
         }
         // Vetoed: the model tried to answer a question with a reaction. The person
         // still gets a sentence, and the ledger says why so the prompt can be fixed.
+        this.audit({
+          event: 'ack',
+          jobId: job.jobId,
+          convKey: job.convKey,
+          detail: { outcome: 'vetoed', messages: texts.length, texts: texts.map(text => text.slice(0, 40)) },
+        })
         this.ports.log.warn(`lark-inbox: ack-vetoed job=${job.jobId} 本批不是纯确认，改发说明句`)
         this.closeTurn(job, 'empty', fallbackReplyText('empty'), 'ack-vetoed')
         return
