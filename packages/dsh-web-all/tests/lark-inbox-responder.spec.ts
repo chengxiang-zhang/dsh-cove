@@ -19,6 +19,7 @@ import type { AutoReplyConfig } from '../src/host/services/lark-inbox/config.ts'
 import { InboxStore } from '../src/host/services/lark-inbox/inbox-store.ts'
 import { ReplyResponder } from '../src/host/services/lark-inbox/responder.ts'
 import { createAutoReplyStatusTool } from '../src/host/services/lark-inbox/tools.ts'
+import { clearBotSessions, isBotSession } from '../src/host/services/feishu/bot-sessions.ts'
 
 const OWNER = 'ou_owner'
 const CHAT = 'oc_chat'
@@ -60,6 +61,8 @@ interface Harness {
   cancels: string[]
   sent: Array<{ to: string; text: string; target?: { replyToMessageId?: string; idempotencyKey?: string } }>
   sendResult: { ok: boolean; error?: string; retryable?: boolean }
+  /** A second responder over the same ledger, as a settings-driven rebuild makes. */
+  rebuild(): ReplyResponder
   advance(ms: number): void
   flush(): Promise<void>
   /** Store a message and run admission, as the gateway callback does. */
@@ -86,7 +89,7 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
     maxSubmitAttempts: 3,
     ...overrides,
   }
-  const responder = new ReplyResponder(store, {
+  const ports: ConstructorParameters<typeof ReplyResponder>[1] = {
     engine: {
       async ensureSession(input) { sessions.push(input) },
       async prompt(input) { prompts.push(input) },
@@ -103,7 +106,8 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
     config: () => config,
     now: () => clock,
     log: { info() {}, warn() {}, error() {} },
-  })
+  }
+  const responder = new ReplyResponder(store, ports)
   return {
     store,
     responder,
@@ -112,6 +116,7 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
     cancels,
     sent,
     sendResult,
+    rebuild: () => new ReplyResponder(store, { ...ports, setInterval: () => 0 }),
     advance: ms => { clock += ms },
     // The submit half is async by design; one macrotask turn drains it.
     flush: () => new Promise<void>(resolve => { setImmediate(resolve) }),
@@ -408,6 +413,17 @@ describe('manual control', () => {
     expect(harnessed.store.reply.job('fj_om_2')).toBeUndefined()
   })
 
+  it('keeps the notification path away from a session opened by /new', async () => {
+    const harnessed = harness()
+    harnessed.deliver(message(1, '/new'))
+    const replacement = replySessionId(CHAT, 2)
+    expect(harnessed.store.reply.binding(CHAT)?.sessionId).toBe(replacement)
+    // Every session this path drives must be marked, including the replacement:
+    // a `/new` that forgot it would double-notify from its first turn on.
+    expect(isBotSession(replacement)).toBe(true)
+    clearBotSessions()
+  })
+
   it('rotates the session on /new without answering anything', async () => {
     const harnessed = harness()
     harnessed.deliver(message(1, '/new'))
@@ -417,6 +433,32 @@ describe('manual control', () => {
     expect(harnessed.prompts).toHaveLength(0)
     expect(harnessed.store.reply.binding(CHAT)).toMatchObject({ generation: 2 })
     expect(harnessed.store.reply.binding(CHAT)?.sessionId).toBe(replySessionId(CHAT, 2))
+  })
+})
+
+describe('notification path hand-off', () => {
+  it('re-registers bound sessions when a replacement responder starts', async () => {
+    const harnessed = harness()
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    const sessionId = replySessionId(CHAT, 1)
+    expect(isBotSession(sessionId)).toBe(true)
+
+    // A settings change tears the responder down and builds another one over the
+    // same ledger. The replacement must reclaim the sessions, or the notification
+    // path would start pushing run-finished notices for answered conversations.
+    harnessed.responder.dispose()
+    expect(isBotSession(sessionId)).toBe(false)
+    const replacement = harnessed.rebuild()
+    replacement.start()
+    expect(isBotSession(sessionId)).toBe(true)
+    // And a teardown releases the claim: a session whose bot is gone must go back
+    // to being ordinary rather than staying silently exempt from notifications.
+    replacement.dispose()
+    expect(isBotSession(sessionId)).toBe(false)
+    clearBotSessions()
   })
 })
 

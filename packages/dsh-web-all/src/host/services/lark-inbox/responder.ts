@@ -345,7 +345,12 @@ export class ReplyResponder {
     this.store.reply.cancelCollectingFor(convKey, '用户要求开启新会话', now)
     const binding = this.store.reply.binding(convKey)
     const generation = (binding?.generation ?? 1) + 1
-    this.store.reply.rotateBinding(convKey, replySessionId(convKey, generation), now)
+    const next = replySessionId(convKey, generation)
+    this.store.reply.rotateBinding(convKey, next, now)
+    // The replacement session answers this conversation too, so the notification
+    // path has to know before the first turn runs in it - otherwise every turn
+    // after a `/new` would also push a finished-run notice.
+    markBotSession(next)
     this.ports.log.info(`lark-inbox: 会话 ${convKey} 已开启第 ${generation} 个会话`)
   }
 
