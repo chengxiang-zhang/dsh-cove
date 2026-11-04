@@ -152,8 +152,13 @@ external_session_stop(session_id)
 | `busy` | 达到全局并发上限，或该会话正在跑另一轮 |
 | `limit` | 会话记录数达到上限 |
 | `auth-required` | CLI 报未登录 / 缺少凭据 |
+| `provider-error` | CLI 起了但本轮没终帧 / 非零退出 / 事件流断裂（重试仍失败时请运营看宿主日志） |
 
 `auth-required` 必须由适配器识别 CLI 的 `Not logged in · Please run /login` 文本后转出，并在消息里指明「本机 `~/.claude/settings.json` 的 `env` 缺少 `ANTHROPIC_BASE_URL` 或 `ANTHROPIC_AUTH_TOKEN`」，不把原始报错透给模型。
+
+错误码到 HTTP 状态的映射是穷尽 switch：`cwd-invalid` → 400、`session-unknown` → 404、`busy` → 429、`provider-missing` → 501、`provider-error` → 502，`auth-required`、`session-closed`、`session-unresumable`、`limit` → 409。
+
+面板用的这组路由不等本轮结束：`/api/external-session/continue` 在轮次一开始就返回 200 与整份会话列表，本轮成败要看列表里该轮的 `status`；`/cancel` 与 `/close` 同样回整份列表。工具本身是同步阻塞的（见本节开头）。
 
 ## 8. 执行适配器
 
