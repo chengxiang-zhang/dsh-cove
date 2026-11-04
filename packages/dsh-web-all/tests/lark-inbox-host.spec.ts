@@ -71,6 +71,10 @@ describe('lark inbox config and wizard route contracts', () => {
       // config.ts, not settings, so they do not appear here.
       autoReplyMode: 'off', autoReplyOpenIds: [], autoReplyCwd: '', autoReplyPreamble: DEFAULT_REPLY_PREAMBLE,
       retentionDays: 30, autoReplyReceipt: true, proactiveNotice: false,
+      // Folding a message into the turn already running ships off as well: the
+      // first day of it is meant to be a `shadow` log somebody reads, not a
+      // behaviour that changes an answer while it is being written.
+      autoReplySteer: 'off',
     })
   })
 

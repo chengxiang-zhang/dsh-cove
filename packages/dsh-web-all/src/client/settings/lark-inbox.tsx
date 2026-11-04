@@ -70,6 +70,7 @@ export const LARK_INBOX_FIELDS = [
   'autoReplyPreamble',
   'retentionDays',
   'autoReplyReceipt',
+  'autoReplySteer',
   'proactiveNotice',
 ] as const
 
@@ -103,6 +104,8 @@ export interface LarkInboxSettings {
   autoReplyPreamble?: string
   retentionDays?: number
   autoReplyReceipt?: boolean
+  /** 运行中插话：off 等下一轮、shadow 只记日志、on 真的并进当前回合。 */
+  autoReplySteer?: 'off' | 'shadow' | 'on'
   proactiveNotice?: boolean
 }
 
@@ -208,6 +211,7 @@ export class LarkSettingsController {
       settingsTextField('autoReplyPreamble'),
       settingsNumberField('retentionDays'),
       booleanField('autoReplyReceipt'),
+      settingsTextField('autoReplySteer'),
       booleanField('proactiveNotice'),
     ])
     this.credentialForm = new SettingsFormModel<FeishuCredentialSettings>(scopes.credentials, [
@@ -470,6 +474,18 @@ export function LarkSettingsPage(props: LarkPageProps): ReactNode {
           {...state.autoReplyReceipt}
           onEdit={(text) => { props.edit('autoReplyReceipt', text) }}
           onReset={() => { props.resetField('autoReplyReceipt') }}
+        />
+        <SettingsValueField
+          id="lark-auto-reply-steer"
+          label={t('settings.autoReplySteer')}
+          hint={t('settings.autoReplySteerHint')}
+          overriddenLabel={t('settings.overridden')}
+          resetLabel={t('settings.reset')}
+          invalidLabel={t('settings.invalid')}
+          disabled={disabled}
+          {...state.autoReplySteer}
+          onEdit={(text) => { props.edit('autoReplySteer', text) }}
+          onReset={() => { props.resetField('autoReplySteer') }}
         />
         <SettingsValueField
           id="lark-proactive-notice"

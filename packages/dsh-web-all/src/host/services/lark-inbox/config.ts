@@ -17,6 +17,7 @@
 import { join } from 'node:path'
 import { registerFamilyNamespace } from '../family-config.ts'
 import { readSecret } from '../feishu/credentials.ts'
+import type { SteerMode } from '../../../core/lark-inbox/reply-machine.ts'
 import z from 'schemastery'
 
 export const LARK_INBOX_SETTINGS_NAMESPACE = 'lark-inbox'
@@ -26,6 +27,8 @@ export const LARK_APP_SECRET_ENV = 'LARK_APP_SECRET'
 export const LARK_DOMAINS = ['feishu', 'lark'] as const
 /** How far the answer path may go; see `core/lark-inbox/reply-machine.ts`. */
 export const REPLY_MODES = ['off', 'probe', 'self'] as const
+/** Whether an arriving message may join the running turn; see `steerDecision`. */
+export const STEER_MODES = ['off', 'shadow', 'on'] as const
 
 /**
  * Standing instructions carried by the first prompt of a conversation.
@@ -75,6 +78,11 @@ export interface AutoReplyConfig {
   receipt: boolean
   /** Whether the bot may speak first about work the person did not ask it about. */
   proactive: boolean
+  /**
+   * Whether a message arriving mid-turn may join it: `off`, `shadow` (decide and
+   * log only) or `on`. See `steerDecision` in `core/lark-inbox/reply-machine.ts`.
+   */
+  steer: SteerMode
 }
 
 /**
@@ -88,6 +96,32 @@ export interface AutoReplyConfig {
  */
 export const REPLY_DEBOUNCE_MS = 1500
 export const REPLY_TICK_MS = 2000
+/**
+ * How many steered messages one turn may take.
+ *
+ * A turn that accepts steer after steer never has to end, so the cap is what keeps
+ * "answer the question" from becoming "answer the conversation". Past it the
+ * message waits for the next batch, which is the behaviour without this feature.
+ */
+export const REPLY_STEER_MAX_PER_JOB = 4
+/**
+ * How much of a turn's deadline must remain before it takes more work.
+ *
+ * Below this the turn is close enough to its own cap that a steer would be folded
+ * into an answer about to be cut off, and the person would lose the line anyway -
+ * except now they would believe it had been delivered.
+ */
+export const REPLY_STEER_MIN_DEADLINE_LEFT_MS = 30_000
+/**
+ * How long a job waits for the turn that will consume a steer it missed.
+ *
+ * The engine opens that turn itself as soon as it can, so this is a bound on how
+ * long the person may be left without an answer when it never does. Fifteen
+ * seconds is longer than a model step and shorter than anyone's patience.
+ */
+export const REPLY_CARRY_GRACE_MS = 15_000
+/** Delivery attempts for one steer, each with the same request id. */
+export const REPLY_STEER_RETRIES = 2
 // Ten minutes, not three. The first real answer took eight seconds, but the
 // messages this bot will get are work requests in a repository, and the turn cap
 // is a backstop against hanging, not a deadline for thinking. The receipt is what
@@ -124,6 +158,12 @@ export interface LarkInboxConfig {
   autoReplyReceipt?: boolean
   /** Let the bot speak first about long runs the person did not ask it about. */
   proactiveNotice?: boolean
+  /**
+   * Whether a message arriving while a turn runs may join that turn: `off` waits
+   * for the next turn, `shadow` only writes down what it would have done, `on`
+   * folds it in.
+   */
+  autoReplySteer?: (typeof STEER_MODES)[number]
 }
 
 export const Config = z.object({
@@ -157,6 +197,11 @@ export const Config = z.object({
   // Off: speaking first is the one behaviour that can be unwelcome without being
   // wrong, so it waits for an operator to ask for it.
   proactiveNotice: z.boolean().default(false),
+  // Off, then shadow, then on. Folding a line into a turn that is already running
+  // changes what an answer is about, so the first day of this should be a log to
+  // read rather than a behaviour to discover - `shadow` runs every decision and
+  // touches nothing.
+  autoReplySteer: z.union(STEER_MODES).default('off'),
 }) as unknown as z<LarkInboxConfig>
 
 /**
@@ -181,6 +226,7 @@ export function autoReplyConfig(config: Required<LarkInboxConfig>): AutoReplyCon
     maxSubmitAttempts: REPLY_MAX_ATTEMPTS,
     receipt: config.autoReplyReceipt === true,
     proactive: config.proactiveNotice === true,
+    steer: STEER_MODES.includes(config.autoReplySteer) ? config.autoReplySteer : 'off',
   }
 }
 

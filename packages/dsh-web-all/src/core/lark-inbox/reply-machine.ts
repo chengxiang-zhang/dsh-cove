@@ -135,6 +135,135 @@ export function replyJobId(messageId: string | undefined, fallback: string): str
 export const REPLY_SESSION_PREFIX = 'feishu-'
 
 /**
+ * Derive the request id a steered message is delivered under.
+ *
+ * One message, one id, for the same reason a batch has one: the engine collapses a
+ * repeated request id instead of queueing the text twice, so a retried steer cannot
+ * add the same line to a turn twice. Prefixed so it can never be mistaken for a
+ * batch id in the ledger.
+ * @param messageId - the platform message id being folded in.
+ * @returns a stable, charset-safe id of at most {@link MAX_JOB_ID_CHARS}.
+ */
+export function steerRequestId(messageId: string): string {
+  const safe = messageId.trim().replace(/[^A-Za-z0-9_-]/gu, '_')
+  return `fs_${safe === '' ? 'unknown' : safe}`.slice(0, MAX_JOB_ID_CHARS)
+}
+
+/**
+ * How far a steered message may go.
+ *
+ * Three states rather than a switch, because turning this on is a change in how the
+ * bot behaves mid-answer and that deserves a rehearsal: `shadow` runs every decision
+ * and writes down what it would have done without touching the engine, so a day of
+ * logs can be read before anything is actually folded in.
+ */
+export type SteerMode = 'off' | 'shadow' | 'on'
+
+/** Why a message was not folded into the running turn. */
+export type SteerRefusal =
+  | 'disabled'
+  | 'no-turn-running'
+  | 'turn-not-bound'
+  | 'proactive-turn'
+  | 'stopping'
+  | 'timing-out'
+  | 'carrying'
+  | 'deadline-close'
+  | 'batch-open'
+  | 'too-many'
+
+/** What a fold-in decision needs to know about the running turn. */
+export interface SteerInflight {
+  readonly kind: string
+  readonly state: string
+  /** The turn the job bound to; absent while its prompt is still queued. */
+  readonly turn?: number | undefined
+  readonly stopRequested: boolean
+  /** Whether the sweep already asked this turn to stop for running too long. */
+  readonly timingOut: boolean
+  /** Set while the job waits for the turn that will consume an earlier steer. */
+  readonly carryUntil?: number | undefined
+  readonly deadlineAt?: number | undefined
+}
+
+/** Everything the fold-in decision is allowed to consider. */
+export interface SteerGateInput {
+  readonly mode: SteerMode
+  readonly inflight?: SteerInflight | undefined
+  /** Batches already collecting in this conversation. */
+  readonly collecting: number
+  /** Steers this job already owns. */
+  readonly steered: number
+  readonly now: number
+  /** How much of the turn's deadline must remain for it to accept more work. */
+  readonly minDeadlineLeftMs: number
+  /** How many steers one turn may take. */
+  readonly maxPerJob: number
+}
+
+export type SteerVerdict =
+  | { readonly steer: true }
+  | { readonly steer: false; readonly reason: SteerRefusal }
+
+/**
+ * Decide whether an arriving message joins the turn already running.
+ *
+ * Order is deliberate and every clause is a way the answer would otherwise be
+ * wrong: a turn that has not bound yet would receive the line *before* the question
+ * it belongs to (the engine takes next-step input ahead of the queued turn), a turn
+ * that is stopping would answer with the half it already had, an open batch means an
+ * earlier line is still unanswered and ordering matters, and an unlimited number of
+ * steers means a turn that never has to end.
+ *
+ * This decides only *where* a message goes. Whether it is a correction or a new task
+ * is the model's call, made with the whole conversation in front of it.
+ * @param input - switch, running turn, conversation and job counters.
+ * @returns whether to steer, and why not when the answer is no.
+ */
+export function steerDecision(input: SteerGateInput): SteerVerdict {
+  if (input.mode === 'off') return { steer: false, reason: 'disabled' }
+  const inflight = input.inflight
+  if (inflight === undefined || inflight.state !== 'running') return { steer: false, reason: 'no-turn-running' }
+  if (inflight.kind !== 'request') return { steer: false, reason: 'proactive-turn' }
+  if (inflight.turn === undefined) return { steer: false, reason: 'turn-not-bound' }
+  if (inflight.stopRequested) return { steer: false, reason: 'stopping' }
+  if (inflight.timingOut) return { steer: false, reason: 'timing-out' }
+  if (inflight.carryUntil !== undefined) return { steer: false, reason: 'carrying' }
+  const left = inflight.deadlineAt === undefined ? Number.POSITIVE_INFINITY : inflight.deadlineAt - input.now
+  if (left < input.minDeadlineLeftMs) return { steer: false, reason: 'deadline-close' }
+  if (input.collecting > 0) return { steer: false, reason: 'batch-open' }
+  if (input.steered >= input.maxPerJob) return { steer: false, reason: 'too-many' }
+  return { steer: true }
+}
+
+/**
+ * Wrap a steered line so the model can tell it apart from its original task.
+ *
+ * The marker is the whole mechanism: the turn already has the earlier question in
+ * context, and without a sign that this arrived mid-answer the model would treat a
+ * correction as a new topic and answer both. Kept in one place so the wording a
+ * person sees the model reason about never drifts from what the tests assert.
+ * @param text - the message body as the person wrote it.
+ * @returns the prompt content for one steered message.
+ */
+export function composeSteer(text: string): string {
+  return `（对方在你处理上一条时补充）\n${text.trim()}`
+}
+
+/**
+ * The sentence appended when steers never caught the turn they were meant for.
+ *
+ * Fixed text rather than model output: the whole point is to admit, in words the
+ * model cannot soften, that part of what the person said did not reach the answer.
+ * @param count - how many messages missed the turn.
+ * @returns the note to append to the reply, or an empty string for none.
+ */
+export function steerMissedNote(count: number): string {
+  if (count <= 0) return ''
+  return `（你后来补充的 ${count} 条没赶上这一轮，请再发一次。）`
+}
+
+/**
  * FNV-1a over two offsets, rendered as 16 hex characters.
  *
  * A hash is needed to turn a conversation key into a legal session id, and

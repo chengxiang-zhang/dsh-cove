@@ -77,8 +77,30 @@ export interface ReplyJob {
   readonly replyText?: string
   readonly replyMessageId?: string
   readonly lastError?: string
+  /**
+   * When a turn that still owed a steer ended, and the job is waiting for the turn
+   * the engine opens to consume it. Non-null means "hold the slot, do not answer".
+   */
+  readonly carryUntil?: number
+  /** Text the earlier turn had produced, joined into the reply that finally closes. */
+  readonly carryText?: string
+  /** The turn this job first bound to, kept for diagnosis across a carry. */
+  readonly firstTurn?: number
   readonly createdAt: number
   readonly updatedAt: number
+}
+
+/** What a member row says about a steer, when it is one. */
+export type SteerState = 'none' | 'pending' | 'consumed' | 'returned' | 'stranded'
+
+/** One message belonging to a job, with its steer bookkeeping. */
+export interface JobMessage {
+  readonly eventId: string
+  readonly messageId: string
+  readonly text: string
+  readonly steerState: SteerState
+  readonly steerRequestId?: string
+  readonly steerTurn?: number
 }
 
 /** What came back from attaching one message to the ledger. */
@@ -122,13 +144,16 @@ interface JobRow {
   reply_text: string | number | bigint | Uint8Array | null
   reply_message_id: string | number | bigint | Uint8Array | null
   last_error: string | number | bigint | Uint8Array | null
+  carry_until: number | bigint | null
+  carry_text: string | number | bigint | Uint8Array | null
+  first_turn: number | bigint | null
   created_at: number | bigint | null
   updated_at: number | bigint | null
 }
 
 const JOB_COLUMNS = `job_id, conv_key, session_id, kind, deliver, state, outcome, reply_to_message_id, collect_until,
   submitted_at, deadline_at, turn, next_attempt_at, submit_attempts, send_attempts, stop_requested,
-  reply_text, reply_message_id, last_error, created_at, updated_at`
+  reply_text, reply_message_id, last_error, carry_until, carry_text, first_turn, created_at, updated_at`
 
 function text(value: unknown): string {
   return value === null || value === undefined ? '' : String(value)
@@ -145,6 +170,17 @@ function optionalNumber(value: unknown): number | undefined {
 function optionalText(value: unknown): string | undefined {
   const body = text(value)
   return body === '' ? undefined : body
+}
+
+/** Read a member's steer state, defaulting to the ordinary case. */
+function toSteerState(value: unknown): SteerState {
+  switch (text(value)) {
+    case 'pending': return 'pending'
+    case 'consumed': return 'consumed'
+    case 'returned': return 'returned'
+    case 'stranded': return 'stranded'
+    default: return 'none'
+  }
 }
 
 /** One ledger over the inbox store's open connection. */
@@ -226,6 +262,43 @@ export class ReplyStore {
       seq INTEGER NOT NULL,
       UNIQUE (job_id, seq)
     )`)
+    // Steer bookkeeping, added in place for the same reason as the two columns
+    // above: an installation that already holds jobs must keep working, and the
+    // `state` CHECK cannot be widened, so a steered message is still an ordinary
+    // member of its job and only these columns say otherwise.
+    const messageColumns = this.db.prepare('PRAGMA table_info(reply_job_messages)').all() as unknown as Array<{ name?: unknown }>
+    if (!messageColumns.some(column => text(column.name) === 'steer_state')) {
+      this.db.exec(`ALTER TABLE reply_job_messages ADD COLUMN steer_state TEXT NOT NULL DEFAULT 'none'
+        CHECK (steer_state IN ('none','pending','consumed','returned','stranded'))`)
+    }
+    if (!messageColumns.some(column => text(column.name) === 'steer_request_id')) {
+      this.db.exec('ALTER TABLE reply_job_messages ADD COLUMN steer_request_id TEXT')
+    }
+    if (!messageColumns.some(column => text(column.name) === 'steer_turn')) {
+      this.db.exec('ALTER TABLE reply_job_messages ADD COLUMN steer_turn INTEGER')
+    }
+    if (!messageColumns.some(column => text(column.name) === 'steered_at')) {
+      this.db.exec('ALTER TABLE reply_job_messages ADD COLUMN steered_at INTEGER')
+    }
+    // One request id, one member: a retried steer collapses on the engine's own
+    // deduplication, and this index is what makes that identity local as well.
+    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_msgs_steer_req
+      ON reply_job_messages(steer_request_id) WHERE steer_request_id IS NOT NULL`)
+    this.db.exec(`CREATE INDEX IF NOT EXISTS ix_msgs_steer_pending
+      ON reply_job_messages(job_id) WHERE steer_state = 'pending'`)
+    // A job that must survive the turn that ended under it. `carry_until` is the
+    // wake-up time for the turn the engine opens to consume the steer it never got
+    // to; `carry_text` is the part of the answer already produced, so the reply that
+    // finally closes covers both turns instead of dropping the first half.
+    if (!jobColumns.some(column => text(column.name) === 'carry_until')) {
+      this.db.exec('ALTER TABLE reply_jobs ADD COLUMN carry_until INTEGER')
+    }
+    if (!jobColumns.some(column => text(column.name) === 'carry_text')) {
+      this.db.exec('ALTER TABLE reply_jobs ADD COLUMN carry_text TEXT')
+    }
+    if (!jobColumns.some(column => text(column.name) === 'first_turn')) {
+      this.db.exec('ALTER TABLE reply_jobs ADD COLUMN first_turn INTEGER')
+    }
   }
 
   /**
@@ -490,8 +563,8 @@ export class ReplyStore {
    * @param jobId - the batch.
    * @returns the stored payloads, decoded to their rendered text.
    */
-  messagesOf(jobId: string): Array<{ eventId: string; messageId: string; text: string }> {
-    const rows = this.db.prepare(`SELECT m.event_id, m.message_id, e.payload
+  messagesOf(jobId: string): JobMessage[] {
+    const rows = this.db.prepare(`SELECT m.event_id, m.message_id, m.steer_state, m.steer_request_id, m.steer_turn, e.payload
       FROM reply_job_messages m JOIN inbox_events e ON e.event_id = m.event_id
       WHERE m.job_id = ? ORDER BY m.seq ASC`).all(jobId) as unknown as Array<Record<string, unknown>>
     return rows.map(row => {
@@ -500,7 +573,14 @@ export class ReplyStore {
         const parsed: unknown = JSON.parse(text(row.payload))
         body = typeof parsed === 'object' && parsed !== null ? text((parsed as { content?: unknown }).content) : ''
       } catch { body = '' }
-      return { eventId: text(row.event_id), messageId: text(row.message_id), text: body }
+      return {
+        eventId: text(row.event_id),
+        messageId: text(row.message_id),
+        text: body,
+        steerState: toSteerState(row.steer_state),
+        ...(optionalText(row.steer_request_id) === undefined ? {} : { steerRequestId: text(row.steer_request_id) }),
+        ...(optionalNumber(row.steer_turn) === undefined ? {} : { steerTurn: numberOrZero(row.steer_turn) }),
+      }
     })
   }
 
@@ -529,8 +609,9 @@ export class ReplyStore {
       WHERE (state = 'collecting' AND collect_until <= ? AND next_attempt_at <= ?)
          OR (state = 'submitting' AND deadline_at IS NOT NULL AND deadline_at <= ?)
          OR (state = 'running' AND deadline_at IS NOT NULL AND deadline_at <= ?)
+         OR (state = 'running' AND carry_until IS NOT NULL AND carry_until <= ?)
          OR (state = 'replying' AND next_attempt_at <= ?)
-      ORDER BY updated_at ASC`).all(now, now, now, now, now) as unknown as JobRow[]
+      ORDER BY updated_at ASC`).all(now, now, now, now, now, now) as unknown as JobRow[]
     return rows.map(toJob)
   }
 
@@ -672,8 +753,8 @@ export class ReplyStore {
    * @param now - current time.
    */
   bindTurn(jobId: string, turn: number, now: number): void {
-    this.db.prepare('UPDATE reply_jobs SET turn = ?, updated_at = ? WHERE job_id = ? AND turn IS NULL')
-      .run(turn, now, jobId)
+    this.db.prepare(`UPDATE reply_jobs SET turn = ?, first_turn = COALESCE(first_turn, ?), updated_at = ?
+      WHERE job_id = ? AND turn IS NULL`).run(turn, turn, now, jobId)
   }
 
   /**
@@ -742,7 +823,7 @@ export class ReplyStore {
   ): boolean {
     const result = this.db.prepare(`UPDATE reply_jobs
       SET state = 'replying', outcome = ?, reply_text = ?, last_error = NULL, end_reason = ?,
-          next_attempt_at = ?, updated_at = ?
+          next_attempt_at = ?, carry_until = NULL, updated_at = ?
       WHERE job_id = ? AND state = 'running'`).run(outcome, replyText, endReason, nextAttemptAt, now, jobId)
     return Number(result.changes) === 1
   }
@@ -842,6 +923,239 @@ export class ReplyStore {
   }
 
   /**
+   * How many batches are already collecting in a conversation.
+   *
+   * A steer must not overtake them: the message that arrives while a batch is open
+   * belongs behind the batch the person's earlier line opened, or two messages sent
+   * a second apart would be answered in the wrong order.
+   * @param convKey - conversation key.
+   * @returns the number of open batches, which the schema caps at one.
+   */
+  collectingIn(convKey: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM reply_jobs WHERE conv_key = ? AND state = 'collecting'")
+      .get(convKey) as unknown as { n?: unknown } | undefined
+    return numberOrZero(row?.n)
+  }
+
+  /**
+   * Attach one arriving message to the turn that is already running.
+   *
+   * The message becomes an ordinary member of that job - same table, same
+   * uniqueness rules - and only `steer_state` separates it from the messages whose
+   * text the prompt was built from. That is what keeps "one reply per job" true
+   * without a second job existing while the first holds `ux_jobs_inflight`.
+   * @param input - the message, its target job, and the request id it will steer with.
+   * @returns true when the member was added; false for a redelivery or a job that
+   *   is no longer running.
+   */
+  attachSteer(input: {
+    eventId: string
+    messageId: string
+    jobId: string
+    steerRequestId: string
+    now: number
+  }): boolean {
+    return this.transaction(() => {
+      const known = this.db.prepare('SELECT job_id FROM reply_job_messages WHERE event_id = ?')
+        .get(input.eventId) as unknown as { job_id?: unknown } | undefined
+      if (known !== undefined) return false
+      const target = this.db.prepare('SELECT state, conv_key FROM reply_jobs WHERE job_id = ?')
+        .get(input.jobId) as unknown as { state?: unknown; conv_key?: unknown } | undefined
+      if (target === undefined || text(target.state) !== 'running') return false
+      const seq = numberOrZero((this.db.prepare('SELECT COUNT(*) AS n FROM reply_job_messages WHERE job_id = ?')
+        .get(input.jobId) as unknown as { n?: unknown }).n)
+      this.db.prepare(`INSERT INTO reply_job_messages
+        (event_id, message_id, job_id, seq, steer_state, steer_request_id, steered_at)
+        VALUES (?, ?, ?, ?, 'pending', ?, ?)`)
+        .run(input.eventId, input.messageId, input.jobId, seq, input.steerRequestId, input.now)
+      this.db.prepare("UPDATE inbox_events SET status = 'routed', updated_at = ? WHERE event_id = ?")
+        .run(input.now, input.eventId)
+      this.db.prepare('UPDATE conv_bindings SET updated_at = ? WHERE conv_key = ?').run(input.now, text(target.conv_key))
+      return true
+    })
+  }
+
+  /**
+   * Count the steers one job has taken on.
+   *
+   * Returned members are excluded: they left the job, so they no longer extend the
+   * turn they were meant to join. The cap exists because a turn accepting steer
+   * after steer never has to end.
+   * @param jobId - the job.
+   * @returns how many steers it still owns.
+   */
+  steerCount(jobId: string): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM reply_job_messages
+      WHERE job_id = ? AND steer_state IN ('pending','consumed','stranded')`)
+      .get(jobId) as unknown as { n?: unknown } | undefined
+    return numberOrZero(row?.n)
+  }
+
+  /**
+   * Count the steers of one job that no turn has consumed yet.
+   * @param jobId - the job.
+   * @returns how many are still waiting to be picked up.
+   */
+  pendingSteerCount(jobId: string): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM reply_job_messages
+      WHERE job_id = ? AND steer_state = 'pending'`).get(jobId) as unknown as { n?: unknown } | undefined
+    return numberOrZero(row?.n)
+  }
+
+  /**
+   * Record that a turn consumed one steered message.
+   *
+   * A `pending` member becomes `consumed` and the job's reply target moves to it, so
+   * the answer threads onto the line the person added last - the same rule a message
+   * joining a collecting batch already follows. A `stranded` member only records the
+   * turn it finally appeared in: it belongs to a job that already answered, and
+   * rewriting that job would make it look like it was still owed something.
+   * @param input - the steer request id and the turn that consumed it.
+   * @returns the member and its owning job, or undefined when no such steer exists.
+   */
+  consumedSteer(input: { requestId: string; turn: number; now: number }): {
+    jobId: string
+    messageId: string
+    priorState: SteerState
+    jobState: ReplyJobState
+    jobTurn?: number
+  } | undefined {
+    return this.transaction(() => {
+      const member = this.db.prepare(`SELECT event_id, message_id, job_id, steer_state FROM reply_job_messages
+        WHERE steer_request_id = ?`).get(input.requestId) as unknown as Record<string, unknown> | undefined
+      if (member === undefined) return undefined
+      const priorState = toSteerState(member.steer_state)
+      const jobId = text(member.job_id)
+      const messageId = text(member.message_id)
+      this.db.prepare('UPDATE reply_job_messages SET steer_turn = ?, steered_at = ? WHERE event_id = ?')
+        .run(input.turn, input.now, text(member.event_id))
+      if (priorState === 'pending') {
+        this.db.prepare("UPDATE reply_job_messages SET steer_state = 'consumed' WHERE event_id = ?")
+          .run(text(member.event_id))
+        this.db.prepare('UPDATE reply_jobs SET reply_to_message_id = ?, updated_at = ? WHERE job_id = ?')
+          .run(messageId, input.now, jobId)
+      }
+      const job = this.db.prepare('SELECT state, turn FROM reply_jobs WHERE job_id = ?')
+        .get(jobId) as unknown as { state?: unknown; turn?: unknown } | undefined
+      return {
+        jobId,
+        messageId,
+        priorState,
+        jobState: text(job?.state) as ReplyJobState,
+        ...(optionalNumber(job?.turn) === undefined ? {} : { jobTurn: numberOrZero(job?.turn) }),
+      }
+    })
+  }
+
+  /**
+   * Move a job onto the turn that actually consumed its steer.
+   *
+   * Unlike {@link bindTurn} this overwrites: the point is that the job was owed a
+   * turn it had not seen yet, and its own `user/message` only ever arrives once per
+   * turn. Clearing `carry_until` in the same statement is what ends the hold - the
+   * held turn is here, so the normal settle path applies again.
+   * @param jobId - the job.
+   * @param turn - the turn that consumed the steer.
+   * @param now - current time.
+   */
+  rebindTurn(jobId: string, turn: number, now: number): void {
+    this.db.prepare(`UPDATE reply_jobs SET turn = ?, carry_until = NULL, updated_at = ?
+      WHERE job_id = ? AND state = 'running'`).run(turn, now, jobId)
+  }
+
+  /**
+   * Keep a job alive across the turn that ended while it still owed a steer.
+   *
+   * The job stays `running`, so it keeps the conversation's slot and no second job
+   * can submit behind it; the text produced so far is parked in `carry_text` so the
+   * reply that finally closes covers both turns instead of throwing the first away.
+   * @param input - the job, the parked text, and when the wait gives up.
+   * @returns true when this call held it.
+   */
+  holdForCarry(input: { jobId: string; carryText: string; carryUntil: number; now: number }): boolean {
+    const result = this.db.prepare(`UPDATE reply_jobs SET carry_until = ?, carry_text = ?, updated_at = ?
+      WHERE job_id = ? AND state = 'running'`).run(input.carryUntil, input.carryText, input.now, input.jobId)
+    return Number(result.changes) === 1
+  }
+
+  /**
+   * Give up on steers no turn will consume.
+   *
+   * Called when the job is being closed for a reason that ends the whole exchange -
+   * a stop, a timeout, a carry that expired - and by recovery, where the process
+   * that was going to consume them is gone.
+   * @param jobId - the job being closed.
+   * @param now - current time.
+   * @returns how many members were stranded.
+   */
+  strandPending(jobId: string, now: number): number {
+    const result = this.db.prepare(`UPDATE reply_job_messages SET steer_state = 'stranded', steered_at = ?
+      WHERE job_id = ? AND steer_state = 'pending'`).run(now, jobId)
+    return Number(result.changes)
+  }
+
+  /**
+   * Put a steer that never reached the engine back in the queue.
+   *
+   * One transaction, because the two half-states are both wrong: a member pointing
+   * at a batch that does not exist would never be answered, and a batch whose
+   * message is still owned by the running job would answer it twice.
+   * @param input - the member, the id a new batch would use, and its window.
+   * @returns the batch that now owns the message, or undefined when the member was
+   *   not pending and nothing changed.
+   */
+  returnSteer(input: {
+    eventId: string
+    jobId: string
+    now: number
+    debounceMs: number
+    deliver?: boolean
+  }): { jobId: string; opened: boolean } | undefined {
+    return this.transaction(() => {
+      const member = this.db.prepare(`SELECT message_id, job_id, steer_state FROM reply_job_messages
+        WHERE event_id = ?`).get(input.eventId) as unknown as Record<string, unknown> | undefined
+      if (member === undefined || toSteerState(member.steer_state) !== 'pending') return undefined
+      const messageId = text(member.message_id)
+      const owner = this.db.prepare('SELECT conv_key FROM reply_jobs WHERE job_id = ?')
+        .get(text(member.job_id)) as unknown as { conv_key?: unknown } | undefined
+      if (owner === undefined) return undefined
+      const convKey = text(owner.conv_key)
+
+      const open = this.db.prepare(`SELECT job_id FROM reply_jobs
+        WHERE conv_key = ? AND state = 'collecting' AND kind = 'request'`)
+        .get(convKey) as unknown as { job_id?: unknown } | undefined
+      let batchId: string
+      let opened = false
+      if (open === undefined) {
+        // The id was never used: the steer path attaches to a running job instead of
+        // opening a batch, so this id is free unless a redelivery opened one.
+        const taken = this.db.prepare('SELECT state FROM reply_jobs WHERE job_id = ?')
+          .get(input.jobId) as unknown as { state?: unknown } | undefined
+        if (taken !== undefined && text(taken.state) !== 'collecting') return undefined
+        if (taken === undefined) {
+          this.db.prepare(`INSERT INTO reply_jobs
+            (job_id, conv_key, session_id, deliver, state, reply_to_message_id, collect_until, created_at, updated_at)
+            VALUES (?, ?, '', ?, 'collecting', ?, ?, ?, ?)`)
+            .run(input.jobId, convKey, input.deliver === false ? 0 : 1, messageId,
+              input.now + input.debounceMs, input.now, input.now)
+        }
+        batchId = input.jobId
+        opened = taken === undefined
+      } else {
+        batchId = text(open.job_id)
+      }
+
+      const seq = numberOrZero((this.db.prepare('SELECT COUNT(*) AS n FROM reply_job_messages WHERE job_id = ?')
+        .get(batchId) as unknown as { n?: unknown }).n)
+      this.db.prepare(`UPDATE reply_job_messages SET job_id = ?, seq = ?, steer_state = 'returned'
+        WHERE event_id = ?`).run(batchId, seq, input.eventId)
+      this.db.prepare(`UPDATE reply_jobs SET collect_until = MAX(collect_until, ?), reply_to_message_id = ?, updated_at = ?
+        WHERE job_id = ?`).run(input.now + input.debounceMs, messageId, input.now, batchId)
+      return { jobId: batchId, opened }
+    })
+  }
+
+  /**
    * Ask the in-flight turn of a conversation to stop.
    * @param convKey - conversation key.
    * @param now - current time.
@@ -909,7 +1223,10 @@ export class ReplyStore {
       }
       if (job.state === 'running') {
         // The turn may have run tools already; re-running it would repeat side
-        // effects, so it becomes an explained interruption instead.
+        // effects, so it becomes an explained interruption instead. Its steers are
+        // stranded in the same breath: nothing in this process will consume them, and
+        // leaving them pending would keep them looking like work still to come.
+        this.strandPending(job.jobId, now)
         this.finishTurn(job.jobId, 'interrupted', fallbackText(job), 'recovered-after-restart', now)
         interrupted += 1
         continue
@@ -1068,6 +1385,9 @@ function toJob(row: JobRow): ReplyJob {
     ...(optionalText(row.reply_text) === undefined ? {} : { replyText: text(row.reply_text) }),
     ...(optionalText(row.reply_message_id) === undefined ? {} : { replyMessageId: text(row.reply_message_id) }),
     ...(optionalText(row.last_error) === undefined ? {} : { lastError: text(row.last_error) }),
+    ...(optionalNumber(row.carry_until) === undefined ? {} : { carryUntil: numberOrZero(row.carry_until) }),
+    ...(optionalText(row.carry_text) === undefined ? {} : { carryText: text(row.carry_text) }),
+    ...(optionalNumber(row.first_turn) === undefined ? {} : { firstTurn: numberOrZero(row.first_turn) }),
     createdAt: numberOrZero(row.created_at),
     updatedAt: numberOrZero(row.updated_at),
   }

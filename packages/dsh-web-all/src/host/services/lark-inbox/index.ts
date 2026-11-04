@@ -251,13 +251,16 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
           )
         }
       },
-      async prompt({ requestId, sessionId, text }): Promise<void> {
+      async prompt({ requestId, sessionId, text, mode }): Promise<void> {
         // A fresh signal per call: this call has no cancellation of its own - the
         // turn is cancelled through `cancel` below - and a shared signal would let
         // one cancellation poison every later prompt.
         const signal = new AbortController().signal
+        // The mode is passed through rather than chosen here: `steer` is the engine's
+        // own delivery of one message at the next step boundary of the running turn,
+        // and only the answer path knows whether a message is allowed to do that.
         const accepted = await controller().prompt(
-          { requestId, sessionId, mode: 'queue', content: [{ type: 'text', text }] },
+          { requestId, sessionId, mode, content: [{ type: 'text', text }] },
           signal,
         )
         if (accepted?.accepted !== true) throw new Error('引擎未接受这次 prompt')

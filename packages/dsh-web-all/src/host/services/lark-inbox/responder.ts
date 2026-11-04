@@ -30,17 +30,26 @@ import {
   PROACTIVE_MIN_RUN_MS,
   PROACTIVE_QUIET_FROM_HOUR,
   PROACTIVE_QUIET_TO_HOUR,
+  REPLY_CARRY_GRACE_MS,
+  REPLY_STEER_MAX_PER_JOB,
+  REPLY_STEER_MIN_DEADLINE_LEFT_MS,
+  REPLY_STEER_RETRIES,
 } from './config.ts'
 import {
   admitReply,
   assistantTextOf,
   clampReplyText,
   composePrompt,
+  composeSteer,
   fallbackReplyText,
   replyJobId,
   replySessionId,
+  steerDecision,
+  steerMissedNote,
+  steerRequestId,
   type ReplyMode,
   type ReplyOutcome,
+  type SteerVerdict,
 } from '../../../core/lark-inbox/reply-machine.ts'
 import type { AutoReplyConfig } from './config.ts'
 import type { InboxStore } from './inbox-store.ts'
@@ -76,6 +85,15 @@ export const SILENT_REPLY_TOKEN = 'SILENT'
 /** Marker written to `last_error` while a cancelled turn's end is still expected. */
 const TIMEOUT_MARKER = 'timeout-requested'
 
+/**
+ * Turn endings that leave the exchange open.
+ *
+ * A completed, capped or failed turn still expects to be followed by the turn that
+ * consumes a steer it never reached; an aborted one was cancelled - by a stop or by
+ * the timeout sweep - and nothing more is coming.
+ */
+const STEER_CONTINUING_KINDS = new Set(['completed', 'max-tokens', 'error', 'blocked'])
+
 /** A send result, as the reply path needs it. */
 export interface ReplySendResult {
   readonly ok: boolean
@@ -103,8 +121,20 @@ export interface ReplySendPort {
 export interface ReplyEnginePorts {
   /** Create the session with this exact id, or adopt the one that exists. */
   ensureSession(input: { sessionId: string; cwd: string }): Promise<void>
-  /** Ask for one user turn. Resolves when the engine has accepted it. */
-  prompt(input: { requestId: string; sessionId: string; text: string }): Promise<void>
+  /**
+   * Ask for one user turn, or fold a message into the turn already running.
+   *
+   * `queue` waits for the next turn; `steer` is delivered at the next step boundary
+   * of the current one. The mode is the engine's own, not a wrapper: a steer is an
+   * inbox splice, and anything that simulated one would have to fake the events this
+   * file depends on.
+   */
+  prompt(input: {
+    requestId: string
+    sessionId: string
+    text: string
+    mode: 'queue' | 'steer'
+  }): Promise<void>
   /** Cancel whatever runs in a session; a no-op when nothing does. */
   cancel(sessionId: string): void
 }
@@ -131,6 +161,14 @@ export interface ResponderPorts {
    * healthy for an hour. Best-effort: a failed write must not stop a sweep.
    */
   readonly heartbeat?: (state: ResponderHeartbeat) => void
+  /**
+   * Waiting seam for the steer retries.
+   *
+   * Injected so a test can retry without actually waiting; production omits it and
+   * gets a real timer. Only the backoff between steer attempts uses it, never a
+   * path that decides whether a message is answered.
+   */
+  readonly sleep?: (ms: number) => Promise<void>
 }
 
 /** What the answer path writes down about itself, for readers outside the process. */
@@ -422,6 +460,10 @@ export class ReplyResponder {
     }
 
     markBotSession(sessionId)
+    // Where this message goes is decided before it is attached, not after: once it
+    // belongs to a batch, "is a batch already open" answers yes by construction and
+    // the ordering rule that keeps two lines in order could never be applied.
+    if (this.steerThis(convKey, now, config, envelope, messageId, sessionId)) return
     const result = this.store.reply.attach({
       eventId: envelope.eventId,
       messageId,
@@ -439,6 +481,298 @@ export class ReplyResponder {
       // and the moment a person is most likely to be wondering.
       this.sendReceipt(messageId)
       this.requestSweep()
+    }
+  }
+
+  /**
+   * Try to fold one arriving message into the turn that is already running.
+   *
+   * Returns true when it took the message: it either attached it to the running job
+   * or, in shadow mode, only wrote down what it would have done. False means the
+   * caller opens a batch exactly as before, which is what makes every refusal
+   * harmless rather than a partial state.
+   * @param convKey - conversation key.
+   * @param now - current time.
+   * @param config - live answer-path configuration.
+   * @param envelope - the stored message.
+   * @param messageId - its platform message id.
+   * @param sessionId - the conversation's session.
+   * @returns whether this message was consumed here.
+   */
+  private steerThis(
+    convKey: string,
+    now: number,
+    config: AutoReplyConfig,
+    envelope: LarkInboxEnvelope,
+    messageId: string,
+    sessionId: string,
+  ): boolean {
+    const gate = this.steerGate(convKey, now, config)
+    const verdict = gate.verdict
+    const inflight = gate.inflight
+    if (inflight === undefined) return false
+    if (!verdict.steer) {
+      if (this.shouldLogRefusal(verdict)) {
+        this.ports.log.info(
+          `lark-inbox: 消息 ${envelope.eventId} 未并入当前回合：${verdict.reason}`,
+        )
+      }
+      return false
+    }
+    if (config.steer === 'shadow') {
+      // Every gate has been applied and nothing has been touched: the log line is the
+      // product of this mode, and one day of them is what says whether the gates and
+      // the timing are right before a message can change an answer mid-flight.
+      const left = inflight.deadlineAt === undefined ? -1 : inflight.deadlineAt - now
+      this.ports.log.info(
+        `lark-inbox: steer-shadow job=${inflight.jobId} turnBound=${inflight.turn ?? '-'} deadlineLeft=${left} steered=${this.store.reply.steerCount(inflight.jobId)} message=${messageId}`,
+      )
+      return false
+    }
+    const requestId = steerRequestId(messageId)
+    const text = envelope.content
+    if (!this.store.reply.attachSteer({
+      eventId: envelope.eventId,
+      messageId,
+      jobId: inflight.jobId,
+      steerRequestId: requestId,
+      now,
+    })) {
+      // A redelivery, or the turn ended while this message was being admitted. Both
+      // mean the ordinary path is the right one.
+      return false
+    }
+    this.sendReceipt(messageId)
+    void this.steerAsync({
+      jobId: inflight.jobId,
+      sessionId,
+      requestId,
+      text,
+      eventId: envelope.eventId,
+      messageId,
+    })
+    return true
+  }
+
+  /**
+   * Whether a refused fold-in deserves a line in the log.
+   *
+   * The ordinary refusals - nothing running, an open batch - are the normal way a
+   * message is handled and would otherwise write a line for every single one. What
+   * is worth reading later is a turn that was close to taking the message and did
+   * not.
+   * @param verdict - the refusal.
+   * @returns true when the reason is not the everyday case.
+   */
+  private shouldLogRefusal(verdict: SteerVerdict): boolean {
+    if (verdict.steer) return false
+    if (verdict.reason === 'disabled') return false
+    return verdict.reason !== 'no-turn-running' && verdict.reason !== 'batch-open'
+  }
+
+  /**
+   * Read the counters one fold-in decision is allowed to consider.
+   * @param convKey - conversation key.
+   * @param now - current time.
+   * @param config - live answer-path configuration.
+   * @returns the verdict and, when there is one, the running job it is about.
+   */
+  private steerGate(
+    convKey: string,
+    now: number,
+    config: AutoReplyConfig,
+  ): { verdict: SteerVerdict; inflight?: ReplyJob } {
+    const inflight = this.store.reply.inflightJob(convKey)
+    const verdict = steerDecision({
+      mode: config.steer,
+      ...(inflight === undefined ? {} : {
+        inflight: {
+          kind: inflight.kind,
+          state: inflight.state,
+          ...(inflight.turn === undefined ? {} : { turn: inflight.turn }),
+          stopRequested: inflight.stopRequested,
+          timingOut: inflight.lastError === TIMEOUT_MARKER,
+          ...(inflight.carryUntil === undefined ? {} : { carryUntil: inflight.carryUntil }),
+          ...(inflight.deadlineAt === undefined ? {} : { deadlineAt: inflight.deadlineAt }),
+        },
+      }),
+      collecting: this.store.reply.collectingIn(convKey),
+      steered: inflight === undefined ? 0 : this.store.reply.steerCount(inflight.jobId),
+      now,
+      minDeadlineLeftMs: REPLY_STEER_MIN_DEADLINE_LEFT_MS,
+      maxPerJob: REPLY_STEER_MAX_PER_JOB,
+    })
+    return { verdict, ...(inflight === undefined ? {} : { inflight }) }
+  }
+
+  /**
+   * Deliver one folded-in message, and give up into the next batch if it will not go.
+   *
+   * Retries reuse the same request id, which is what makes them safe: if an attempt
+   * that reported a failure did in fact reach the inbox, the engine answers the
+   * repeat with the acceptance it already granted instead of queueing the text a
+   * second time. When every attempt fails the member returns to a collecting batch,
+   * so the message keeps the answer it was always owed.
+   * @param input - the job, its session, the request id and the message body.
+   */
+  private async steerAsync(input: {
+    jobId: string
+    sessionId: string
+    requestId: string
+    text: string
+    eventId: string
+    messageId: string
+  }): Promise<void> {
+    const text = composeSteer(input.text)
+    let attempt = 0
+    for (;;) {
+      try {
+        await this.ports.engine.prompt({
+          requestId: input.requestId,
+          sessionId: input.sessionId,
+          text,
+          mode: 'steer',
+        })
+        this.ports.log.info(`lark-inbox: 已插话 job=${input.jobId} message=${input.messageId} 第 ${attempt + 1} 次`)
+        return
+      } catch (error) {
+        attempt += 1
+        if (attempt > REPLY_STEER_RETRIES) {
+          const returned = this.store.reply.returnSteer({
+            eventId: input.eventId,
+            jobId: replyJobId(input.messageId, input.eventId),
+            now: this.ports.now(),
+            debounceMs: this.ports.config().debounceMs,
+            deliver: this.ports.config().mode !== 'probe',
+          })
+          this.ports.log.warn(
+            `lark-inbox: 插话未送达，改回下一批 job=${input.jobId} 原因=${describeError(error)}`
+            + (returned === undefined ? '（退回失败）' : ` 批次=${returned.jobId}`),
+          )
+          if (returned !== undefined) this.requestSweep()
+          return
+        }
+        await this.pause(2 ** (attempt - 1) * 1000)
+      }
+    }
+  }
+
+  /**
+   * Wait between steer attempts.
+   * @param ms - how long.
+   */
+  private async pause(ms: number): Promise<void> {
+    const sleep = this.ports.sleep
+    if (sleep !== undefined) {
+      await sleep(ms)
+      return
+    }
+    await new Promise<void>(resolve => { globalThis.setTimeout(resolve, ms) })
+  }
+
+  /**
+   * Record a steered message that a turn has just picked up.
+   *
+   * The request id is the whole identity here: a steered message never equals the
+   * job's own batch id, so this has to run before any comparison against it. Two
+   * outcomes matter - consumed by the turn the job was bound to, or consumed by the
+   * turn the engine opened because the first one ended too soon; the second is why a
+   * job can follow a steer onto a later turn instead of answering without it.
+   * @param requestId - the request id the message was steered under.
+   * @param turn - the turn currently consuming it.
+   * @param running - the conversation's running job.
+   * @returns true when this id belonged to a steer.
+   */
+  private consumeSteer(requestId: string, turn: number, running: ReplyJob): boolean {
+    const now = this.ports.now()
+    const consumed = this.store.reply.consumedSteer({ requestId, turn, now })
+    if (consumed === undefined) return false
+    if (consumed.jobId !== running.jobId) {
+      // The job that owned it stopped before the engine picked it up, so it surfaced
+      // inside a later job's turn. Record where it went, but leave that job's binding
+      // alone: its own request id is what decides which turn it owns.
+      this.ports.log.warn(
+        `lark-inbox: 残留插话在别的回合被消费 steer=${requestId} 原作业=${consumed.jobId} 回合=${turn}`,
+      )
+      return true
+    }
+    if (consumed.priorState !== 'pending') {
+      // Already accounted for; only the turn it appeared in was missing.
+      this.ports.log.warn(`lark-inbox: 插话重复出现 steer=${requestId} 状态=${consumed.priorState} 回合=${turn}`)
+      return true
+    }
+    if (consumed.jobTurn !== turn) {
+      this.store.reply.rebindTurn(running.jobId, turn, now)
+      this.ports.log.info(
+        `lark-inbox: steer-carried job=${running.jobId} turn=${consumed.jobTurn ?? '-'}→${turn}`,
+      )
+      return true
+    }
+    this.ports.log.info(`lark-inbox: steer-consumed job=${running.jobId} turn=${turn}`)
+    return true
+  }
+
+  /**
+   * Settle a finished turn, or hold the job for the turn that will consume its steer.
+   *
+   * Holding is the answer to the one race this feature cannot avoid: the engine
+   * consumes a steer at a step boundary, and a turn that reached its last one first
+   * ends with the message still queued. The engine then opens a turn of its own for
+   * it - and that turn is only answerable if this job is still running and still in
+   * possession of the text the first turn produced.
+   * @param job - the job the finished turn belongs to.
+   * @param data - the `turn/end` payload.
+   */
+  private settleOrCarry(job: ReplyJob, data: Record<string, unknown>): void {
+    const now = this.ports.now()
+    const reason = typeof data.reason === 'object' && data.reason !== null ? data.reason as Record<string, unknown> : {}
+    const kind = typeof reason.kind === 'string' ? reason.kind : ''
+    const pending = this.store.reply.pendingSteerCount(job.jobId)
+    if (pending > 0 && STEER_CONTINUING_KINDS.has(kind)) {
+      const draft = (this.drafts.get(job.jobId) ?? '').trim()
+      const carryText = [job.carryText ?? '', draft].filter(part => part.trim() !== '').join('\n\n')
+      if (this.store.reply.holdForCarry({
+        jobId: job.jobId,
+        carryText,
+        carryUntil: now + REPLY_CARRY_GRACE_MS,
+        now,
+      })) {
+        this.drafts.delete(job.jobId)
+        this.ports.log.info(
+          `lark-inbox: 回合结束但待消费插话 ${pending} 条，保留槽位等下一回合 job=${job.jobId} turn=${job.turn ?? '-'}`,
+        )
+        return
+      }
+    }
+    if (pending > 0) {
+      // This turn is closing for a reason that ends the exchange - a stop, a timeout,
+      // a carry that ran out - so nothing here will ever consume them.
+      const stranded = this.store.reply.strandPending(job.jobId, now)
+      if (stranded > 0) this.ports.log.warn(`lark-inbox: ${stranded} 条插话随回合结束搁置 job=${job.jobId}`)
+    }
+    this.settleTurn(job, data)
+  }
+
+  /**
+   * Close a job whose wait for the turn that would consume its steer ran out.
+   *
+   * The person is told, in fixed words, that part of what they said did not reach
+   * this answer: a silent omission here is the same failure as a silent bot, only
+   * harder to notice.
+   * @param job - the job that waited.
+   * @param now - current time.
+   */
+  private expireCarry(job: ReplyJob, now: number): void {
+    const stranded = this.store.reply.strandPending(job.jobId, now)
+    const carried = (job.carryText ?? '').trim()
+    const body = [carried === '' ? fallbackReplyText('empty') : carried, steerMissedNote(stranded)]
+      .filter(part => part !== '')
+      .join('\n\n')
+    const ended = this.closeTurn(job, carried === '' ? 'empty' : 'answer', body, 'steer-carry-expired')
+    if (ended) {
+      this.ports.log.warn(
+        `lark-inbox: 等待插话回合超时，${stranded} 条未赶上，已结案 job=${job.jobId}`,
+      )
     }
   }
 
@@ -501,7 +835,12 @@ export class ReplyResponder {
       for (const job of this.store.reply.dueJobs(now)) {
         try {
           if (job.state === 'collecting') this.submit(job, now)
-          else if (job.state === 'running') this.expire(job, now)
+          else if (job.state === 'running') {
+            // A job held for a steer it missed is waiting on a turn, not on its own
+            // deadline; only the wait itself can expire first.
+            if (job.carryUntil !== undefined && job.carryUntil <= now) this.expireCarry(job, now)
+            else this.expire(job, now)
+          }
           else if (job.state === 'submitting') this.expireSubmit(job, now)
           else if (job.state === 'replying') void this.deliver(job, now)
         } catch (error) {
@@ -579,7 +918,7 @@ export class ReplyResponder {
       // the engine may open and finish the turn while this call is still pending,
       // and those events must find a running job or the answer is lost.
       this.store.reply.markRunning(jobId, this.ports.now() + config.turnTimeoutMs, this.ports.now())
-      await this.ports.engine.prompt({ requestId: jobId, sessionId, text })
+      await this.ports.engine.prompt({ requestId: jobId, sessionId, text, mode: 'queue' })
       // One line per submitted turn: without it the first live run leaves no trace
       // to read, and "no reply" is indistinguishable from "never submitted".
       this.ports.log.info(
@@ -868,8 +1207,11 @@ export class ReplyResponder {
       // turn a human started by typing into this session in the Web UI.
       const source = typeof data.source === 'object' && data.source !== null ? data.source as Record<string, unknown> : {}
       const rpcId = typeof source.rpcId === 'string' ? source.rpcId : ''
-      if (rpcId === '' || rpcId !== running.jobId) return
       const cursor = this.turnCursor.get(sessionId)
+      // A steered message carries a request id of its own, so it can never equal the
+      // running job's batch id; it is matched first, and on its own identity.
+      if (rpcId !== '' && cursor !== undefined && this.consumeSteer(rpcId, cursor.turn, running)) return
+      if (rpcId === '' || rpcId !== running.jobId) return
       if (cursor !== undefined) this.store.reply.bindTurn(running.jobId, cursor.turn, this.ports.now())
       return
     }
@@ -890,7 +1232,7 @@ export class ReplyResponder {
     const turn = typeof data.turn === 'number' ? data.turn : undefined
     if (turn === undefined || running.turn === undefined || turn !== running.turn) return
     this.turnCursor.delete(sessionId)
-    this.settleTurn(running, data)
+    this.settleOrCarry(running, data)
   }
 
   /**
@@ -961,12 +1303,32 @@ export class ReplyResponder {
   private settleTurn(job: ReplyJob, data: Record<string, unknown>): void {
     const reason = typeof data.reason === 'object' && data.reason !== null ? data.reason as Record<string, unknown> : {}
     const kind = typeof reason.kind === 'string' ? reason.kind : ''
-    const draft = (this.drafts.get(job.jobId) ?? '').trim()
+    const drafted = (this.drafts.get(job.jobId) ?? '').trim()
+    // A job that was held for a steer has the text of the turn that ended under it
+    // parked here. The reply that finally goes out covers both turns, because the
+    // alternative - sending only the second half - answers a question the person
+    // asked with the part that came after their correction and no memory of the rest.
+    const carried = (job.carryText ?? '').trim()
+    const draft = carried === '' || drafted === ''
+      ? (carried === '' ? drafted : carried)
+      : `${carried}\n\n${drafted}`
     const stopped = job.stopRequested || this.store.reply.stopRequested(job.jobId)
     const timedOut = job.lastError === TIMEOUT_MARKER
 
-    if (job.kind === 'proactive' && draft.trim().toUpperCase() === SILENT_REPLY_TOKEN) {
-      this.closeSilently(job, this.ports.now())
+    if (drafted.toUpperCase() === SILENT_REPLY_TOKEN) {
+      if (job.kind === 'proactive') {
+        this.closeSilently(job, this.ports.now())
+        return
+      }
+      // `SILENT` is an instruction to this path, not a sentence for a person: a
+      // request job that emits it must still answer. Sending it verbatim told
+      // someone their question had been answered with the word "SILENT".
+      if (carried !== '') {
+        this.closeTurn(job, 'answer', carried, 'silent-token')
+        return
+      }
+      this.ports.log.warn(`lark-inbox: ${job.jobId} 在请求作业里输出了 ${SILENT_REPLY_TOKEN}，按无内容结案`)
+      this.closeTurn(job, 'empty', fallbackReplyText('empty'), 'silent-in-request')
       return
     }
     if (kind === 'completed' || kind === 'max-tokens') {
