@@ -297,14 +297,21 @@ export function contradictoryReaction(job) {
  * @returns {Array<{id: string, label: string, ok: boolean|null, detail: string, sql: string}>} criteria in report order.
  */
 export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbeatPath, liveConfig, profileProblem, now, stuckMs }) {
-  // A delivery is only a delivery if the platform gave back a message id. Without
-  // that check, a probe run - which records the answer and sends nothing - satisfies
-  // "at least one reply really went out". This was the review's sharpest finding.
-  const answered = jobs.filter(job =>
-    job.kind !== 'proactive'
-    && job.state === 'replied'
-    && job.outcome === 'answer'
-    && (job.replyMessageId ?? '') !== '')
+  // One definition of "reached the person", used by both criteria that need it.
+  //
+  // A delivery is a text the platform acknowledged with a message id, or a reaction
+  // that is the whole answer - and a reaction qualifies only when nothing was sent or
+  // even attempted, which is what `answeredByReaction` demands. Keeping this in one
+  // place is deliberate: `answered` and `explained` asking slightly different
+  // questions is how a reaction answer came to be counted as no answer at all.
+  const answerable = job => job.kind !== 'proactive' && job.state === 'replied' && job.outcome === 'answer'
+  const deliveredAsText = job => answerable(job) && (job.replyMessageId ?? '') !== ''
+  const deliveredAsReaction = job => answerable(job) && answeredByReaction(job)
+  const delivered = job => deliveredAsText(job) || deliveredAsReaction(job)
+
+  const answered = jobs.filter(delivered)
+  const textAnswers = jobs.filter(deliveredAsText)
+  const reactionAnswers = jobs.filter(deliveredAsReaction)
 
   const stuck = jobs.filter(job => OPEN_STATES.has(job.state) && now - job.updatedAt > stuckMs)
 
@@ -327,18 +334,12 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
     job.state !== 'cancelled'
     && (CLOSED_STATES.has(job.state) || job.state === 'replied')
     && (job.replyText ?? '').trim() === ''
-    && !answeredByReaction(job)
+    && !deliveredAsReaction(job)
     && !choseSilence(job))
   // A row that says both "answered by reaction" and "sent text" cannot be true, and
   // is reported separately: it is not a missing body, it is a contradiction.
   const contradictory = jobs.filter(job =>
     (CLOSED_STATES.has(job.state) || job.state === 'replied') && contradictoryReaction(job))
-  // Reported next to the delivery count so an operator can see the shape of the
-  // answers; it deliberately does not change whether a delivery happened, which still
-  // requires the platform's own message id.
-  const reactionAnswers = rows => rows.filter(job =>
-    job.kind !== 'proactive' && job.state === 'replied' && job.outcome === 'answer' && answeredByReaction(job))
-
   const waitingTooLong = waiting.filter(item => now - item.receivedAt > stuckMs)
 
   // The allowlist is the one setting whose mistake is invisible until a message
@@ -378,10 +379,12 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
     {
       id: 'answered',
       label: '至少一条回复真的发出去了',
+      // An empty ledger is still "nothing was proven", never a pass: the point of this
+      // criterion is that something reached a person.
       ok: jobs.length === 0 ? null : answered.length > 0,
       detail: jobs.length === 0
         ? '账本为空：还没有人发消息，或 responder 没有运行'
-        : `${answered.length} 条已回复（共 ${jobs.length} 个作业）${reactionAnswers(jobs).length === 0 ? '' : `，其中 ${reactionAnswers(jobs).length} 条以表情回答`}`,
+        : `${answered.length} 条已回复（共 ${jobs.length} 个作业）：文字 ${textAnswers.length} 条 / 表情 ${reactionAnswers.length} 条`,
       sql: "select count(*) from reply_jobs where state='replied' and outcome='answer'",
     },
     {

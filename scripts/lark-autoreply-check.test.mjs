@@ -175,9 +175,10 @@ test('an answer delivered as a reaction has something to say', () => {
     stuckMs: STUCK,
   }))
   assert.equal(criteria.explained.ok, true)
-  // And the delivery count says so out loud, without letting it count as a delivery.
-  assert.match(criteria.answered.detail, /1 条以表情回答/)
-  assert.equal(criteria.answered.ok, false)
+  // And it counts as a delivery: a reaction on the person's own message is an answer
+  // that reached them, which is the only thing this criterion is about.
+  assert.equal(criteria.answered.ok, true)
+  assert.match(criteria.answered.detail, /文字 0 条 \/ 表情 1 条/)
 })
 
 test('a reaction row that also claims a text send cannot pass', () => {
@@ -220,7 +221,8 @@ test('a ledger with no reply_via column behaves exactly as before', () => {
     stuckMs: STUCK,
   }))
   assert.equal(fine.explained.ok, true)
-  assert.doesNotMatch(fine.answered.detail, /表情/)
+  // Every row reads as text, so the split reports none of the newer shape.
+  assert.match(fine.answered.detail, /文字 1 条 \/ 表情 0 条/)
 })
 
 test('a cancelled batch is allowed to have nothing to say', () => {
@@ -531,20 +533,16 @@ function passingLedger(options = {}) {
 }
 
 /**
- * A ledger with one reaction answer and one text answer.
+ * A ledger whose only answer was a reaction.
  *
- * Both, because `answered` still demands the platform's own message id and a reaction
- * has none: a ledger whose *only* answer was a reaction reports zero deliveries and
- * fails that criterion. That verdict is deliberately unchanged here, so a plausible
- * installation - some answers in prose, some acknowledged - is what these cases model.
+ * This is the shape that used to report "0 delivered" and fail: the reaction carries
+ * no message id, and the criterion used to accept nothing else. A person was answered,
+ * so the reading has to say so.
  */
 function reactionLedger(options = {}) {
   return makeLedger({
-    jobs: [
-      { jobId: 'fj_reaction', state: 'replied', outcome: 'answer', endReason: 'ack-reaction' },
-      { jobId: 'fj_text', state: 'replied', outcome: 'answer' },
-    ],
-    messages: [{ messageId: 'om_r', jobId: 'fj_reaction' }, { messageId: 'om_t', jobId: 'fj_text' }],
+    jobs: [{ jobId: 'fj_reaction', state: 'replied', outcome: 'answer', endReason: 'ack-reaction' }],
+    messages: [{ messageId: 'om_r', jobId: 'fj_reaction' }],
     via: [{ jobId: 'fj_reaction', replyVia: 'reaction' }],
     ...options,
   })
@@ -565,6 +563,32 @@ test('the readings are printed even though they are not part of the verdict', ()
     assert.match(run.stdout, /carried 1/)
     assert.match(run.stdout, /读数 ack/)
     assert.match(run.stdout, /表情 1/)
+  } finally {
+    ledger.cleanup()
+  }
+})
+
+test('a ledger whose only answers were reactions passes, and says what they were', () => {
+  // The case that used to be reported as "nothing was delivered": every answer reached
+  // the person as a reaction, so the criterion has to hold and the reading has to say
+  // which shape the answers took.
+  const ledger = reactionLedger()
+  try {
+    const run = runCheck(ledger)
+    assert.equal(run.status, 0, run.stdout + run.stderr)
+    assert.match(run.stdout, /文字 0 条 \/ 表情 1 条/)
+  } finally {
+    ledger.cleanup()
+  }
+})
+
+test('an empty ledger still proves nothing', () => {
+  // "At least one reply really went out" must not become vacuously true.
+  const ledger = makeLedger({ jobs: [], messages: [] })
+  try {
+    const run = runCheck(ledger)
+    assert.notEqual(run.status, 0, run.stdout + run.stderr)
+    assert.match(run.stdout, /账本为空/)
   } finally {
     ledger.cleanup()
   }
