@@ -393,7 +393,7 @@ export class ReplyStore {
   dueJobs(now: number): ReplyJob[] {
     const rows = this.db.prepare(`SELECT ${JOB_COLUMNS} FROM reply_jobs
       WHERE (state = 'collecting' AND collect_until <= ? AND next_attempt_at <= ?)
-         OR (state = 'submitting' AND next_attempt_at <= ?)
+         OR (state = 'submitting' AND deadline_at IS NOT NULL AND deadline_at <= ?)
          OR (state = 'running' AND deadline_at IS NOT NULL AND deadline_at <= ?)
          OR (state = 'replying' AND next_attempt_at <= ?)
       ORDER BY updated_at ASC`).all(now, now, now, now, now) as unknown as JobRow[]
@@ -422,13 +422,17 @@ export class ReplyStore {
    * @param now - current time.
    * @returns true when this call moved the job.
    */
-  claimSubmit(jobId: string, sessionId: string, now: number): boolean {
+  claimSubmit(jobId: string, sessionId: string, now: number, deadlineAt: number): boolean {
     const job = this.job(jobId)
     if (job === undefined) return false
     if (this.inflightJob(job.convKey) !== undefined) return false
+    // A deadline covers the submission itself, not just the turn: the engine call
+    // can pend forever, and a submission nobody closes would leave the person with
+    // silence while the job holds the conversation's only turn slot.
     const result = this.db.prepare(`UPDATE reply_jobs
-      SET state = 'submitting', session_id = ?, submitted_at = ?, submit_attempts = submit_attempts + 1, updated_at = ?
-      WHERE job_id = ? AND state = 'collecting'`).run(sessionId, now, now, jobId)
+      SET state = 'submitting', session_id = ?, submitted_at = ?, deadline_at = ?,
+          submit_attempts = submit_attempts + 1, updated_at = ?
+      WHERE job_id = ? AND state = 'collecting'`).run(sessionId, now, deadlineAt, now, jobId)
     return Number(result.changes) === 1
   }
 
@@ -441,6 +445,25 @@ export class ReplyStore {
   markRunning(jobId: string, deadlineAt: number, now: number): void {
     this.db.prepare(`UPDATE reply_jobs SET state = 'running', deadline_at = ?, updated_at = ?
       WHERE job_id = ? AND state = 'submitting'`).run(deadlineAt, now, jobId)
+  }
+
+  /**
+   * Close a job whose turn never started, with something to send.
+   *
+   * The pre-turn states are deliberately the ones with no bound turn: once a turn
+   * exists, only that turn's own end may close it, because the run may already
+   * have executed tools.
+   * @param jobId - the job.
+   * @param outcome - how it ended.
+   * @param text - the body to send.
+   * @param now - current time.
+   * @returns true when this call closed it.
+   */
+  failPreTurn(jobId: string, outcome: ReplyOutcome, text: string, now: number): boolean {
+    const result = this.db.prepare(`UPDATE reply_jobs
+      SET state = 'replying', outcome = ?, reply_text = ?, next_attempt_at = 0, updated_at = ?
+      WHERE job_id = ? AND state IN ('collecting','submitting','running') AND turn IS NULL`).run(outcome, text, now, jobId)
+    return Number(result.changes) === 1
   }
 
   /**

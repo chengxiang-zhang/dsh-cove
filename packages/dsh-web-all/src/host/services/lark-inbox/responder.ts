@@ -375,7 +375,7 @@ export class ReplyResponder {
       for (const job of this.store.reply.dueJobs(now)) {
         if (job.state === 'collecting') this.submit(job, now)
         else if (job.state === 'running') this.expire(job, now)
-        else if (job.state === 'submitting') this.submit(job, now)
+        else if (job.state === 'submitting') this.expireSubmit(job, now)
         else if (job.state === 'replying') void this.deliver(job, now)
       }
     } finally {
@@ -401,7 +401,7 @@ export class ReplyResponder {
       this.store.reply.markSendFailed(job.jobId, '批次内没有消息', now)
       return
     }
-    if (!this.store.reply.claimSubmit(job.jobId, binding.sessionId, now)) return
+    if (!this.store.reply.claimSubmit(job.jobId, binding.sessionId, now, now + config.turnTimeoutMs)) return
 
     const preamble = binding.preambleSent ? '' : config.preamble
     const text = composePrompt(messages.map(message => message.text), preamble)
@@ -458,6 +458,31 @@ export class ReplyResponder {
         this.ports.log.warn(`lark-inbox: ${jobId} 提交失败且已绑定回合，等待回合自身结束：${detail}`)
       }
     }
+  }
+
+  /**
+   * Close a submission that never produced a turn.
+   *
+   * A pending engine call leaves the job in `submitting` with no bound turn. It is
+   * retried while attempts remain, because nothing ran; when they are gone the
+   * person gets a sentence instead of the silence a stuck job would otherwise
+   * leave behind.
+   * @param job - the stuck submission.
+   * @param now - current time.
+   */
+  private expireSubmit(job: ReplyJob, now: number): void {
+    const config = this.ports.config()
+    if (job.submitAttempts >= config.maxSubmitAttempts) {
+      const text = fallbackReplyText('error', job.lastError ?? '提交超时')
+      if (!this.store.reply.failPreTurn(job.jobId, 'error', text, now)) return
+      this.ports.log.warn(`lark-inbox: ${job.jobId} 提交 ${job.submitAttempts} 次仍无回合，已回说明`)
+      const closed = this.store.reply.job(job.jobId)
+      if (closed !== undefined) void this.deliver(closed, now)
+      return
+    }
+    const backoff = Math.min(30_000, 2 ** job.submitAttempts * 1000)
+    this.ports.log.warn(`lark-inbox: ${job.jobId} 提交超时，${Math.round(backoff / 1000)}s 后重试`)
+    this.store.reply.revertRun(job.jobId, '提交超时：引擎未在时限内开出回合', now + backoff, now)
   }
 
   /**

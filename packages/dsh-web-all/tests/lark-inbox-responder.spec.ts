@@ -57,6 +57,10 @@ function message(index: number, body: string, overrides: Partial<LarkInboxEnvelo
 interface EngineHooks {
   beforePromptResolves?: (sessionId: string, requestId: string) => void
   promptFails?: Error
+  /** Makes `prompt` pend forever, as a stalled engine does. */
+  promptHangs?: boolean
+  /** Makes the session bind pend forever, as a stalled engine does. */
+  bindHangs?: boolean
 }
 
 interface Harness {
@@ -100,13 +104,17 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
   }
   const ports: ConstructorParameters<typeof ReplyResponder>[1] = {
     engine: {
-      async ensureSession(input) { sessions.push(input) },
+      async ensureSession(input) {
+        sessions.push(input)
+        if (hooks.bindHangs === true) await new Promise<void>(() => {})
+      },
       async prompt(input) {
         prompts.push(input)
         // The real engine can open and finish the turn before this promise
         // settles, which is exactly the ordering the responder must survive.
         hooks.beforePromptResolves?.(input.sessionId, input.requestId)
         if (hooks.promptFails !== undefined) throw hooks.promptFails
+        if (hooks.promptHangs === true) await new Promise<void>(() => {})
       },
       cancel(sessionId) { cancels.push(sessionId) },
     },
@@ -360,6 +368,61 @@ describe('engine ordering', () => {
   })
 })
 
+describe('stalled engine calls', () => {
+  it('closes a prompt that never opens a turn as a timeout instead of waiting forever', async () => {
+    const harnessed = harness({ turnTimeoutMs: 1000 })
+    harnessed.engineHooks.promptHangs = true
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    // Running with no bound turn: the engine accepted nothing observable.
+    expect(harnessed.store.reply.job('fj_om_1')?.state).toBe('running')
+
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    expect(harnessed.cancels).toHaveLength(1)
+
+    harnessed.advance(16_000)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    expect(harnessed.sent).toHaveLength(1)
+    expect(harnessed.sent[0].text).toContain('超时')
+    expect(harnessed.store.reply.job('fj_om_1')).toMatchObject({ state: 'replied', outcome: 'timeout' })
+  })
+
+  it('retries a session bind that hangs, then explains itself when attempts run out', async () => {
+    const harnessed = harness({ turnTimeoutMs: 1000, maxSubmitAttempts: 2 })
+    harnessed.engineHooks.bindHangs = true
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    expect(harnessed.store.reply.job('fj_om_1')?.state).toBe('submitting')
+
+    // The submission deadline, not the turn deadline, is what notices here.
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    expect(harnessed.store.reply.job('fj_om_1')?.state).toBe('collecting')
+    expect(harnessed.sent).toHaveLength(0)
+
+    harnessed.advance(60_000)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    harnessed.advance(60_000)
+    harnessed.responder.tick()
+    await harnessed.flush()
+
+    expect(harnessed.sent.length).toBeGreaterThanOrEqual(1)
+    expect(harnessed.sent[0].text).toContain('出错')
+    expect(harnessed.store.reply.job('fj_om_1')?.state).toBe('replied')
+  })
+})
+
 describe('failure is never silence', () => {
   it('sends a sentence naming the failure when the turn errors', async () => {
     const harnessed = harness()
@@ -534,7 +597,7 @@ describe('restart recovery', () => {
       now,
       debounceMs: 0,
     })
-    harnessed.store.reply.claimSubmit('fj_om_9', replySessionId(CHAT, 1), now)
+    harnessed.store.reply.claimSubmit('fj_om_9', replySessionId(CHAT, 1), now, now + 60_000)
     if (state === 'submitting') return
     harnessed.store.reply.markRunning('fj_om_9', now + 60_000, now)
     harnessed.store.reply.bindTurn('fj_om_9', 1, now)
