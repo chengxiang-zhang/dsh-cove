@@ -34,6 +34,12 @@ export type ExternalErrorCode =
    * still exit 0 — so the adapter reports it explicitly.
    */
   | 'provider-error'
+  /**
+   * The host could not persist a session record: an unwritable directory, a full
+   * disk, a failed rename. Distinct from `session-unknown` on purpose — retrying
+   * with another id cannot help, and only the operator can fix storage.
+   */
+  | 'store-unavailable'
 
 /** Every error code, in the order the design lists them. */
 export const EXTERNAL_ERROR_CODES: readonly ExternalErrorCode[] = [
@@ -46,6 +52,7 @@ export const EXTERNAL_ERROR_CODES: readonly ExternalErrorCode[] = [
   'limit',
   'auth-required',
   'provider-error',
+  'store-unavailable',
 ]
 
 /** A code plus the sentence shown to the model; the `{code, message}` shape every surface reports. */
@@ -97,6 +104,10 @@ const MESSAGES: MessageTable = {
   'provider-error': context =>
     `${cliLabel(context)} ran the turn but did not report a result. `
     + 'Retry the turn; if it fails again, ask the operator to check the host log for the CLI diagnostics.',
+  'store-unavailable': () =>
+    'The host could not save the external session record. Retrying cannot help: '
+    + 'the session store on the host is unwritable or full, so ask the operator to fix '
+    + 'the host filesystem or free space before running another turn.',
 }
 
 /** Build the reportable error for `code`. */

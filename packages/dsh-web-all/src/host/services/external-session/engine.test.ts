@@ -227,7 +227,6 @@ describe('external-session engine', () => {
     expect(signal?.aborted).toBe(false)
 
     const cancelled = engine.cancel('ext-1')
-    claude.settle({ status: 'aborted', result: 'cancelled' })
     expect(await cancelled).toBeNull()
     await running
 
@@ -242,7 +241,6 @@ describe('external-session engine', () => {
     const running = engine.runTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' })
     await waitFor(() => claude.inFlight === 1, 'the turn to reach the adapter')
     const closing = engine.close('ext-1')
-    claude.settle({ status: 'aborted' })
     expect(await closing).toEqual({ session_id: 'ext-1', status: 'closed' })
     await running
     expect(store.get('ext-1')?.status).toBe('closed')
@@ -343,5 +341,108 @@ describe('external-session engine', () => {
     if ('code' in result) throw new Error('turn failed')
     expect(result.usage).toEqual({ input: 10, output: 4 })
     expect(result.cost_usd).toBe(0.02)
+  })
+
+  describe('storage failures', () => {
+    it('reports an unwritable store as store-unavailable, not an unknown session', async () => {
+      const { engine, claude, fs } = await setup()
+      fs.failAllWrites = Object.assign(new Error('EACCES: permission denied, open store'), { code: 'EACCES' })
+      const result = await engine.runTurn({ provider: 'claude', prompt: 'go', cwd: '/tmp' })
+      // The defect this covers: an unwritable host used to answer session-unknown,
+      // which sends the model hunting for a different session id forever.
+      expect(result).toMatchObject({ code: 'store-unavailable' })
+      expect(JSON.stringify(result)).not.toContain('EACCES')
+      expect(JSON.stringify(result)).not.toContain('permission denied')
+      // Nothing spawned: the turn had nowhere to be recorded.
+      expect(claude.calls).toHaveLength(0)
+    })
+
+    it('reports a store that breaks mid-turn as store-unavailable', async () => {
+      const { engine, claude, fs } = await setup()
+      claude.autoOutcome = undefined
+      const running = engine.runTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' })
+      await waitFor(() => claude.inFlight === 1, 'the turn to reach the adapter')
+      fs.failAllWrites = new Error('ENOSPC: no space left on device')
+      claude.settle({ status: 'completed', result: '42' })
+      expect(await running).toMatchObject({ code: 'store-unavailable' })
+    })
+
+    it('keeps a retention-limit refusal distinct from a storage failure', async () => {
+      const { engine } = await setup({ maxSessions: 1 })
+      await engine.runTurn({ provider: 'claude', prompt: 'one', cwd: '/tmp' })
+      expect(await engine.runTurn({ provider: 'claude', prompt: 'two', cwd: '/tmp' })).toMatchObject({ code: 'limit' })
+    })
+  })
+
+  describe('cancellation race', () => {
+    it('records the running state before startTurn reports the start', async () => {
+      const { engine, claude, store } = await setup()
+      claude.autoOutcome = undefined
+      expect(await engine.startTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' })).toBeNull()
+      // Durable before the caller is told: no window where it runs unfindable.
+      expect(store.get('ext-1')?.status).toBe('running')
+      await waitFor(() => claude.inFlight === 1, 'the turn to reach the adapter')
+    })
+
+    it('cancels in the same tick after startTurn returns', async () => {
+      const { engine, claude } = await setup()
+      claude.autoOutcome = undefined
+      expect(await engine.startTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' })).toBeNull()
+
+      // No tick to spare: the panel's cancel lands the instant continue comes back.
+      const cancelling = engine.cancel('ext-1')
+      expect(await cancelling).toBeNull()
+      expect(claude.inFlight).toBe(0)
+      expect(claude.calls[0]?.signal?.aborted).toBe(true)
+
+      const snapshot = await engine.listViews()
+      expect(snapshot.sessions[0]?.status).toBe('idle')
+      expect(snapshot.sessions[0]?.turns.map(turn => turn.status)).toEqual(['aborted'])
+      // Still continuable: cancelling a turn does not close the session.
+      expect(snapshot.sessions[0]?.canContinue).toBe(true)
+      claude.autoOutcome = () => ({ status: 'completed', result: 'ok', durationMs: 1, providerSessionId: 'cli-1' })
+      expect(await engine.runTurn({ provider: 'claude', prompt: 'again', sessionId: 'ext-1' })).toMatchObject({ status: 'completed' })
+    })
+
+    it('does not report a start until the record is durable', async () => {
+      const { engine, claude, fs } = await setup()
+      claude.autoOutcome = undefined
+      const release = fs.holdWrites()
+
+      let outcome = 'pending'
+      const starting = engine.startTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' })
+        .then(result => { outcome = result === null ? 'started' : result.code; return result })
+      // Give the preflight and the write attempt every chance to report early.
+      await new Promise(resolve => setTimeout(resolve, 5))
+      expect(outcome).toBe('pending')
+
+      // The turn is registered while the write is in flight, so a cancel still
+      // finds it; the start is reported only once the record is durable.
+      const cancelling = engine.cancel('ext-1')
+      release()
+      expect(await starting).toBeNull()
+      expect(outcome).toBe('started')
+      expect(await cancelling).toBeNull()
+      expect(claude.calls[0]?.signal?.aborted).toBe(true)
+    })
+
+    it('answers store-unavailable from startTurn when the host is unwritable', async () => {
+      const { engine, claude, fs } = await setup()
+      fs.failAllWrites = new Error('EACCES: permission denied')
+      // The panel path must not swallow a storage failure into a turn nobody can read.
+      expect(await engine.startTurn({ provider: 'claude', prompt: 'go', cwd: '/tmp' }))
+        .toMatchObject({ code: 'store-unavailable' })
+      expect(claude.calls).toHaveLength(0)
+    })
+
+    it('closes a session started in the same tick', async () => {
+      const { engine, claude } = await setup()
+      claude.autoOutcome = undefined
+      await engine.startTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' })
+      const closing = engine.close('ext-1')
+      expect(await closing).toEqual({ session_id: 'ext-1', status: 'closed' })
+      expect((await engine.listOverviews()).sessions[0]?.status).toBe('closed')
+      expect(claude.inFlight).toBe(0)
+    })
   })
 })

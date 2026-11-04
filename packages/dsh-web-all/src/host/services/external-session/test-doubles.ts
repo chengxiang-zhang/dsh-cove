@@ -48,7 +48,24 @@ export class FakeAdapter implements ExternalAdapter {
     this.calls.push(request)
     if (this.throws !== undefined) return Promise.reject(this.throws)
     if (this.autoOutcome !== undefined) return Promise.resolve(this.autoOutcome(request))
-    return new Promise<TurnOutcome>((resolve, reject) => { this.pending.push({ request, resolve, reject }) })
+    return new Promise<TurnOutcome>((resolve, reject) => {
+      const entry: PendingTurn = { request, resolve, reject }
+      // A real CLI dies on SIGTERM and reports an aborted turn; modelling that
+      // here is what lets a cancellation test observe the consequence rather
+      // than assert on the signal and leave the turn hanging.
+      const cancelled = (): void => {
+        const at = this.pending.indexOf(entry)
+        if (at === -1) return
+        this.pending.splice(at, 1)
+        resolve({ status: 'aborted', result: 'cancelled', durationMs: 1, providerSessionId: 'cli-session-1' })
+      }
+      if (request.signal?.aborted === true) {
+        resolve({ status: 'aborted', result: 'cancelled', durationMs: 1, providerSessionId: 'cli-session-1' })
+        return
+      }
+      request.signal?.addEventListener('abort', cancelled, { once: true })
+      this.pending.push(entry)
+    })
   }
 
   /** Turns started but not yet settled. */
@@ -88,6 +105,10 @@ export class MemoryStoreFileSystem implements StoreFileSystem {
   readonly writes: string[] = []
   /** Fail the next `writeAtomic` with this error. */
   failNextWrite: Error | undefined
+  /** Fail every `writeAtomic`, the way an unwritable directory does. */
+  failAllWrites: Error | undefined
+  private gate: Promise<void> | undefined
+  private openGate: (() => void) | undefined
 
   constructor(initial: Record<string, string> = {}) {
     for (const [path, content] of Object.entries(initial)) this.files.set(path, content)
@@ -97,7 +118,25 @@ export class MemoryStoreFileSystem implements StoreFileSystem {
     return this.files.get(path) ?? null
   }
 
+  /**
+   * Hold every write until the returned release is called.
+   *
+   * This opens the window the panel hits: a turn whose record is still being
+   * written, so "is it running?" and "is it on disk?" disagree for a moment.
+   */
+  holdWrites(): () => void {
+    this.gate = new Promise<void>(resolve => { this.openGate = resolve })
+    return () => {
+      const open = this.openGate
+      this.gate = undefined
+      this.openGate = undefined
+      open?.()
+    }
+  }
+
   async writeAtomic(path: string, content: string): Promise<void> {
+    if (this.gate !== undefined) await this.gate
+    if (this.failAllWrites !== undefined) throw this.failAllWrites
     if (this.failNextWrite !== undefined) {
       const error = this.failNextWrite
       this.failNextWrite = undefined

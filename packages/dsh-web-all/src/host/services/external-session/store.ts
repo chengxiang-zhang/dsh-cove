@@ -27,6 +27,21 @@ export interface StoreFileSystem {
   rename(from: string, to: string): Promise<void>
 }
 
+/**
+ * A write that could not reach disk.
+ *
+ * Carries the original failure for the host log, and nothing else: an errno is
+ * diagnostic, not something a model can act on. The engine turns this into
+ * `store-unavailable` so a caller never confuses "storage broke" with "that
+ * session id does not exist".
+ */
+export class StoreUnavailableError extends Error {
+  constructor(readonly cause: unknown) {
+    super('the external session store could not be written')
+    this.name = 'StoreUnavailableError'
+  }
+}
+
 /** Private file mode: session records hold prompts and results. */
 const STORE_FILE_MODE = 0o600
 const STORE_DIR_MODE = 0o700
@@ -188,7 +203,14 @@ export class ExternalSessionStore {
   private async mutate(apply: (state: ExternalStoreFile) => ExternalStoreFile): Promise<void> {
     const run = this.writing.then(async () => {
       const next = apply(this.state)
-      await this.fs.writeAtomic(this.options.storePath, serializeExternalStore(next))
+      try {
+        await this.fs.writeAtomic(this.options.storePath, serializeExternalStore(next))
+      } catch (error) {
+        // A limit refusal is the caller's problem, not the host's: only an I/O
+        // failure becomes `store-unavailable`.
+        if (typeof (error as { code?: unknown }).code === 'string' && (error as { code: string }).code === 'limit') throw error
+        throw new StoreUnavailableError(error)
+      }
       this.state = next
     })
     // Keep the chain alive for later writers even when this one rejects.

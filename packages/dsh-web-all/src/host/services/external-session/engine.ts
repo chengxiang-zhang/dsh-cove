@@ -38,7 +38,7 @@ import type {
   ExternalTurnResult,
 } from '../../../core/external-session/types.ts'
 import type { ResolvedExternalSessionConfig } from './config.ts'
-import type { ExternalSessionStore } from './store.ts'
+import { StoreUnavailableError, type ExternalSessionStore } from './store.ts'
 
 export { EXTERNAL_SESSION_SERVICE }
 
@@ -138,34 +138,71 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
   async startTurn(request: ExternalTurnRequest): Promise<ExternalError | null> {
     const prepared = await this.prepare(request)
     if (isError(prepared)) return prepared
-    // The panel must see the turn running, so the settle is not awaited here.
-    // The turn's own failures land in its record and never as an unhandled
-    // rejection: `execute` contains every outcome.
-    void this.execute(prepared, request).catch(() => undefined)
-    return null
+    // "Non-blocking" means the caller does not wait for the turn to finish, not
+    // that it is told about a start that never happened. Waiting for the record
+    // write here removes the only window where a session is running but not yet
+    // findable — cancellation gets a durable record to hit, and an unwritable
+    // host answers `store-unavailable` on this path too instead of swallowing it
+    // into a turn that fails where nobody can read it.
+    let report: (error: ExternalError | null) => void = () => {}
+    const started = new Promise<ExternalError | null>(resolve => { report = resolve })
+    void this.execute(prepared, request, report).catch(() => undefined)
+    return await started
   }
 
   async cancel(sessionId: string): Promise<ExternalError | null> {
     await this.ensureLoaded()
-    if (this.options.store.get(sessionId) === undefined) return externalError('session-unknown')
+    // The live turn table answers before the store does. A turn cancelled in the
+    // window between `startTurn` returning and its first record reaching disk is
+    // still a real running process, and reading the store first would report an
+    // unknown id and leave that process burning CLI time.
     const turn = this.running.get(sessionId)
-    if (turn === undefined) return null
-    turn.controller.abort(new Error('cancelled by caller'))
-    // Waiting for quiescence is what makes "cancelled" truthful: the caller
-    // learns after the process group is gone, not merely after a signal was sent.
-    await turn.settled.catch(() => undefined)
+    if (turn !== undefined) {
+      turn.controller.abort(new Error('cancelled by caller'))
+      // Waiting for quiescence is what makes "cancelled" truthful: the caller
+      // learns after the process group is gone, not merely after a signal was sent.
+      await turn.settled.catch(() => undefined)
+      return null
+    }
+    if (this.options.store.get(sessionId) === undefined) return externalError('session-unknown')
     return null
   }
 
   async close(sessionId: string): Promise<ExternalSessionStopResult | ExternalError> {
     await this.ensureLoaded()
-    const session = this.options.store.get(sessionId)
-    if (session === undefined) return externalError('session-unknown')
+    // Same order as `cancel`: a session whose first record has not reached disk
+    // is still running and must still be stoppable.
+    const live = this.running.get(sessionId)
+    if (live === undefined && this.options.store.get(sessionId) === undefined) {
+      return externalError('session-unknown')
+    }
     await this.cancel(sessionId)
     const current = this.options.store.get(sessionId)
     if (current === undefined) return externalError('session-unknown')
-    await this.options.store.upsert(closeSession(current))
+    const failure = await this.persist(closeSession(current))
+    if (failure !== null) return failure
     return { session_id: sessionId, status: 'closed' }
+  }
+
+  /**
+   * Write one record, translating a storage failure into the code a caller can
+   * act on.
+   *
+   * `session-unknown` would be a lie here: the record existed, the host simply
+   * could not save it, and retrying with another id can never help.
+   * @returns null after a successful write, otherwise the refusal to report.
+   */
+  private async persist(record: ExternalSessionRecord): Promise<ExternalError | null> {
+    try {
+      await this.options.store.upsert(record)
+      return null
+    } catch (error) {
+      if (error instanceof StoreUnavailableError) {
+        this.options.logger?.warn(`external-session store write failed: ${String(error.cause)}`)
+        return externalError('store-unavailable')
+      }
+      throw error
+    }
   }
 
   /**
@@ -231,8 +268,18 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
     return { session, adapter, isNew, cwd: session.cwd }
   }
 
-  /** Run the prepared turn to completion and record its outcome. */
-  private async execute(prepared: PreparedTurn, request: ExternalTurnRequest): Promise<ExternalTurnResult | ExternalError> {
+  /**
+   * Run the prepared turn to completion and record its outcome.
+   * @param prepared - the turn that passed preflight.
+   * @param request - the caller's request.
+   * @param onStarted - told once, as soon as the running record is durable, so
+   *   `startTurn` can report the start truthfully without waiting for the turn.
+   */
+  private async execute(
+    prepared: PreparedTurn,
+    request: ExternalTurnRequest,
+    onStarted?: (error: ExternalError | null) => void,
+  ): Promise<ExternalTurnResult | ExternalError> {
     const { session, adapter, isNew, cwd } = prepared
     const n = nextTurnNumber(session)
     const startedAt = new Date(this.now()).toISOString()
@@ -247,12 +294,22 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
       settled,
     }
 
+    let startedReported = false
+    const reportStarted = (error: ExternalError | null): void => {
+      if (startedReported) return
+      startedReported = true
+      onStarted?.(error)
+    }
+
     this.running.set(session.id, running)
     try {
       // The record says `running` while the process is alive, so a second
       // request is refused by the state gate rather than run against the same
       // CLI conversation — including on a session created by this very turn.
-      await this.options.store.upsert(markRunning(session))
+      // Registering here also makes the turn cancellable before it spawns.
+      const unwritable = await this.persist(markRunning(session))
+      reportStarted(unwritable)
+      if (unwritable !== null) return unwritable
       const outcome = await this.runAdapter(adapter, {
         prompt: request.prompt,
         cwd,
@@ -271,6 +328,9 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
       }
       return await this.settle(turnRecord(n, request.prompt, startedAt, failedOutcome), failedOutcome, session.id)
     } finally {
+      // A throw before the first persist would otherwise leave the caller
+      // waiting on a promise nothing resolves.
+      reportStarted(null)
       detach()
       this.running.delete(session.id)
       this.active -= 1
@@ -299,13 +359,17 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
     sessionId: string,
   ): Promise<ExternalTurnResult | ExternalError> {
     const current = this.options.store.get(sessionId)
-    if (current === undefined) return externalError('session-unknown')
+    // The turn ran on this record, so its absence now is host-side: either the
+    // directory went away or the file was replaced underneath us. Reporting an
+    // unknown id would send the caller looking for a different one.
+    if (current === undefined) return externalError('store-unavailable')
     const withSessionId = outcomeSessionId(outcome)
     const resumedSession: ExternalSessionRecord = withSessionId === undefined
       ? current
       : { ...current, providerSessionId: withSessionId }
     const next = applyTurn(resumedSession, turn)
-    await this.options.store.upsert(next)
+    const unwritable = await this.persist(next)
+    if (unwritable !== null) return unwritable
     const failure = turnOutcomeError(outcome)
     if (failure !== null && turn.status === 'failed') return failure
     return {

@@ -47,6 +47,9 @@ export interface ExternalSessionRoutesDeps {
  * reading a log sees the difference between "the panel asked wrong" (400), "the
  * host cannot do this at all" (501) and "try again later" (429).
  *
+ * `store-unavailable` answers 503 rather than 500: the host cannot serve this
+ * request right now, and the retry is a host fix rather than a code change.
+ *
  * Two of these are defensive: `auth-required` and `provider-error` describe a
  * turn that already started, and this route family never waits for a turn, so
  * they reach the panel inside the turn record rather than as a status. The
@@ -65,6 +68,8 @@ export function externalSessionStatusFor(code: ExternalErrorCode): number {
       return 501
     case 'provider-error':
       return 502
+    case 'store-unavailable':
+      return 503
     case 'auth-required':
     case 'session-closed':
     case 'session-unresumable':
@@ -95,21 +100,44 @@ function refuse(response: ServerResponse, error: ExternalError): void {
   fail(response, externalSessionStatusFor(error.code), error.code, error.message)
 }
 
-async function readJsonBody(request: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown> | null> {
+/** One parsed body, or why it could not be used. */
+type BodyResult =
+  | { ok: true; body: Record<string, unknown> }
+  | { ok: false; reason: 'too-large' | 'malformed' }
+
+/**
+ * Read one JSON body.
+ *
+ * The two failure modes get different answers on purpose: an oversized body is
+ * 413, while anything the caller can fix by sending different JSON is 400. Both
+ * used to collapse into 413, which told a caller that a syntax error was a size
+ * error.
+ */
+async function readJsonBody(request: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<BodyResult> {
   const chunks: Buffer[] = []
   let total = 0
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     total += bytes.length
-    if (total > maxBytes) return null
+    if (total > maxBytes) return { ok: false, reason: 'too-large' }
     chunks.push(bytes)
   }
   try {
     const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
-    return parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, reason: 'malformed' }
+    return { ok: true, body: parsed as Record<string, unknown> }
   } catch {
-    return null
+    return { ok: false, reason: 'malformed' }
   }
+}
+
+/** Report a body the route could not use. */
+function refuseBody(response: ServerResponse, result: Extract<BodyResult, { ok: false }>): void {
+  if (result.reason === 'too-large') {
+    fail(response, 413, 'bad-request', `request body exceeds ${MAX_BODY_BYTES} bytes`)
+    return
+  }
+  fail(response, 400, 'bad-request', 'request body must be a JSON object')
 }
 
 /** Non-empty string body field. */
@@ -159,13 +187,13 @@ export function makeExternalSessionRoutes(deps: ExternalSessionRoutesDeps): WebR
       }
 
       if (request.method === 'POST' && path === `${EXTERNAL_SESSION_API}/continue`) {
-        const body = await readJsonBody(request)
-        const sessionId = stringField(body, 'sessionId')
-        const prompt = stringField(body, 'prompt')
-        if (body === null) {
-          fail(response, 413, 'bad-request', 'request body is not JSON within the size limit')
+        const parsedBody = await readJsonBody(request)
+        if (!parsedBody.ok) {
+          refuseBody(response, parsedBody)
           return
         }
+        const sessionId = stringField(parsedBody.body, 'sessionId')
+        const prompt = stringField(parsedBody.body, 'prompt')
         if (sessionId === null || prompt === null) {
           fail(response, 400, 'bad-request', 'expected { sessionId, prompt }')
           return
@@ -194,8 +222,12 @@ export function makeExternalSessionRoutes(deps: ExternalSessionRoutesDeps): WebR
       }
 
       if (request.method === 'POST' && path === `${EXTERNAL_SESSION_API}/cancel`) {
-        const body = await readJsonBody(request)
-        const sessionId = stringField(body, 'sessionId')
+        const parsedBody = await readJsonBody(request)
+        if (!parsedBody.ok) {
+          refuseBody(response, parsedBody)
+          return
+        }
+        const sessionId = stringField(parsedBody.body, 'sessionId')
         if (sessionId === null) {
           fail(response, 400, 'bad-request', 'expected { sessionId }')
           return
@@ -210,8 +242,12 @@ export function makeExternalSessionRoutes(deps: ExternalSessionRoutesDeps): WebR
       }
 
       if (request.method === 'POST' && path === `${EXTERNAL_SESSION_API}/close`) {
-        const body = await readJsonBody(request)
-        const sessionId = stringField(body, 'sessionId')
+        const parsedBody = await readJsonBody(request)
+        if (!parsedBody.ok) {
+          refuseBody(response, parsedBody)
+          return
+        }
+        const sessionId = stringField(parsedBody.body, 'sessionId')
         if (sessionId === null) {
           fail(response, 400, 'bad-request', 'expected { sessionId }')
           return

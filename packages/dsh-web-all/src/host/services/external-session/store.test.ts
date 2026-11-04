@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { EXTERNAL_SESSION_STORE_FILE, resolveExternalSessionConfig, EXTERNAL_SESSION_DEFAULTS } from './config.ts'
 import { MemoryStoreFileSystem } from './test-doubles.ts'
-import { ExternalSessionStore, isDirectory } from './store.ts'
+import { ExternalSessionStore, StoreUnavailableError, isDirectory } from './store.ts'
 import { serializeExternalStore } from '../../../core/external-session/schema.ts'
 import type { ExternalSessionRecord } from '../../../core/external-session/types.ts'
 
@@ -134,7 +134,11 @@ describe('external-session store', () => {
     const { store } = makeStore(fs)
     await store.load()
     fs.failNextWrite = new Error('disk full')
-    await expect(store.upsert(record())).rejects.toThrow('disk full')
+    // The refusal is typed so the engine can answer `store-unavailable`: the
+    // raw cause is kept for the host log, never for the model.
+    const failure = await store.upsert(record()).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(StoreUnavailableError)
+    expect(String((failure as StoreUnavailableError).cause)).toContain('disk full')
     expect(store.get('ext-1')).toBeUndefined()
     expect(store.size).toBe(0)
   })

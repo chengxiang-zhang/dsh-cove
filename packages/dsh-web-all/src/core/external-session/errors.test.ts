@@ -4,10 +4,11 @@ import {
 } from './errors.ts'
 
 describe('external-session error vocabulary', () => {
-  it('defines the eight design codes plus the CLI-failure code', () => {
+  it('defines the eight design codes plus the CLI-failure and storage codes', () => {
     expect([...EXTERNAL_ERROR_CODES]).toEqual([
       'provider-missing', 'cwd-invalid', 'session-unknown', 'session-closed',
       'session-unresumable', 'busy', 'limit', 'auth-required', 'provider-error',
+      'store-unavailable',
     ])
     expect(new Set(EXTERNAL_ERROR_CODES).size).toBe(EXTERNAL_ERROR_CODES.length)
   })

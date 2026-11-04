@@ -54,6 +54,7 @@ async function harness(options: { trusted?: boolean } = {}) {
     claude,
     adapters,
     state,
+    fs,
     call: (method: string, url: string, body?: unknown) => invoke(handler, method, url, body),
   }
 }
@@ -65,7 +66,7 @@ async function invoke(
   url: string,
   body?: unknown,
 ): Promise<Captured> {
-  const payload = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
+  const payload = body === undefined ? [] : [Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))]
   const request = Object.assign(Readable.from(payload), { method, url, headers: {} }) as unknown as IncomingMessage
   const captured: Captured = { status: 0, body: undefined }
   const response = {
@@ -165,10 +166,8 @@ describe('external-session routes', () => {
     const signal = claude.lastSignal
 
     const cancelling = call('POST', `${EXTERNAL_SESSION_API}/cancel`, { sessionId: 'ext-1' })
-    // The cancellation reaches the process signal first; the turn settling is
-    // the consequence the engine then waits for.
-    await waitFor(() => signal?.aborted === true, 'the cancellation to reach the turn signal')
-    claude.settle({ status: 'aborted', result: 'cancelled' })
+    // The cancellation reaches the process signal, and the double's turn settles
+    // as aborted the way a real CLI would.
     const value = valueOf(await cancelling) as { sessions: Array<{ status: string; turns: Array<{ status: string }> }> }
     expect(signal?.aborted).toBe(true)
     expect(value.sessions[0]?.status).toBe('idle')
@@ -297,6 +296,7 @@ describe('external-session routes', () => {
         limit: 409,
         'auth-required': 409,
         'provider-error': 502,
+        'store-unavailable': 503,
       })
     })
 
@@ -304,6 +304,74 @@ describe('external-session routes', () => {
       // `limit` is a creation failure and creation is tool-only, so the panel
       // cannot surface it: the engine covers that code (engine.test.ts).
       expect(externalSessionStatusFor('limit')).toBe(409)
+    })
+  })
+
+  describe('request body handling', () => {
+    it('answers 400 for a body that is not a JSON object', async () => {
+      const { call } = await harness()
+      const notJson = await call('POST', `${EXTERNAL_SESSION_API}/cancel`, '{not json')
+      expect(notJson.status).toBe(400)
+      expect(errorOf(notJson).code).toBe('bad-request')
+
+      // Valid JSON that is not an object is the caller's mistake too.
+      const array = await call('POST', `${EXTERNAL_SESSION_API}/cancel`, '[]')
+      expect(array.status).toBe(400)
+      expect(errorOf(array).code).toBe('bad-request')
+    })
+
+    it('answers 413 only when the body exceeds the size limit', async () => {
+      const { call } = await harness()
+      const huge = await call('POST', `${EXTERNAL_SESSION_API}/cancel`, `{"sessionId":"${'x'.repeat(1_100_000)}"}`)
+      expect(huge.status).toBe(413)
+      expect(errorOf(huge).code).toBe('bad-request')
+    })
+  })
+
+  it('reports an unwritable host as 503, not as an unknown session', async () => {
+    const { engine, fs, call } = await harness()
+    const first = await engine.runTurn({ provider: 'claude', prompt: 'go', cwd: '/tmp' })
+    if ('code' in first) throw new Error('first turn failed')
+
+    // Closing has to write, so it is the one route that surfaces a storage
+    // failure synchronously. The session exists and the id is right; only the
+    // host's disk is broken.
+    fs.failAllWrites = new Error('EACCES: permission denied')
+    const captured = await call('POST', `${EXTERNAL_SESSION_API}/close`, { sessionId: first.session_id })
+    expect(captured.status).toBe(503)
+    expect(errorOf(captured).code).toBe('store-unavailable')
+    expect(String(errorOf(captured).message)).not.toContain('EACCES')
+  })
+
+  describe('panel path on a broken host', () => {
+    it('answers store-unavailable from continue instead of swallowing it', async () => {
+      const { engine, fs, call } = await harness()
+      const first = await engine.runTurn({ provider: 'claude', prompt: 'go', cwd: '/tmp' })
+      if ('code' in first) throw new Error('first turn failed')
+
+      fs.failAllWrites = new Error('EACCES: permission denied')
+      const captured = await call('POST', `${EXTERNAL_SESSION_API}/continue`, { sessionId: first.session_id, prompt: 'again' })
+      // Same code, same status as the tool path: storage is the host's problem.
+      expect(captured.status).toBe(503)
+      expect(errorOf(captured).code).toBe('store-unavailable')
+    })
+
+    it('keeps the record durable when continue returns', async () => {
+      const { engine, claude, store, call } = await harness()
+      const first = await engine.runTurn({ provider: 'claude', prompt: 'go', cwd: '/tmp' })
+      if ('code' in first) throw new Error('first turn failed')
+      claude.autoOutcome = undefined
+
+      const captured = await call('POST', `${EXTERNAL_SESSION_API}/continue`, { sessionId: first.session_id, prompt: 'again' })
+      expect(captured.status).toBe(200)
+      // Cancel immediately after the response: the record is already on disk, so
+      // this is the same tick the panel's cancel button lives in.
+      expect(store.get(first.session_id)?.status).toBe('running')
+      const cancelling = call('POST', `${EXTERNAL_SESSION_API}/cancel`, { sessionId: first.session_id })
+      const value = valueOf(await cancelling) as { sessions: Array<{ status: string; turns: Array<{ status: string }> }> }
+      expect(value.sessions[0]?.status).toBe('idle')
+      expect(value.sessions[0]?.turns[1]?.status).toBe('aborted')
+      expect(claude.inFlight).toBe(0)
     })
   })
 })
