@@ -13,6 +13,7 @@ import {
   ExternalSessionApiError,
   failureCopyKey,
   type ExternalSessionApi,
+  type ExternalSessionErrorCode,
 } from './api.ts'
 import {
   blockedReason,
@@ -59,9 +60,26 @@ export interface ExternalSessionPanelProps {
   signal?: AbortSignal
 }
 
-/** 一句话把失败说清楚：权限 / 未提供 / 其它，三种处置不同。 */
+/**
+ * 宿主错误码 → 面板句子。契约里 `code` 是权威，所以先按码说具体原因，
+ * 认不出码才退回「权限 / 宿主未提供 / 其它失败」这三档。
+ */
+const CODE_COPY: Readonly<Record<ExternalSessionErrorCode, ExternalSessionLocaleKey>> = {
+  'cwd-invalid': 'fail.cwd-invalid',
+  'session-unknown': 'fail.session-unknown',
+  'session-closed': 'fail.session-closed',
+  'session-unresumable': 'fail.session-unresumable',
+  busy: 'fail.busy',
+  limit: 'fail.limit',
+  'auth-required': 'fail.auth-required',
+  'provider-missing': 'fail.provider-missing',
+  'provider-error': 'fail.provider-error',
+}
+
+/** 一句话把失败说清楚：先按错误码，再按失败种类。 */
 function describeFailure(error: Error, t: ExternalSessionTranslate): string {
   if (error instanceof ExternalSessionApiError) {
+    if (error.code !== undefined) return t(CODE_COPY[error.code])
     return t(failureCopyKey(error.failure), { message: error.message })
   }
   return t('state.failed', { message: error.message })

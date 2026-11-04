@@ -310,7 +310,13 @@ describe('codex adapter classification', () => {
   })
 })
 
-/** Strict gate: needs a real Codex that can both run and persist a thread. */
+/**
+ * Strict gate: needs a real Codex that can both run and persist a thread, so it
+ * requires a signed-in, writable CLI home as well as the switch. Verified end to
+ * end on a host whose `~/.codex` is writable; a read-only home fails earlier, at
+ * the CLI's own app-server initialization, which is an environment fact rather
+ * than an adapter one.
+ */
 const REAL_CODEX = process.env.DSH_EXT_SESSION_REAL_CODEX === '1' && process.env.DSH_EXT_SESSION_CODEX_HOME !== undefined
 const CODEX_BIN = process.env.DSH_EXT_SESSION_CODEX_BIN ?? 'codex'
 const PROBE_DIR = join(tmpdir(), 'dsh-ext-session-real-codex')

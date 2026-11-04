@@ -106,41 +106,43 @@ describe('external-session mutex against the native providers', () => {
   })
 })
 
-describe('preset-tools with no mounted engine', () => {
-  it('registers all three tools and reports provider-missing instead of crashing', async () => {
+describe('preset-tools visibility', () => {
+  it('stands down with no tool and one warning when the engine is absent', () => {
     const tools = fakeTools()
     const ctx = contextWith({ subagents: 'absent', tools })
+    // Capture the host logger channel the stand-down reports through.
+    const warnings: unknown[] = []
+    Object.defineProperty(ctx, 'logger', {
+      value: () => ({ warn: (message: unknown) => { warnings.push(message) } }),
+      configurable: true,
+    })
+    expect(() => applyPresetTools(ctx, { provider: 'claude', toolName: 'subagent_claude_code' })).not.toThrow()
+    // D14: an inert row is the point — the live host may still own that name.
+    expect([...tools.registered.keys()]).toEqual([])
+    expect(warnings).toHaveLength(1)
+    expect(String(warnings[0])).toContain('not registered')
+  })
+
+  it('registers exactly one delegation tool per row and skips control tools when told to', () => {
+    const tools = fakeTools()
+    const ctx = contextWith({ subagents: 'absent', tools })
+    const dispose = register(ctx, { config: { storePath: '/tmp/external-session-mount-test-3.json' } })
+    applyPresetTools(ctx, { provider: 'codex', toolName: 'subagent_codex', control: false })
+    expect([...tools.registered.keys()]).toEqual(['subagent_codex'])
+    dispose()
+  })
+
+  it('registers all three tools once the host service is mounted', async () => {
+    const tools = fakeTools()
+    const ctx = contextWith({ subagents: 'absent', tools })
+    const dispose = register(ctx, { config: { storePath: '/tmp/external-session-mount-test-4.json' } })
     applyPresetTools(ctx, { provider: 'claude', toolName: 'subagent_claude_code' })
     expect([...tools.registered.keys()].sort())
       .toEqual(['external_session_list', 'external_session_stop', 'subagent_claude_code'])
 
     const list = tools.registered.get('external_session_list') as ToolDefinition
-    const result = await list.execute({}, {} as never)
-    expect(result).toMatchObject({ code: 'provider-missing' })
-    expect(JSON.stringify(result)).toContain('not mounted')
-
-    const stop = tools.registered.get('external_session_stop') as ToolDefinition
-    expect(await stop.execute({ session_id: 'ext-1' }, {} as never)).toMatchObject({ code: 'provider-missing' })
-  })
-
-  it('registers exactly one delegation tool per row and skips control tools when told to', () => {
-    const tools = fakeTools()
-    applyPresetTools(contextWith({ subagents: 'absent', tools }), {
-      provider: 'codex', toolName: 'subagent_codex', control: false,
-    })
-    expect([...tools.registered.keys()]).toEqual(['subagent_codex'])
-  })
-
-  it('uses the engine once the host service is mounted', async () => {
-    const tools = fakeTools()
-    const ctx = contextWith({ subagents: 'absent', tools })
-    const dispose = register(ctx, { config: { storePath: '/tmp/external-session-mount-test-2.json' } })
-    applyPresetTools(ctx, { provider: 'claude', toolName: 'subagent_claude_code' })
-
-    const list = tools.registered.get('external_session_list') as ToolDefinition
-    const listed = await list.execute({}, {} as never)
-    // The store is empty, so the answer is an empty list rather than a refusal.
-    expect(listed).toEqual({ sessions: [] })
+    // An empty store answers with an empty list: the tools now reach the engine.
+    expect(await list.execute({}, {} as never)).toEqual({ sessions: [] })
     dispose()
   })
 })

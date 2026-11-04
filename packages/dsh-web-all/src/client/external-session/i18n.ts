@@ -63,6 +63,16 @@ export const zh = {
   'state.failed': '读取外援会话失败：{message}',
   'state.emptyTurn': '还没有会话可选。',
 
+  'fail.cwd-invalid': '工作目录不存在或不可进入，换一个 cwd 再派。',
+  'fail.session-unknown': '这个外援会话不在存储里（可能已被删除）。',
+  'fail.session-closed': '会话已关闭，不能再派轮次。',
+  'fail.session-unresumable': '缺少 CLI 会话号，这一轮无法接续，只能新建会话。',
+  'fail.busy': '并发已满：全局上限已到，或这个会话正在跑另一轮。',
+  'fail.limit': '外援会话记录数已达上限，先关闭或删除旧会话。',
+  'fail.auth-required': '外部 CLI 未登录或缺凭据，先在 CLI 自己的设置里补上。',
+  'fail.provider-missing': '宿主上找不到对应的外部 CLI 可执行文件。',
+  'fail.provider-error': '这一轮外部 CLI 报错，详情见该轮结果。',
+
   'group.title': '外援 · {count}',
   'group.tag': '外部任务',
   'group.empty': '还没有外援会话',
@@ -130,6 +140,16 @@ export const en: Record<ExternalSessionLocaleKey, string> = {
   'state.unavailable': 'The host does not expose external-session routes (capability disabled or absent in this version).',
   'state.failed': 'Reading external sessions failed: {message}',
   'state.emptyTurn': 'No session selected yet.',
+
+  'fail.cwd-invalid': 'The working directory is missing or not enterable; send the turn with another cwd.',
+  'fail.session-unknown': 'This external session is not in storage (it may have been deleted).',
+  'fail.session-closed': 'The session is closed and takes no further turns.',
+  'fail.session-unresumable': 'No CLI session id was recorded, so this session cannot be continued; start a new one.',
+  'fail.busy': 'Concurrency is full: either the global limit is reached or this session is already running a turn.',
+  'fail.limit': 'The external session limit is reached; close or delete old sessions first.',
+  'fail.auth-required': 'The external CLI is not signed in or lacks credentials; set them in the CLI own settings first.',
+  'fail.provider-missing': 'The host cannot find the external CLI executable.',
+  'fail.provider-error': 'This turn reported an external CLI error; see the turn result for details.',
 
   'group.title': 'External · {count}',
   'group.tag': 'external task',

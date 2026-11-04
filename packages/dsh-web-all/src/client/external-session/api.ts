@@ -26,16 +26,40 @@ export const EXTERNAL_SESSION_ROUTES = {
 /** 失败种类：决定面板显示哪一句话。 */
 export type ExternalApiFailure = 'forbidden' | 'unavailable' | 'failed'
 
-/** 带失败种类的路由错误。 */
+/** 宿主在错误信封里给的错误码（设计稿 §7，`code` 永远是权威）。 */
+export const EXTERNAL_SESSION_ERROR_CODES = [
+  'provider-missing',
+  'provider-error',
+  'cwd-invalid',
+  'session-unknown',
+  'session-closed',
+  'session-unresumable',
+  'busy',
+  'limit',
+  'auth-required',
+] as const
+
+/** 错误码。 */
+export type ExternalSessionErrorCode = typeof EXTERNAL_SESSION_ERROR_CODES[number]
+
+/** 是否是本能力认识的错误码。 */
+export function isExternalSessionErrorCode(value: unknown): value is ExternalSessionErrorCode {
+  return typeof value === 'string' && (EXTERNAL_SESSION_ERROR_CODES as readonly string[]).includes(value)
+}
+
+/** 带失败种类与宿主错误码的路由错误。 */
 export class ExternalSessionApiError extends Error {
   readonly failure: ExternalApiFailure
   readonly status: number | undefined
+  /** 宿主给的错误码；决定面板说哪一句具体原因。 */
+  readonly code: ExternalSessionErrorCode | undefined
 
-  constructor(message: string, failure: ExternalApiFailure, status?: number) {
+  constructor(message: string, failure: ExternalApiFailure, status?: number, code?: ExternalSessionErrorCode) {
     super(message)
     this.name = 'ExternalSessionApiError'
     this.failure = failure
     this.status = status
+    this.code = code
   }
 }
 
@@ -56,22 +80,37 @@ interface Envelope {
   readonly error?: { readonly code?: unknown; readonly message?: unknown } | null
 }
 
-/** HTTP 状态 → 失败种类。 */
-export function classifyStatus(status: number): ExternalApiFailure {
+/**
+ * 失败分类：**先看宿主给的 `code`，再看 HTTP 状态**。
+ *
+ * 这一步不能只按状态码判：契约里 404 既可能是「这族路由不存在」，也可能是
+ * `session-unknown`（会话被删了）；501 可能是 `provider-missing`（CLI 没装），
+ * 也可能是路由未实现。把这两种混成「宿主没有这个能力」会让用户去重启服务，
+ * 而真正该做的是换会话或装 CLI。
+ *
+ * @param status - HTTP 状态码。
+ * @param code - 错误信封里的 `code`。
+ * @returns `forbidden`（围栏拒绝）/ `unavailable`（宿主没这族路由）/ `failed`（会话级失败）。
+ */
+export function classifyFailure(status: number, code?: string): ExternalApiFailure {
   if (status === 401 || status === 403) return 'forbidden'
+  if (isExternalSessionErrorCode(code)) return 'failed'
   if (status === 404 || status === 405 || status === 501) return 'unavailable'
   return 'failed'
 }
 
-/** 从错误信封里取宿主给的那句话。 */
-function envelopeMessage(body: unknown): string | undefined {
-  if (typeof body !== 'object' || body === null) return undefined
+/** 从错误信封里取 `{code, message}`；缺哪个给 undefined。 */
+function envelopeError(body: unknown): { code?: ExternalSessionErrorCode; message?: string } {
+  if (typeof body !== 'object' || body === null) return {}
   const error = (body as Envelope).error
-  if (typeof error !== 'object' || error === null) return undefined
+  if (typeof error !== 'object' || error === null) return {}
   const message = typeof error.message === 'string' ? error.message.trim() : ''
-  const code = typeof error.code === 'string' ? error.code.trim() : ''
-  if (message !== '') return message
-  return code === '' ? undefined : code
+  const raw = typeof error.code === 'string' ? error.code.trim() : ''
+  const code = isExternalSessionErrorCode(raw) ? raw : undefined
+  return {
+    ...(code === undefined ? {} : { code }),
+    ...(message === '' ? {} : { message }),
+  }
 }
 
 /** 解包信封：有 `value` 取 value，没有就把整个 body 当载荷。 */
@@ -96,16 +135,19 @@ async function request(fetchImpl: FetchLike, url: string, init?: RequestInit): P
   }
   const body = await response.json().catch(() => undefined)
   if (!response.ok) {
-    const failure = classifyStatus(response.status)
-    const message = envelopeMessage(body) ?? `HTTP ${response.status}`
-    throw new ExternalSessionApiError(message, failure, response.status)
+    const error = envelopeError(body)
+    const failure = classifyFailure(response.status, error.code)
+    // 认得错误码就把它原样留给面板；人话由面板按码选，不在这里拼。
+    const message = error.message ?? error.code ?? `HTTP ${response.status}`
+    throw new ExternalSessionApiError(message, failure, response.status, error.code)
   }
   // 200 但解析不出 JSON：多半是宿主没这族路由时把首页返回来了。
   if (body === undefined) {
     throw new ExternalSessionApiError('response is not JSON', 'unavailable', response.status)
   }
   if (typeof body === 'object' && body !== null && (body as Envelope).ok === false) {
-    throw new ExternalSessionApiError(envelopeMessage(body) ?? 'request rejected', 'failed', response.status)
+    const error = envelopeError(body)
+    throw new ExternalSessionApiError(error.message ?? error.code ?? 'request rejected', 'failed', response.status, error.code)
   }
   return unwrap(body)
 }

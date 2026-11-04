@@ -198,3 +198,45 @@ describe('ExternalSessionPanel running state', () => {
     expect(container.querySelector('[data-dsh-part="blocked"]')).toBeNull()
   })
 })
+
+describe('ExternalSessionPanel host error codes', () => {
+  it('says what the code means instead of blaming a missing route', async () => {
+    const face = api({ list: async () => { throw new ExternalSessionApiError('gone', 'failed', 404, 'session-unknown') } })
+    const store = createExternalSessionStore(face)
+    const { container } = render(<ExternalSessionPanel api={face} store={store} t={t} />)
+    await waitFor(() => expect(container.textContent).toContain(zh['fail.session-unknown']))
+    // 404 带已知 code 时不能显示「宿主没提供这族路由」。
+    expect(container.textContent).not.toContain(zh['state.unavailable'])
+  })
+
+  it('shows the concurrency answer for a busy host', async () => {
+    const face = api({
+      list: async () => [idle()],
+      closeSession: async () => { throw new ExternalSessionApiError('busy', 'failed', 429, 'busy') },
+    })
+    const store = createExternalSessionStore(face)
+    const { container } = render(<ExternalSessionPanel api={face} store={store} t={t} />)
+    await waitFor(() => expect(container.querySelector('[data-dsh-part="detail"]')).toBeTruthy())
+    fireEvent.click(container.querySelector('[data-dsh-part="close"]') as HTMLButtonElement)
+    await waitFor(() => expect(container.querySelector('[data-dsh-part="action-error"]')?.textContent).toBe(zh['fail.busy']))
+  })
+
+  it('treats an accepted continue as accepted even when that turn goes on to fail', async () => {
+    // 契约：continue 立刻回 200，轮级失败体现在该轮 status/result 上，不看 HTTP。
+    const failed = idle({ turns: [{ n: 2, prompt: '再跑一次', status: 'failed', result: 'auth-required：先登录 CLI' }] })
+    const continueTurn = vi.fn(async () => [failed])
+    const face = api({ list: async () => [idle()], continueTurn })
+    const store = createExternalSessionStore(face)
+    const { container } = render(<ExternalSessionPanel api={face} store={store} t={t} />)
+    await waitFor(() => expect(container.querySelector('[data-dsh-part="detail"]')).toBeTruthy())
+    const input = container.querySelector('[data-dsh-part="continue-input"]') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '再跑一次' } })
+    fireEvent.click(container.querySelector('[data-dsh-part="continue-submit"]') as HTMLButtonElement)
+    await waitFor(() => expect(continueTurn).toHaveBeenCalled())
+    // 被接纳 ⇒ 输入清空；失败由轮次本身表达。
+    await waitFor(() => expect(input.value).toBe(''))
+    expect(container.querySelector('[data-dsh-part="turn-status"]')?.textContent).toBe(zh['turn.status.failed'])
+    expect(container.querySelector('[data-dsh-part="turn-result"]')?.textContent).toContain('auth-required')
+    expect(container.querySelector('[data-dsh-part="action-error"]')).toBeNull()
+  })
+})

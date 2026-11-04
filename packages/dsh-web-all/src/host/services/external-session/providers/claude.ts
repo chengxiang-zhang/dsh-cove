@@ -19,7 +19,17 @@
  * - the CLI applies its own `~/.claude/settings.json` `env` block, but the host
  *   scrubs credential-shaped variables from every child environment, so the
  *   adapter is the only place that can guarantee they survive: it reads them and
- *   passes them explicitly in the spawn spec.
+ *   passes them explicitly in the spawn spec. A missing entry is `auth-required`
+ *   with no child started, which is the fail-closed choice the design pins.
+ *
+ * Two environment facts belong to the host, not to this module:
+ *
+ * - the CLI's own config directory is `~/.claude` on a real host; a test may
+ *   point `CLAUDE_CONFIG_DIR` somewhere writable so a turn can persist a
+ *   transcript and be resumed. Nothing here reads or depends on that variable.
+ * - an authentication complaint is `auth-required`, never a retryable product
+ *   error: a credential needs an operator, and a turn that recovers from a
+ *   transient failure settles on its own success frame instead.
  * @module host/services/external-session/providers/claude
  */
 import type {

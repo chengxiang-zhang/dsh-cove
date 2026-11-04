@@ -22,6 +22,17 @@
  * a `method`-tagged app-server stream). Both are decoded here so a CLI upgrade
  * costs no adapter change, which is what the upgrade drill in the design asks
  * for.
+ *
+ * Two environment facts belong to the host, not to this module:
+ *
+ * - the CLI's own config directory is `~/.codex` on a real host. A test may point
+ *   `CODEX_HOME` somewhere writable so a turn can persist a thread; nothing here
+ *   reads or depends on that variable.
+ * - a 401 is classified as `auth-required`, not as a retryable product error.
+ *   Fail-closed is deliberate: an unauthenticated credential needs an operator,
+ *   and presenting it as a transient failure would invite endless retries. A
+ *   turn that retries past a transient 401 settles on its own success frame, so
+ *   the terminal event decides, not an intermediate one.
  * @module host/services/external-session/providers/codex
  */
 import type {
