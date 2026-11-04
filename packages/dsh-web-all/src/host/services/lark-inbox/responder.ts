@@ -1384,21 +1384,41 @@ export class ReplyResponder {
     if (sender?.react !== undefined && target !== '') {
       try {
         if (await sender.react(target, REPLY_ACK_EMOJI)) {
-          if (!this.store.reply.finishTurn(job.jobId, 'answer', '', 'ack-reaction', now, now + SEND_GRACE_MS, 'reaction')) return
-          this.drafts.delete(job.jobId)
-          // No text was produced, so nothing is sent; the job is settled here instead
-          // of through the send step, which would have nothing to deliver.
-          this.store.reply.markSent(job.jobId, undefined, now)
-          this.beat(true)
-          this.ports.log.info(`lark-inbox: 以表情回执结案 job=${job.jobId} message=${target}`)
-          return
+          if (this.store.reply.finishTurn(job.jobId, 'answer', '', 'ack-reaction', now, now + SEND_GRACE_MS, 'reaction')) {
+            this.drafts.delete(job.jobId)
+            // No text was produced, so nothing is sent; the job is settled here instead
+            // of through the send step, which would have nothing to deliver.
+            this.store.reply.markSent(job.jobId, undefined, now)
+            this.beat(true)
+            this.ports.log.info(`lark-inbox: 以表情回执结案 job=${job.jobId} message=${target}`)
+            return
+          }
+          // The reaction landed, the ledger refused to close the job. Silence here was
+          // this path's own hole: a person could end up with neither a sentence nor a
+          // settled job. Which way out depends on who owns the job now.
+          const live = this.store.reply.job(job.jobId)
+          if (live === undefined || live.state !== 'running') {
+            // Another path already settled it - a timeout, a stop - and that path owns
+            // what the person is told. Sending our sentence now would be a second answer.
+            this.ports.log.warn(
+              `lark-inbox: 表情已发但作业已由别的路径结案 job=${job.jobId} 状态=${live?.state ?? '已删除'}，不重复发文字`,
+            )
+            return
+          }
+          this.ports.log.warn(`lark-inbox: 表情已发但结案被拒 job=${job.jobId} 状态=${live.state}，改发兜底文字`)
         }
       } catch (error) {
         this.ports.log.warn(`lark-inbox: 表情回执失败 job=${job.jobId}：${describeError(error)}`)
       }
     }
-    // No reaction available: the acknowledgement still has to arrive as words.
-    this.closeTurn(job, 'answer', ACK_FALLBACK_TEXT, 'ack-fallback')
+    // No reaction available, or it could not be made to count: the acknowledgement
+    // still has to arrive as words. A `false` here means the job left this path's
+    // hands entirely, which is the one case with nothing left to say.
+    if (!this.closeTurn(job, 'answer', ACK_FALLBACK_TEXT, 'ack-fallback')) {
+      this.ports.log.warn(
+        `lark-inbox: 兜底文字未能结案 job=${job.jobId}（状态 ${this.store.reply.job(job.jobId)?.state ?? '已删除'}）：该作业已不由本路径拥有`,
+      )
+    }
   }
 
   /**
@@ -1436,6 +1456,16 @@ export class ReplyResponder {
       }
       this.ports.log.warn(`lark-inbox: ${job.jobId} 在请求作业里输出了 ${SILENT_REPLY_TOKEN}，按无内容结案`)
       this.closeTurn(job, 'empty', fallbackReplyText('empty'), 'silent-in-request')
+      return
+    }
+    // `ACK` is the vocabulary of a conversation answering a person. An unprompted
+    // notice has no message to react to, so the same word here is a decline in the
+    // wrong vocabulary - and it arrives as prose, which put the literal token in
+    // front of a person as if the bot had chosen to say it. The notice's own way to
+    // decline is `SILENT`; this is the same outcome without the sentence.
+    if (job.kind === 'proactive' && drafted.trim() === ACK_REPLY_TOKEN) {
+      this.ports.log.info(`lark-inbox: ${job.jobId} 主动通知输出了 ${ACK_REPLY_TOKEN}，按不打扰结案`)
+      this.closeSilently(job, this.ports.now())
       return
     }
     if (kind === 'completed' || kind === 'max-tokens') {

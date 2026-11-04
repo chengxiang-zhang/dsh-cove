@@ -97,6 +97,10 @@ interface Harness {
   deliver(envelope: LarkInboxEnvelope): void
   /** Drive one complete turn: start, bind, answer, end. */
   runTurn(turn: number, draft: string, requestId?: string): Promise<void>
+  /** Everything the answer path logged, so "left evidence" can be asserted. */
+  logs: Array<{ level: 'info' | 'warn' | 'error'; message: string }>
+  /** Knobs for races a real engine produces; `onReact` runs inside the reaction call. */
+  hooks: { onReact?: () => void }
 }
 
 const START = 1_700_000_000_000
@@ -107,6 +111,8 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
   const prompts: Harness['prompts'] = []
   const sent: Harness['sent'] = []
   const reactions: Harness['reactions'] = []
+  const logs: Harness['logs'] = []
+  const hooks: { onReact?: () => void } = {}
   const reactFails = { value: false }
   const config: AutoReplyConfig = {
     mode: 'self',
@@ -137,6 +143,9 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
       async react(messageId, emojiType) {
         if (reactFails.value) throw new Error('reaction rejected')
         reactions.push({ messageId, emojiType })
+        // A concurrent path (a timeout sweep, a stop) can settle the job while this
+        // call is in flight; that is the race the acknowledgement has to survive.
+        hooks.onReact?.()
         return true
       },
       async send(_to, text, target) {
@@ -146,7 +155,11 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
     }),
     config: () => config,
     now: () => clock,
-    log: { info() {}, warn() {}, error() {} },
+    log: {
+      info: message => { logs.push({ level: 'info', message }) },
+      warn: message => { logs.push({ level: 'warn', message }) },
+      error: message => { logs.push({ level: 'error', message }) },
+    },
     sleep: async () => {},
   })
   return {
@@ -157,6 +170,8 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
     reactions,
     reactFails,
     config,
+    logs,
+    hooks,
     advance: ms => { clock += ms },
     now: () => clock,
     flush: async () => {
@@ -292,6 +307,101 @@ describe('answering with a reaction', () => {
 
     expect(h.sent).toHaveLength(1)
     expect(h.sent[0].text).not.toContain('SILENT')
+    h.store.close()
+  })
+
+  it('does not send the acknowledgement token from an unprompted notice', async () => {
+    // The mirror of the case above: `ACK` is the vocabulary of a conversation
+    // answering a person, and an unprompted notice has no message to react to. Left
+    // alone, the token travelled as prose - a person received the word "ACK".
+    const h = harness({ router: 'on' })
+    const now = h.now()
+    h.store.reply.ensureBinding({ convKey: CHAT, chatId: CHAT, chatType: 'p2p', sessionId: SESSION, now })
+    h.store.reply.openProactive({
+      jobId: 'fp_proactive_1', convKey: CHAT, sessionId: SESSION, now, windowMs: 3_600_000, max: 3,
+    })
+    h.store.reply.claimSubmit('fp_proactive_1', SESSION, now, now + 600_000)
+    h.store.reply.markRunning('fp_proactive_1', now + 600_000, now)
+
+    await h.runTurn(1, ACK_REPLY_TOKEN, 'fp_proactive_1')
+
+    // Neither words nor a reaction: an unprompted notice that declines says nothing.
+    expect(h.sent).toHaveLength(0)
+    expect(h.reactions).toHaveLength(0)
+    expect(h.store.reply.job('fp_proactive_1')).toMatchObject({ state: 'replied', outcome: 'empty' })
+    expect(h.logs.some(entry => entry.message.includes('按不打扰结案'))).toBe(true)
+    // And the paired case still holds: the same token from a real question is a
+    // reaction on the person's own message.
+    h.store.close()
+  })
+
+  it('reacts to an acknowledgement from a question, in the same run', async () => {
+    const h = harness({ router: 'on' })
+    await submitFirst(h, '谢谢')
+    await h.runTurn(1, ACK_REPLY_TOKEN)
+
+    expect(h.reactions).toEqual([{ messageId: 'om_1', emojiType: REPLY_ACK_EMOJI }])
+    expect(h.sent).toHaveLength(0)
+    expect(h.store.reply.job(FIRST_JOB)).toMatchObject({ state: 'replied', outcome: 'answer', replyVia: 'reaction' })
+    h.store.close()
+  })
+})
+
+describe('an acknowledgement whose settlement is refused', () => {
+  it('does not answer a second time when another path settled the job mid-reaction', async () => {
+    const h = harness({ router: 'on' })
+    await submitFirst(h, '谢谢')
+    // A timeout sweep closes the job while the reaction call is in flight. That path
+    // owns what the person is told, so this one must not add a sentence on top.
+    h.hooks.onReact = () => {
+      h.store.reply.finishTurn(FIRST_JOB, 'timeout', fallbackReplyText('timeout'), 'timeout', h.now(), 0)
+    }
+    await h.runTurn(1, ACK_REPLY_TOKEN)
+
+    expect(h.reactions).toHaveLength(1)
+    // Another path owns the outcome, so its text may still go out; what must not
+    // happen is this one adding a sentence of its own on top of it.
+    expect(h.sent.filter(entry => entry.text === ACK_FALLBACK_TEXT)).toHaveLength(0)
+    expect(h.logs.some(entry => entry.level === 'warn' && entry.message.includes('已由别的路径结案'))).toBe(true)
+    // The invariant this file is about: no outcome leaves the job running with
+    // nothing said - it is out of this path's hands, and that is recorded.
+    expect(h.store.reply.job(FIRST_JOB)?.state).not.toBe('running')
+    h.store.close()
+  })
+
+  it('still answers in words when the ledger refuses to close after a reaction', async () => {
+    const h = harness({ router: 'on' })
+    await submitFirst(h, '谢谢')
+    // Fault injection: the close is refused once while the job is still running, which
+    // is the shape that used to return silently with neither words nor a settlement.
+    const real = h.store.reply.finishTurn.bind(h.store.reply)
+    let attempts = 0
+    h.store.reply.finishTurn = (...args: Parameters<typeof real>) => {
+      attempts += 1
+      return attempts === 1 ? false : real(...args)
+    }
+    await h.runTurn(1, ACK_REPLY_TOKEN)
+
+    expect(h.reactions).toHaveLength(1)
+    // A refusal is not allowed to end in silence: the sentence goes out instead.
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toBe(ACK_FALLBACK_TEXT)
+    expect(h.logs.some(entry => entry.level === 'warn' && entry.message.includes('改发兜底文字'))).toBe(true)
+    expect(h.store.reply.job(FIRST_JOB)?.state).not.toBe('running')
+    h.store.close()
+  })
+
+  it('leaves evidence even when the fallback itself cannot close the job', async () => {
+    const h = harness({ router: 'on' })
+    await submitFirst(h, '谢谢')
+    // Every close is refused: nothing can be sent, so the only honest outcome left is
+    // a readable record that this message's settlement went elsewhere.
+    h.store.reply.finishTurn = () => false
+    await h.runTurn(1, ACK_REPLY_TOKEN)
+
+    expect(h.reactions).toHaveLength(1)
+    expect(h.sent.filter(entry => entry.text === ACK_FALLBACK_TEXT)).toHaveLength(0)
+    expect(h.logs.some(entry => entry.level === 'warn' && entry.message.includes('兜底文字未能结案'))).toBe(true)
     h.store.close()
   })
 })
