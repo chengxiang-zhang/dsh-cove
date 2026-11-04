@@ -17,6 +17,7 @@ import type {
 import type { ExternalProvider } from '../../../core/external-session/types.ts'
 import type { ResolvedExternalSessionConfig } from './config.ts'
 import { createClaudeAdapter } from './providers/claude.ts'
+import { createCodexAdapter } from './providers/codex.ts'
 
 /**
  * The subprocess service, narrowed to the adapter port.
@@ -87,19 +88,23 @@ export function adapterDeps(ctx: Context, config: ResolvedExternalSessionConfig)
 /**
  * Build every adapter this build ships.
  *
- * Codex has no adapter yet: its row stays disabled in the preset until its
- * adapter passes the codex acceptance run, so this registry holds one provider
- * and a codex call reports `provider-missing` rather than silently re-dispatching.
+ * Both providers are always present. Which CLIs a session may actually reach is
+ * a preset decision, not a registry one: leaving a provider out here would turn
+ * a disabled-or-enabled row into a hard 501 the operator cannot diagnose, while
+ * a provider whose binary is missing already reports `provider-missing` at
+ * preflight through its own `resolveExecutable`. The two providers are
+ * independent — one unresolvable binary must not disable the other.
  * @param ctx - host context.
  * @param config - resolved configuration, supplying the binary overrides.
- * @returns the adapters available on this host.
+ * @returns the adapters, keyed by the provider each one drives.
  */
 export function createAdapterRegistry(
   ctx: Context,
   config: ResolvedExternalSessionConfig,
-): Partial<Record<ExternalProvider, ExternalAdapter>> {
+): Record<ExternalProvider, ExternalAdapter> {
   const deps = adapterDeps(ctx, config)
   return {
     claude: createClaudeAdapter(deps, { bin: config.claudeBin }),
+    codex: createCodexAdapter(deps, { bin: config.codexBin }),
   }
 }
