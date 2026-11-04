@@ -47,6 +47,48 @@ import { pathToFileURL } from 'node:url'
  * @property {number} failed
  */
 
+/**
+ * Read the `lark-inbox` block of a DSH profile patch.
+ *
+ * A whole YAML parser would be a dependency for four keys, so this reads exactly
+ * the shape the profile has: a `lark-inbox:` mapping nested under the entity's
+ * config, whose scalars sit on the same line and whose list items are `- id`
+ * lines. It returns undefined rather than a guess when the block is absent, and
+ * the caller reports "cannot tell" instead of a pass - a config check that
+ * silently misreads is worse than no check.
+ * @param {string} text - profile patch contents.
+ * @returns {{mode?: string, openIds: string[], cwd?: string, receipt?: boolean} | undefined}
+ */
+export function readInboxProfile(text) {
+  const lines = text.split('\n')
+  const start = lines.findIndex(line => /^\s*lark-inbox:\s*$/u.test(line))
+  if (start === -1) return undefined
+  const baseIndent = lines[start].search(/\S/u)
+  /** @type {{mode?: string, openIds: string[], cwd?: string, receipt?: boolean}} */
+  const result = { openIds: [] }
+  let listOwner = ''
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const raw = lines[index]
+    if (raw.trim() === '' || raw.trim().startsWith('#')) continue
+    const indent = raw.search(/\S/u)
+    if (indent <= baseIndent) break
+    const item = /^\s*-\s*(.+?)\s*$/u.exec(raw)
+    if (item !== null) {
+      if (listOwner === 'autoReplyOpenIds') result.openIds.push(item[1].replace(/^['"]|['"]$/gu, ''))
+      continue
+    }
+    const pair = /^\s*([A-Za-z][A-Za-z0-9_]*):\s*(.*?)\s*$/u.exec(raw)
+    if (pair === null) continue
+    const [, key, value] = pair
+    listOwner = value === '' ? key : ''
+    const scalar = value.replace(/^['"]|['"]$/gu, '')
+    if (key === 'autoReplyMode' && scalar !== '') result.mode = scalar
+    if (key === 'autoReplyCwd' && scalar !== '') result.cwd = scalar
+    if (key === 'autoReplyReceipt') result.receipt = scalar === 'true'
+  }
+  return result
+}
+
 /** Non-terminal states; a job here should be moving. */
 const OPEN_STATES = new Set(['collecting', 'submitting', 'running', 'replying'])
 
@@ -73,14 +115,15 @@ const CLOSED_STATES = new Set(['replied', 'failed', 'cancelled', 'reply_uncertai
  * @param {object} input
  * @param {JobFacts[]} input.jobs - every job in the window.
  * @param {Array<{messageId: string, jobId: string}>} input.messages - batch members.
- * @param {Array<{eventId: string, receivedAt: number}>} [input.waiting] - inbound messages still pending.
+ * @param {Array<{eventId: string, receivedAt: number, senderOpenId?: string}>} [input.waiting] - inbound messages still pending.
  * @param {ResponderHeartbeat} [input.heartbeat] - what the live process last wrote about itself.
  * @param {string} [input.heartbeatPath] - where that file lives, for the report.
+ * @param {{mode?: string, openIds: string[]}} [input.liveConfig] - the profile's inbox settings, when readable.
  * @param {number} input.now - current epoch milliseconds.
  * @param {number} input.stuckMs - how long an open job, or an unanswered message, may sit.
  * @returns {Array<{id: string, label: string, ok: boolean|null, detail: string, sql: string}>} criteria in report order.
  */
-export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbeatPath, now, stuckMs }) {
+export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbeatPath, liveConfig, now, stuckMs }) {
   const answered = jobs.filter(job => job.state === 'replied' && job.outcome === 'answer')
 
   const stuck = jobs.filter(job => OPEN_STATES.has(job.state) && now - job.updatedAt > stuckMs)
@@ -98,6 +141,16 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
     && (job.replyText ?? '').trim() === '')
 
   const waitingTooLong = waiting.filter(item => now - item.receivedAt > stuckMs)
+
+  // The allowlist is the one setting whose mistake is invisible until a message
+  // goes unanswered: an open id copied from the wrong place refuses the very
+  // person the bot exists to answer. Comparing it against who actually wrote in is
+  // the only way to catch that without waiting.
+  const profile = liveConfig
+  const straySenders = profile === undefined || profile.openIds.length === 0
+    ? []
+    : [...new Set(waiting.map(item => item.senderOpenId ?? '').filter(id => id !== ''))]
+      .filter(id => !profile.openIds.includes(id))
 
   // The heartbeat is the only reading that comes from the live process rather than
   // from what it left behind. Everything else here can look healthy in a process
@@ -126,6 +179,19 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
         ? '账本为空：还没有人发消息，或 responder 没有运行'
         : `${answered.length} 条已回复（共 ${jobs.length} 个作业）`,
       sql: "select count(*) from reply_jobs where state='replied' and outcome='answer'",
+    },
+    {
+      id: 'allowlist',
+      label: '在等的人都在白名单里',
+      ok: profile === undefined ? null : straySenders.length === 0,
+      detail: profile === undefined
+        ? '读不到 profile 里的 lark-inbox 段，无法核对（不当作通过）'
+        : profile.openIds.length === 0
+          ? '白名单为空：任何能给机器人发消息的人都会被回答'
+          : straySenders.length === 0
+            ? `白名单 ${profile.openIds.length} 项覆盖了当前所有待答消息的发送者`
+            : `${straySenders.join(', ')} 不在白名单里——这些消息会被拒绝`,
+      sql: "select json_extract(payload,'$.senderOpenId') from inbox_events where status='pending'",
     },
     {
       id: 'consuming',
@@ -226,6 +292,7 @@ function main(argv) {
   let waiting = []
   let heartbeat
   let heartbeatPath
+  let liveConfig
   try {
     const tables = handle.prepare("select name from sqlite_master where type='table'").all()
     const names = new Set(tables.map(row => String(row.name)))
@@ -264,16 +331,32 @@ function main(argv) {
     }
     // Inbound messages nothing is attached to. Not filtered by `since`: a message
     // that has been waiting for days is the finding, not an old record.
-    waiting = handle.prepare("SELECT event_id, received_at FROM inbox_events WHERE status = 'pending'")
-      .all().map(row => ({ eventId: String(row.event_id), receivedAt: Number(row.received_at) }))
+    waiting = handle.prepare("SELECT event_id, received_at, payload FROM inbox_events WHERE status = 'pending'")
+      .all().map(row => {
+        let senderOpenId = ''
+        try {
+          const parsed = JSON.parse(String(row.payload))
+          senderOpenId = typeof parsed?.senderOpenId === 'string' ? parsed.senderOpenId : ''
+        } catch { senderOpenId = '' }
+        return { eventId: String(row.event_id), receivedAt: Number(row.received_at), senderOpenId }
+      })
   } finally {
     handle.close()
   }
 
+  const profilePath = join(homedir(), '.dsh', 'profiles', 'web', 'cordis.patch.yml')
+  if (existsSync(profilePath)) {
+    try {
+      liveConfig = readInboxProfile(readFileSync(profilePath, 'utf8'))
+    } catch {
+      liveConfig = undefined
+    }
+  }
   const criteria = evaluateJobs({
     jobs,
     messages,
     waiting,
+    ...(liveConfig === undefined ? {} : { liveConfig }),
     ...(heartbeat === undefined ? {} : { heartbeat }),
     ...(heartbeatPath === undefined ? {} : { heartbeatPath }),
     now: Date.now(),

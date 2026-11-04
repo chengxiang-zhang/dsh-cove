@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { evaluateJobs } from './lark-autoreply-check.mjs'
+import { evaluateJobs, readInboxProfile } from './lark-autoreply-check.mjs'
 
 const NOW = 1_700_000_000_000
 const STUCK = 10 * 60_000
@@ -69,6 +69,7 @@ test('one answered turn with a live heartbeat satisfies every criterion', () => 
     jobs: [job()],
     messages: [{ messageId: 'om_1', jobId: 'fj_1' }],
     heartbeat: { startedAt: NOW - 60_000, sweptAt: NOW - 2000, mode: 'self', answered: 1, open: 0, failed: 0 },
+    liveConfig: { mode: 'self', openIds: ['ou_owner'] },
     now: NOW,
     stuckMs: STUCK,
   }))
@@ -154,4 +155,68 @@ test('an uncertain send must still carry the text it could not confirm', () => {
     stuckMs: STUCK,
   }))
   assert.equal(criteria.explained.ok, false)
+})
+
+
+const PROFILE = [
+  '- id: web-all',
+  '  config:',
+  '    feishu:',
+  '      appId: cli_x',
+  '    lark-inbox:',
+  '      announceToAgent: false',
+  '      # 自动回话：probe 先只记录',
+  '      autoReplyMode: probe',
+  '      autoReplyOpenIds:',
+  '        - ou_395f',
+  '        - "ou_abc"',
+  '      autoReplyCwd: /Users/leo/code/dsh-web',
+  '- insert:',
+  '    - id: mcp-datasage',
+].join('\n')
+
+test('reads the inbox block without a YAML parser', () => {
+  assert.deepEqual(readInboxProfile(PROFILE), {
+    mode: 'probe',
+    openIds: ['ou_395f', 'ou_abc'],
+    cwd: '/Users/leo/code/dsh-web',
+  })
+})
+
+test('stops at the end of the block instead of swallowing the next section', () => {
+  const parsed = readInboxProfile(PROFILE)
+  assert.equal(parsed.openIds.includes('insert'), false)
+  assert.equal(parsed.openIds.length, 2)
+})
+
+test('reports an absent block as unknown rather than as a default', () => {
+  assert.equal(readInboxProfile('- id: other\n  config:\n    notify: {}'), undefined)
+  assert.equal(readInboxProfile(''), undefined)
+  // A block that exists but declares nothing is still readable: it means "no
+  // settings here", which the caller reports as an empty allowlist, not as unknown.
+  assert.deepEqual(readInboxProfile('    lark-inbox:'), { openIds: [] })
+})
+
+test('an empty allowlist reads as no restriction', () => {
+  const parsed = readInboxProfile('  lark-inbox:\n    autoReplyMode: self\n')
+  assert.deepEqual(parsed, { mode: 'self', openIds: [] })
+})
+
+test('a sender outside the allowlist fails the criterion', () => {
+  const criteria = byId(evaluateJobs({
+    jobs: [],
+    messages: [],
+    waiting: [{ eventId: 'om_z', receivedAt: NOW - 1000, senderOpenId: 'ou_stranger' }],
+    liveConfig: { mode: 'self', openIds: ['ou_owner'] },
+    heartbeat: { startedAt: NOW - 60_000, sweptAt: NOW - 1000, mode: 'self', answered: 0, open: 0, failed: 0 },
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  assert.equal(criteria.allowlist.ok, false)
+  assert.match(criteria.allowlist.detail, /ou_stranger/)
+})
+
+test('an unreadable profile is unknown, not a pass', () => {
+  const criteria = byId(evaluateJobs({ jobs: [], messages: [], now: NOW, stuckMs: STUCK }))
+  assert.equal(criteria.allowlist.ok, null)
 })
