@@ -915,6 +915,37 @@ describe('receipt', () => {
   })
 })
 
+describe('mode changes apply to new messages only', () => {
+  it('still delivers a reply that was accepted while sending was on', async () => {
+    const harnessed = harness()
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    // The operator switches to probe while this turn is still running.
+    harnessed.config.mode = 'probe'
+    runTurn(harnessed, 1, { text: '在的' })
+    await harnessed.flush()
+    // The message was already promised an answer; switching off must not retract it.
+    expect(harnessed.sent).toHaveLength(1)
+    expect(harnessed.store.reply.job('fj_om_1')?.outcome).toBe('answer')
+  })
+
+  it('keeps a message accepted in probe out of Feishu even after the switch to self', async () => {
+    const harnessed = harness({ mode: 'probe' })
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    harnessed.config.mode = 'self'
+    runTurn(harnessed, 1, { text: '在的' })
+    await harnessed.flush()
+    // That message was accepted under probe, so it stays recorded and unsent.
+    expect(harnessed.sent).toHaveLength(0)
+    expect(harnessed.store.reply.job('fj_om_1')?.replyText).toBe('在的')
+  })
+})
+
 describe('live settings', () => {
   it('starts sending when the mode is changed to self, without a rebuild', async () => {
     const harnessed = harness({ mode: 'probe' })

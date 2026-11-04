@@ -61,6 +61,8 @@ export interface ReplyJob {
   readonly convKey: string
   readonly sessionId: string
   readonly kind: ReplyJobKind
+  /** Whether this job's answer may be sent; fixed when the job was opened. */
+  readonly deliver: boolean
   readonly state: ReplyJobState
   readonly outcome?: ReplyOutcome
   readonly replyToMessageId: string
@@ -104,6 +106,7 @@ interface JobRow {
   job_id: string | number | bigint | Uint8Array | null
   conv_key: string | number | bigint | Uint8Array | null
   kind?: string | number | bigint | Uint8Array | null
+  deliver?: number | bigint | null
   session_id: string | number | bigint | Uint8Array | null
   state: string | number | bigint | Uint8Array | null
   outcome: string | number | bigint | Uint8Array | null
@@ -123,7 +126,7 @@ interface JobRow {
   updated_at: number | bigint | null
 }
 
-const JOB_COLUMNS = `job_id, conv_key, session_id, kind, state, outcome, reply_to_message_id, collect_until,
+const JOB_COLUMNS = `job_id, conv_key, session_id, kind, deliver, state, outcome, reply_to_message_id, collect_until,
   submitted_at, deadline_at, turn, next_attempt_at, submit_attempts, send_attempts, stop_requested,
   reply_text, reply_message_id, last_error, created_at, updated_at`
 
@@ -205,6 +208,12 @@ export class ReplyStore {
     const jobColumns = this.db.prepare('PRAGMA table_info(reply_jobs)').all() as unknown as Array<{ name?: unknown }>
     if (!jobColumns.some(column => text(column.name) === 'kind')) {
       this.db.exec("ALTER TABLE reply_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'request'")
+    }
+    // Whether this job's answer may leave the host, decided when the message was
+    // accepted rather than when it is sent: switching the mode to probe must not
+    // silently retract replies already promised to someone.
+    if (!jobColumns.some(column => text(column.name) === 'deliver')) {
+      this.db.exec('ALTER TABLE reply_jobs ADD COLUMN deliver INTEGER NOT NULL DEFAULT 1')
     }
     // A proactive job has no message to answer, so its reply target is nullable at
     // the schema level too; the old NOT NULL is left in place for request jobs and
@@ -351,6 +360,8 @@ export class ReplyStore {
     replyToMessageId: string
     now: number
     debounceMs: number
+    /** Whether this conversation's answers may be sent, fixed now. */
+    deliver?: boolean
   }): AttachResult {
     return this.transaction(() => {
       const existing = this.db.prepare('SELECT job_id FROM reply_job_messages WHERE event_id = ?')
@@ -369,9 +380,17 @@ export class ReplyStore {
       let opened = false
       if (open === undefined) {
         this.db.prepare(`INSERT INTO reply_jobs
-          (job_id, conv_key, session_id, state, reply_to_message_id, collect_until, created_at, updated_at)
-          VALUES (?, ?, '', 'collecting', ?, ?, ?, ?)`)
-          .run(input.jobId, input.convKey, input.replyToMessageId, input.now + input.debounceMs, input.now, input.now)
+          (job_id, conv_key, session_id, deliver, state, reply_to_message_id, collect_until, created_at, updated_at)
+          VALUES (?, ?, '', ?, 'collecting', ?, ?, ?, ?)`)
+          .run(
+            input.jobId,
+            input.convKey,
+            input.deliver === false ? 0 : 1,
+            input.replyToMessageId,
+            input.now + input.debounceMs,
+            input.now,
+            input.now,
+          )
         jobId = input.jobId
         opened = true
       } else {
@@ -415,14 +434,16 @@ export class ReplyStore {
     now: number
     windowMs: number
     max: number
+    /** Whether this notice may be sent, fixed now. */
+    deliver?: boolean
   }): string | undefined {
     const recent = this.db.prepare(`SELECT COUNT(*) AS n FROM reply_jobs
       WHERE kind = 'proactive' AND created_at >= ?`).get(input.now - input.windowMs) as unknown as { n?: unknown }
     if (numberOrZero(recent.n) >= input.max) return undefined
     this.db.prepare(`INSERT INTO reply_jobs
-      (job_id, conv_key, session_id, kind, state, reply_to_message_id, collect_until, next_attempt_at, created_at, updated_at)
-      VALUES (?, ?, '', 'proactive', 'collecting', '', ?, 0, ?, ?)`)
-      .run(input.jobId, input.convKey, input.now, input.now, input.now)
+      (job_id, conv_key, session_id, kind, deliver, state, reply_to_message_id, collect_until, next_attempt_at, created_at, updated_at)
+      VALUES (?, ?, '', 'proactive', ?, 'collecting', '', ?, 0, ?, ?)`)
+      .run(input.jobId, input.convKey, input.deliver === false ? 0 : 1, input.now, input.now, input.now)
     return input.jobId
   }
 
@@ -1032,6 +1053,7 @@ function toJob(row: JobRow): ReplyJob {
     convKey: text(row.conv_key),
     sessionId: text(row.session_id),
     kind: text(row.kind) === 'proactive' ? 'proactive' : 'request',
+    deliver: numberOrZero(row.deliver) !== 0,
     state,
     ...(outcome === undefined ? {} : { outcome }),
     replyToMessageId: text(row.reply_to_message_id),

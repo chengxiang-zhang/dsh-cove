@@ -430,6 +430,9 @@ export class ReplyResponder {
       replyToMessageId: messageId,
       now,
       debounceMs: config.debounceMs,
+      // Decided now, not at send time: a later switch to probe must not retract a
+      // reply this message was already promised.
+      deliver: config.mode !== 'probe',
     })
     if (result.attached) {
       // Accepted and stored: this is the moment "I have your message" becomes true,
@@ -723,12 +726,13 @@ export class ReplyResponder {
     const body = (job.replyText ?? '').trim() === ''
       ? fallbackReplyText('error', '没有可发送的正文')
       : (job.replyText ?? '').trim()
-    if (config.mode === 'probe') {
-      // Probe mode exists so the seam can be read without speaking to a person:
-      // the ledger records what would have been sent, and nothing leaves the host.
+    if (!job.deliver) {
+      // Probe mode at acceptance time: the seam is recorded without speaking to a
+      // person. Read from the job, not from the live config - switching modes later
+      // applies to new messages only.
       this.store.reply.markSent(job.jobId, undefined, now)
       this.beat(true)
-      this.ports.log.info(`lark-inbox: probe 模式，未发送 ${job.jobId}：${body.slice(0, 60)}`)
+      this.ports.log.info(`lark-inbox: 该作业不作发送（probe），${job.jobId}：${body.slice(0, 60)}`)
       return
     }
     const sender = this.ports.sender()
@@ -942,6 +946,7 @@ export class ReplyResponder {
       now,
       windowMs: 3_600_000,
       max: PROACTIVE_MAX_PER_HOUR,
+      deliver: config.mode !== 'probe',
     })
     if (opened === undefined) return
     this.ports.log.info(`lark-inbox: 考虑主动通知 job=${jobId}（会话 ${sessionId} 跑了 ${Math.round((now - startedAt) / 1000)} 秒）`)
