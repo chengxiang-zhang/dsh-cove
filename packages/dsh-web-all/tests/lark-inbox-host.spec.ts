@@ -75,6 +75,10 @@ describe('lark inbox config and wizard route contracts', () => {
       // first day of it is meant to be a `shadow` log somebody reads, not a
       // behaviour that changes an answer while it is being written.
       autoReplySteer: 'off',
+      // Letting the conversation choose between prose and an acknowledgement ships
+      // off too: it changes what a person receives, and it appends to the
+      // instructions every conversation carries.
+      autoReplyRouter: 'off',
     })
   })
 

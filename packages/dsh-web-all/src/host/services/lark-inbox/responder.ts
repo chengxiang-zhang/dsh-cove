@@ -36,14 +36,18 @@ import {
   REPLY_STEER_RETRIES,
 } from './config.ts'
 import {
+  ACK_REPLY_TOKEN,
   admitReply,
   assistantTextOf,
   clampReplyText,
   composePrompt,
   composeSteer,
   fallbackReplyText,
+  hashConversationKey,
+  mayAcknowledgeOnly,
   replyJobId,
   replySessionId,
+  routerTurnHeader,
   steerDecision,
   steerMissedNote,
   steerRequestId,
@@ -81,6 +85,17 @@ export const SEND_GIVE_UP_MS = 24 * 3_600_000
 
 /** What the model says when an unprompted message is not worth sending. */
 export const SILENT_REPLY_TOKEN = 'SILENT'
+
+/** The platform's emoji key for "acknowledged"; the reaction is the whole answer. */
+export const REPLY_ACK_EMOJI = 'THUMBSUP'
+
+/**
+ * What is sent when a reaction was the intended answer but could not be given.
+ *
+ * One short sentence rather than a full reply: the model had nothing to say, and
+ * the only thing missing was the acknowledgement itself.
+ */
+export const ACK_FALLBACK_TEXT = '收到。'
 
 /** Marker written to `last_error` while a cancelled turn's end is still expected. */
 const TIMEOUT_MARKER = 'timeout-requested'
@@ -868,6 +883,11 @@ export class ReplyResponder {
     }
     let text: string
     let carriesPreamble = false
+    // Which instructions this conversation has been told, so a contract that changed
+    // reaches a conversation that started before it existed. Absent on a binding
+    // created before instructions were versioned: those keep the old one-shot rule,
+    // which is what leaves the feature off behaving exactly as it did.
+    const preambleHash = hashConversationKey(config.preamble)
     if (job.kind === 'proactive') {
       // No message to quote: the prompt has to describe what happened instead.
       text = this.proactivePrompt(now)
@@ -877,12 +897,19 @@ export class ReplyResponder {
         this.failBeforeRun(job, '批次内没有消息', now)
         return
       }
-      const preamble = binding.preambleSent ? '' : config.preamble
-      text = composePrompt(messages.map(message => message.text), preamble)
+      const told = binding.preambleHash === undefined
+        ? (config.router === 'on' ? false : binding.preambleSent)
+        : binding.preambleHash === preambleHash
+      const preamble = told ? '' : config.preamble
+      // The metadata line is the other half of "the conversation decides": the model
+      // cannot tell a follow-up from a new topic on the text alone. It rides in the
+      // user message, never in a system-prompt section, because it changes per turn.
+      const header = config.router === 'on' ? this.routerHeader(job.convKey, messages.length, now) : ''
+      text = composePrompt(messages.map(message => message.text), preamble, header)
       carriesPreamble = preamble !== ''
     }
     if (!this.store.reply.claimSubmit(job.jobId, binding.sessionId, now, now + config.turnTimeoutMs)) return
-    void this.submitAsync(job.jobId, binding.sessionId, binding.convKey, text, carriesPreamble)
+    void this.submitAsync(job.jobId, binding.sessionId, binding.convKey, text, carriesPreamble, preambleHash)
   }
 
   /**
@@ -895,6 +922,7 @@ export class ReplyResponder {
    * @param convKey - conversation key.
    * @param text - the prompt content.
    * @param marksPreamble - whether this prompt carried the standing instructions.
+   * @param preambleHash - hash of the instructions in force, recorded when they were sent.
    */
   private async submitAsync(
     jobId: string,
@@ -902,6 +930,7 @@ export class ReplyResponder {
     convKey: string,
     text: string,
     marksPreamble: boolean,
+    preambleHash: string,
   ): Promise<void> {
     const config = this.ports.config()
     try {
@@ -925,7 +954,7 @@ export class ReplyResponder {
         `lark-inbox: 已提交回话回合 job=${jobId} session=${sessionId} 字符=${text.length}${marksPreamble ? ' 含前言' : ''}`,
       )
 
-      if (marksPreamble) this.store.reply.markPreambleSent(convKey, this.ports.now())
+      if (marksPreamble) this.store.reply.markPreambleSent(convKey, preambleHash, this.ports.now())
     } catch (error) {
       const detail = describeError(error)
       const attempts = (this.store.reply.job(jobId)?.submitAttempts ?? 0)
@@ -1296,11 +1325,69 @@ export class ReplyResponder {
   }
 
   /**
+   * Build the one line of conversation metadata a turn is given.
+   *
+   * Read at submit time rather than cached: the gap that matters is the one the
+   * model should see, which is the gap at the moment it is asked.
+   * @param convKey - conversation key.
+   * @param count - how many messages this batch carries.
+   * @param now - current time.
+   * @returns the header line, without the trailing gap on a conversation never answered.
+   */
+  private routerHeader(convKey: string, count: number, now: number): string {
+    const last = this.store.reply.lastSpokeAt(convKey)
+    return routerTurnHeader({
+      count,
+      ...(last === undefined ? {} : { sinceLastReplyMs: now - last }),
+    })
+  }
+
+  /**
+   * Answer with a reaction, or with a sentence if the reaction cannot be given.
+   *
+   * The only path in this file where an answer may carry no text. Both halves end in
+   * something the person can see: a reaction on their own message, or the short
+   * sentence that stands in for it. Nothing here can end in silence, because the
+   * guard that let us get here already established that silence is not merited.
+   * @param job - the job whose draft was the acknowledgement token.
+   * @param now - current time.
+   */
+  private async acknowledge(job: ReplyJob, now: number): Promise<void> {
+    if (!job.deliver) {
+      // Probe mode records what would have been sent; a reaction is visible, so it is
+      // not the nothing-visible shape probe promises. The ledger keeps the sentence.
+      this.closeTurn(job, 'answer', ACK_FALLBACK_TEXT, 'ack-probe')
+      return
+    }
+    const sender = this.ports.sender()
+    const target = job.replyToMessageId
+    if (sender?.react !== undefined && target !== '') {
+      try {
+        if (await sender.react(target, REPLY_ACK_EMOJI)) {
+          if (!this.store.reply.finishTurn(job.jobId, 'answer', '', 'ack-reaction', now, now + SEND_GRACE_MS, 'reaction')) return
+          this.drafts.delete(job.jobId)
+          // No text was produced, so nothing is sent; the job is settled here instead
+          // of through the send step, which would have nothing to deliver.
+          this.store.reply.markSent(job.jobId, undefined, now)
+          this.beat(true)
+          this.ports.log.info(`lark-inbox: 以表情回执结案 job=${job.jobId} message=${target}`)
+          return
+        }
+      } catch (error) {
+        this.ports.log.warn(`lark-inbox: 表情回执失败 job=${job.jobId}：${describeError(error)}`)
+      }
+    }
+    // No reaction available: the acknowledgement still has to arrive as words.
+    this.closeTurn(job, 'answer', ACK_FALLBACK_TEXT, 'ack-fallback')
+  }
+
+  /**
    * Decide the outcome of a finished turn and send it.
    * @param job - the job the turn belongs to.
    * @param data - the `turn/end` payload.
    */
   private settleTurn(job: ReplyJob, data: Record<string, unknown>): void {
+    const config = this.ports.config()
     const reason = typeof data.reason === 'object' && data.reason !== null ? data.reason as Record<string, unknown> : {}
     const kind = typeof reason.kind === 'string' ? reason.kind : ''
     const drafted = (this.drafts.get(job.jobId) ?? '').trim()
@@ -1332,6 +1419,21 @@ export class ReplyResponder {
       return
     }
     if (kind === 'completed' || kind === 'max-tokens') {
+      // The model chose an acknowledgement instead of prose. Whether it is allowed to
+      // is the one thing this file decides on its own: a batch that contains a real
+      // question is answered in words, whatever the model asked for.
+      if (config.router === 'on' && job.kind !== 'proactive' && drafted.trim() === ACK_REPLY_TOKEN) {
+        const texts = this.store.reply.messagesOf(job.jobId).map(message => message.text)
+        if (mayAcknowledgeOnly(texts)) {
+          void this.acknowledge(job, this.ports.now())
+          return
+        }
+        // Vetoed: the model tried to answer a question with a reaction. The person
+        // still gets a sentence, and the ledger says why so the prompt can be fixed.
+        this.ports.log.warn(`lark-inbox: ack-vetoed job=${job.jobId} 本批不是纯确认，改发说明句`)
+        this.closeTurn(job, 'empty', fallbackReplyText('empty'), 'ack-vetoed')
+        return
+      }
       // A step that hit its token ceiling still produced usable text more often
       // than not, so partial text wins over an error sentence.
       if (draft !== '') this.closeTurn(job, 'answer', draft, kind)

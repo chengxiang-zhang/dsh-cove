@@ -53,6 +53,14 @@ export interface ConversationBinding {
   readonly generation: number
   readonly sessionId: string
   readonly preambleSent: boolean
+  /**
+   * Hash of the standing instructions this conversation has been told.
+   *
+   * Absent on a binding created before instructions were versioned: those rows keep
+   * the old "told once" rule, which is what leaves the feature switched off behaving
+   * exactly as it did.
+   */
+  readonly preambleHash?: string
 }
 
 /** One job row as callers read it. */
@@ -76,6 +84,8 @@ export interface ReplyJob {
   readonly stopRequested: boolean
   readonly replyText?: string
   readonly replyMessageId?: string
+  /** How the answer reached the person: as text, or as a reaction on their message. */
+  readonly replyVia?: 'text' | 'reaction'
   readonly lastError?: string
   /**
    * When a turn that still owed a steer ended, and the job is waiting for the turn
@@ -147,13 +157,14 @@ interface JobRow {
   carry_until: number | bigint | null
   carry_text: string | number | bigint | Uint8Array | null
   first_turn: number | bigint | null
+  reply_via: string | number | bigint | Uint8Array | null
   created_at: number | bigint | null
   updated_at: number | bigint | null
 }
 
 const JOB_COLUMNS = `job_id, conv_key, session_id, kind, deliver, state, outcome, reply_to_message_id, collect_until,
   submitted_at, deadline_at, turn, next_attempt_at, submit_attempts, send_attempts, stop_requested,
-  reply_text, reply_message_id, last_error, carry_until, carry_text, first_turn, created_at, updated_at`
+  reply_text, reply_message_id, last_error, carry_until, carry_text, first_turn, reply_via, created_at, updated_at`
 
 function text(value: unknown): string {
   return value === null || value === undefined ? '' : String(value)
@@ -181,6 +192,20 @@ function toSteerState(value: unknown): SteerState {
     case 'stranded': return 'stranded'
     default: return 'none'
   }
+}
+
+/**
+ * Whether a failed statement was refused by a uniqueness rule.
+ *
+ * `node:sqlite` reports these as a plain error whose message names the constraint;
+ * the code is shared with syntax and IO failures, so the message is what separates
+ * "this row already exists" from "this statement is wrong".
+ * @param error - whatever a statement threw.
+ * @returns true when a unique or primary-key constraint refused the write.
+ */
+function isConstraintViolation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes('UNIQUE constraint failed') || message.includes('PRIMARY KEY constraint failed')
 }
 
 /** One ledger over the inbox store's open connection. */
@@ -299,6 +324,20 @@ export class ReplyStore {
     if (!jobColumns.some(column => text(column.name) === 'first_turn')) {
       this.db.exec('ALTER TABLE reply_jobs ADD COLUMN first_turn INTEGER')
     }
+    // How an answer reached the person. A reaction carries no text, so the row has
+    // to say which one it was; `outcome` keeps meaning "what the turn produced" and
+    // its CHECK stays untouched.
+    if (!jobColumns.some(column => text(column.name) === 'reply_via')) {
+      this.db.exec(`ALTER TABLE reply_jobs ADD COLUMN reply_via TEXT NOT NULL DEFAULT 'text'
+        CHECK (reply_via IN ('text','reaction'))`)
+    }
+    // Which standing instructions a conversation has been told, rather than only
+    // whether it has been told any. A boolean meant a conversation that started
+    // before a contract existed could never receive it.
+    const bindingColumns = this.db.prepare('PRAGMA table_info(conv_bindings)').all() as unknown as Array<{ name?: unknown }>
+    if (!bindingColumns.some(column => text(column.name) === 'preamble_hash')) {
+      this.db.exec('ALTER TABLE conv_bindings ADD COLUMN preamble_hash TEXT')
+    }
   }
 
   /**
@@ -352,7 +391,7 @@ export class ReplyStore {
    * @returns the binding, or undefined when this conversation never had a turn.
    */
   binding(convKey: string): ConversationBinding | undefined {
-    const row = this.db.prepare(`SELECT conv_key, chat_id, chat_type, generation, session_id, preamble_sent
+    const row = this.db.prepare(`SELECT conv_key, chat_id, chat_type, generation, session_id, preamble_sent, preamble_hash
       FROM conv_bindings WHERE conv_key = ?`).get(convKey) as unknown as Record<string, unknown> | undefined
     if (row === undefined) return undefined
     return {
@@ -362,6 +401,7 @@ export class ReplyStore {
       generation: numberOrZero(row.generation),
       sessionId: text(row.session_id),
       preambleSent: numberOrZero(row.preamble_sent) === 1,
+      ...(optionalText(row.preamble_hash) === undefined ? {} : { preambleHash: text(row.preamble_hash) }),
     }
   }
 
@@ -374,7 +414,7 @@ export class ReplyStore {
    * @returns the binding, or undefined when nobody has ever written in.
    */
   latestDirectBinding(): ConversationBinding | undefined {
-    const row = this.db.prepare(`SELECT conv_key, chat_id, chat_type, generation, session_id, preamble_sent
+    const row = this.db.prepare(`SELECT conv_key, chat_id, chat_type, generation, session_id, preamble_sent, preamble_hash
       FROM conv_bindings WHERE chat_type = 'p2p' ORDER BY updated_at DESC LIMIT 1`)
       .get() as unknown as Record<string, unknown> | undefined
     if (row === undefined) return undefined
@@ -385,19 +425,39 @@ export class ReplyStore {
       generation: numberOrZero(row.generation),
       sessionId: text(row.session_id),
       preambleSent: numberOrZero(row.preamble_sent) === 1,
+      ...(optionalText(row.preamble_hash) === undefined ? {} : { preambleHash: text(row.preamble_hash) }),
     }
   }
 
   /**
-   * Mark the standing instructions as delivered for a conversation.
+   * Record which standing instructions a conversation has been told.
    *
-   * Only the first prompt of a conversation carries them, so this is recorded
-   * once and the steady state stays one short message per turn.
+   * `preamble_sent` stays set as well, because a build from before instructions were
+   * versioned reads only that flag; the hash is what the current build compares, so a
+   * conversation that was told an older contract can still be told the new one.
    * @param convKey - conversation key.
+   * @param hash - hash of the instructions that were sent.
    * @param now - current time.
    */
-  markPreambleSent(convKey: string, now: number): void {
-    this.db.prepare('UPDATE conv_bindings SET preamble_sent = 1, updated_at = ? WHERE conv_key = ?').run(now, convKey)
+  markPreambleSent(convKey: string, hash: string, now: number): void {
+    this.db.prepare('UPDATE conv_bindings SET preamble_sent = 1, preamble_hash = ?, updated_at = ? WHERE conv_key = ?')
+      .run(hash, now, convKey)
+  }
+
+  /**
+   * When this conversation last had an answer sent in it.
+   *
+   * Used for the one line of conversational metadata a turn is given, so the model
+   * can tell "you replied a moment ago" from "this person is coming back after a
+   * day", which are different conversations. Read from the replies themselves rather
+   * than from the binding's `updated_at`, which moves for unrelated writes.
+   * @param convKey - conversation key.
+   * @returns epoch milliseconds of the last reply, or undefined when there is none.
+   */
+  lastSpokeAt(convKey: string): number | undefined {
+    const row = this.db.prepare(`SELECT MAX(updated_at) AS last FROM reply_jobs
+      WHERE conv_key = ? AND state = 'replied'`).get(convKey) as unknown as { last?: unknown } | undefined
+    return optionalNumber(row?.last)
   }
 
   /**
@@ -811,6 +871,7 @@ export class ReplyStore {
    *   while that send is still in flight and the platform sees two requests. The
    *   duplicate collapses on its `uuid`, but a slow send would still be issued
    *   twice, and a stalled one would be issued again before anyone knows it failed.
+   * @param via - how the answer reaches the person; a reaction carries no text.
    * @returns true when this call moved the job.
    */
   finishTurn(
@@ -820,11 +881,12 @@ export class ReplyStore {
     endReason: string,
     now: number,
     nextAttemptAt = 0,
+    via: 'text' | 'reaction' = 'text',
   ): boolean {
     const result = this.db.prepare(`UPDATE reply_jobs
       SET state = 'replying', outcome = ?, reply_text = ?, last_error = NULL, end_reason = ?,
-          next_attempt_at = ?, carry_until = NULL, updated_at = ?
-      WHERE job_id = ? AND state = 'running'`).run(outcome, replyText, endReason, nextAttemptAt, now, jobId)
+          next_attempt_at = ?, carry_until = NULL, reply_via = ?, updated_at = ?
+      WHERE job_id = ? AND state = 'running'`).run(outcome, replyText, endReason, nextAttemptAt, via, now, jobId)
     return Number(result.changes) === 1
   }
 
@@ -964,10 +1026,19 @@ export class ReplyStore {
       if (target === undefined || text(target.state) !== 'running') return false
       const seq = numberOrZero((this.db.prepare('SELECT COUNT(*) AS n FROM reply_job_messages WHERE job_id = ?')
         .get(input.jobId) as unknown as { n?: unknown }).n)
-      this.db.prepare(`INSERT INTO reply_job_messages
-        (event_id, message_id, job_id, seq, steer_state, steer_request_id, steered_at)
-        VALUES (?, ?, ?, ?, 'pending', ?, ?)`)
-        .run(input.eventId, input.messageId, input.jobId, seq, input.steerRequestId, input.now)
+      try {
+        this.db.prepare(`INSERT INTO reply_job_messages
+          (event_id, message_id, job_id, seq, steer_state, steer_request_id, steered_at)
+          VALUES (?, ?, ?, ?, 'pending', ?, ?)`)
+          .run(input.eventId, input.messageId, input.jobId, seq, input.steerRequestId, input.now)
+      } catch (error) {
+        // A second member for the same request id, or for the same message. Either
+        // way there is nothing to add and the caller's ordinary path is the answer -
+        // an exception here would escape through the answer path's own sweep and park
+        // a conversation for a duplicate it could have ignored.
+        if (!isConstraintViolation(error)) throw error
+        return false
+      }
       this.db.prepare("UPDATE inbox_events SET status = 'routed', updated_at = ? WHERE event_id = ?")
         .run(input.now, input.eventId)
       this.db.prepare('UPDATE conv_bindings SET updated_at = ? WHERE conv_key = ?').run(input.now, text(target.conv_key))
@@ -1388,6 +1459,7 @@ function toJob(row: JobRow): ReplyJob {
     ...(optionalNumber(row.carry_until) === undefined ? {} : { carryUntil: numberOrZero(row.carry_until) }),
     ...(optionalText(row.carry_text) === undefined ? {} : { carryText: text(row.carry_text) }),
     ...(optionalNumber(row.first_turn) === undefined ? {} : { firstTurn: numberOrZero(row.first_turn) }),
+    replyVia: text(row.reply_via) === 'reaction' ? 'reaction' : 'text',
     createdAt: numberOrZero(row.created_at),
     updatedAt: numberOrZero(row.updated_at),
   }

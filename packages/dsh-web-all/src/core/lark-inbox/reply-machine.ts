@@ -310,15 +310,95 @@ export function replySessionId(convKey: string, generation: number): string {
  * numbered, because they arrived apart and the order carries meaning.
  * @param parts - message bodies in arrival order.
  * @param preamble - standing instructions for this conversation.
+ * @param header - one line of conversation metadata, placed above everything else.
  * @returns the prompt content.
  */
-export function composePrompt(parts: readonly string[], preamble: string): string {
+export function composePrompt(parts: readonly string[], preamble: string, header = ''): string {
   const bodies = parts.map(part => part.trim()).filter(part => part !== '')
   const head = preamble.trim()
   const body = bodies.length <= 1
     ? (bodies[0] ?? '')
     : bodies.map((part, index) => `${index + 1}. ${part}`).join('\n')
-  return head === '' ? body : `${head}\n\n${body}`
+  const opening = header.trim()
+  const framed = head === '' ? body : `${head}\n\n${body}`
+  return opening === '' ? framed : `${opening}\n\n${framed}`
+}
+
+/** The one word a model may answer with instead of prose, to mean "just acknowledge". */
+export const ACK_REPLY_TOKEN = 'ACK'
+
+/** Longest message that may be acknowledged without words. */
+export const ACK_TEXT_MAX_CHARS = 12
+
+/**
+ * Words that make a message a question rather than a closed acknowledgement.
+ *
+ * Deliberately broad. A false positive costs one explanatory sentence; a false
+ * negative answers a real question with a thumbs-up.
+ */
+const ACK_QUESTION_WORDS = /(吗|呢|么|什么|怎么|为什么|如何|哪|几|多少|能否|可否|是否|要不要|行不行)/u
+
+/** The closed set of acknowledgements, whole-message only. */
+const ACK_CONFIRMATIONS = /^(好|好的|好滴|ok|okay|收到|嗯+|谢谢|多谢|thx|thanks|知道了|明白|了解|辛苦了?)[。.!！~]*$/iu
+
+/**
+ * Whether the conversation itself decides the shape of an answer.
+ *
+ * `off` keeps the fixed shape every earlier build had; `on` lets the model answer
+ * with prose or with an acknowledgement, and hands the decision about whether an
+ * acknowledgement is allowed to {@link mayAcknowledgeOnly}.
+ */
+export type RouterMode = 'off' | 'on'
+
+/**
+ * Decide whether every message in a batch may be answered with a reaction alone.
+ *
+ * This is the one guard between "the model decides how to answer" and a bot that
+ * silently likes a real question. It therefore errs towards speech at every step:
+ * one message with a question mark, one question word, one message longer than a
+ * couple of breath's worth of text, or one message that is not purely an
+ * acknowledgement, and the answer has to be words. An empty batch is not
+ * acknowledgeable either: there is nothing to acknowledge.
+ *
+ * Note what this function cannot do: it never turns prose into silence. A true
+ * result only permits a reaction the model asked for.
+ * @param texts - every message body in the batch.
+ * @returns true when a reaction alone is allowed to be the whole answer.
+ */
+export function mayAcknowledgeOnly(texts: readonly string[]): boolean {
+  if (texts.length === 0) return false
+  for (const raw of texts) {
+    const body = raw.trim()
+    if (body === '') return false
+    if (body.length > ACK_TEXT_MAX_CHARS) return false
+    if (body.includes('?') || body.includes('？')) return false
+    if (ACK_QUESTION_WORDS.test(body)) return false
+    if (!ACK_CONFIRMATIONS.test(body)) return false
+  }
+  return true
+}
+
+/**
+ * One line of conversation metadata prepended to a turn's prompt.
+ *
+ * Kept in the user message rather than in a system-prompt section: it changes on
+ * every turn, and a section with interpolated data is exactly what the
+ * system-prompt rules forbid. The trailing clause is dropped when this
+ * conversation has never been answered, because "0 minutes" would read as a fact
+ * rather than as the absence of one.
+ * @param input - how many messages this batch carries, and how long since the last reply.
+ * @returns the header line, or an empty string when there is nothing to say.
+ */
+export function routerTurnHeader(input: {
+  count: number
+  sinceLastReplyMs?: number | undefined
+}): string {
+  const parts = ['飞书私聊', `本批 ${input.count} 条`]
+  const elapsed = input.sinceLastReplyMs
+  if (elapsed !== undefined && Number.isFinite(elapsed)) {
+    parts.push(`距上次回复 ${Math.max(0, Math.floor(elapsed / 60_000))} 分钟`)
+  }
+  return `[${parts.join(' · ')}]`
 }
 
 /** How an admitted batch finished. Never omitted: every one sends something. */

@@ -17,7 +17,7 @@
 import { join } from 'node:path'
 import { registerFamilyNamespace } from '../family-config.ts'
 import { readSecret } from '../feishu/credentials.ts'
-import type { SteerMode } from '../../../core/lark-inbox/reply-machine.ts'
+import type { RouterMode, SteerMode } from '../../../core/lark-inbox/reply-machine.ts'
 import z from 'schemastery'
 
 export const LARK_INBOX_SETTINGS_NAMESPACE = 'lark-inbox'
@@ -29,6 +29,8 @@ export const LARK_DOMAINS = ['feishu', 'lark'] as const
 export const REPLY_MODES = ['off', 'probe', 'self'] as const
 /** Whether an arriving message may join the running turn; see `steerDecision`. */
 export const STEER_MODES = ['off', 'shadow', 'on'] as const
+/** Whether the conversation itself decides how to answer; see `mayAcknowledgeOnly`. */
+export const ROUTER_MODES = ['off', 'on'] as const
 
 /**
  * Standing instructions carried by the first prompt of a conversation.
@@ -44,6 +46,37 @@ export const DEFAULT_REPLY_PREAMBLE = [
   '除非对方在这条消息里明确要求，不要执行 git push、不要重写历史、不要动 main 分支、不要推 tag。',
   '需要很长的分析时，先给结论，再给必要的过程。',
 ].join('\n')
+
+/**
+ * The Router contract, appended to the standing instructions when it is enabled.
+ *
+ * Three of these four lines are about shape rather than content - what the person's
+ * line *is*, how long an answer should be, and when a reaction is the whole answer.
+ * They live in the user message, never in a system-prompt section: they shape one
+ * conversation, and every other session on this host must not inherit them.
+ */
+export const ROUTER_PREAMBLE_LINES = [
+  '你是对方在飞书上的对话方，不是工单系统。先判断对方这条是在提问、下指令、确认你上一个问题，还是只是寒暄。',
+  '回复长度跟着问题走：一句话能说清就一句话；只有对方要分析时才展开。',
+  '如果对方只是表示收到或感谢、并且不需要你做任何事，只输出 ACK 这一行。凡是提问或指令，都必须用文字回答。',
+  '标有"（对方在你处理上一条时补充）"的内容是对当前任务的修正或追加，按它调整正在做的事，最后只给一个合并后的答复。',
+] as const
+
+/**
+ * Compose the instructions actually sent for one conversation.
+ *
+ * A pure concatenation, so "the preamble an operator typed" and "the contract this
+ * build adds" stay separable: the hash of the result is what decides whether a
+ * conversation still needs to be told, and an empty base must not leave a leading
+ * blank line.
+ * @param base - the operator's own standing instructions.
+ * @returns the instructions, with the Router contract appended.
+ */
+export function withRouterContract(base: string): string {
+  const head = base.trim()
+  const lines = ROUTER_PREAMBLE_LINES.join('\n')
+  return head === '' ? lines : `${head}\n${lines}`
+}
 
 /** Settings for answering a direct message with an agent turn. */
 /**
@@ -83,6 +116,11 @@ export interface AutoReplyConfig {
    * log only) or `on`. See `steerDecision` in `core/lark-inbox/reply-machine.ts`.
    */
   steer: SteerMode
+  /**
+   * Whether the conversation decides how to answer: `off` (fixed shape, today's
+   * behaviour) or `on` (prose or acknowledgement, with the guard as the only veto).
+   */
+  router: RouterMode
 }
 
 /**
@@ -164,6 +202,11 @@ export interface LarkInboxConfig {
    * folds it in.
    */
   autoReplySteer?: (typeof STEER_MODES)[number]
+  /**
+   * Whether an answer may be an acknowledgement instead of prose, and whether the
+   * conversation is told so. See `ROUTER_PREAMBLE_LINES` and `mayAcknowledgeOnly`.
+   */
+  autoReplyRouter?: (typeof ROUTER_MODES)[number]
 }
 
 export const Config = z.object({
@@ -202,6 +245,10 @@ export const Config = z.object({
   // read rather than a behaviour to discover - `shadow` runs every decision and
   // touches nothing.
   autoReplySteer: z.union(STEER_MODES).default('off'),
+  // Off: this changes what a person receives - a reaction instead of a sentence -
+  // and it appends to the instructions every conversation is carrying. Shipping it
+  // off means a bundle hot-reload cannot change an answer that is being written.
+  autoReplyRouter: z.union(ROUTER_MODES).default('off'),
 }) as unknown as z<LarkInboxConfig>
 
 /**
@@ -214,6 +261,7 @@ export const Config = z.object({
  */
 export function autoReplyConfig(config: Required<LarkInboxConfig>): AutoReplyConfig {
   const resolvedMode = REPLY_MODES.includes(config.autoReplyMode) ? config.autoReplyMode : 'off'
+  const router = ROUTER_MODES.includes(config.autoReplyRouter) ? config.autoReplyRouter : 'off'
   return {
     mode: resolvedMode,
     openIds: config.autoReplyOpenIds.map(id => id.trim()).filter(id => id !== ''),
@@ -221,12 +269,17 @@ export function autoReplyConfig(config: Required<LarkInboxConfig>): AutoReplyCon
     turnTimeoutMs: REPLY_TURN_TIMEOUT_MS,
     tickMs: REPLY_TICK_MS,
     cwd: config.autoReplyCwd.trim(),
-    preamble: config.autoReplyPreamble,
+    // The contract is part of what the conversation is told, so it is composed here
+    // rather than appended at the call site: the hash of this value is what decides
+    // whether a conversation still needs telling, and two places composing it would
+    // let the hash disagree with the text.
+    preamble: router === 'on' ? withRouterContract(config.autoReplyPreamble) : config.autoReplyPreamble,
     maxSendAttempts: REPLY_MAX_ATTEMPTS,
     maxSubmitAttempts: REPLY_MAX_ATTEMPTS,
     receipt: config.autoReplyReceipt === true,
     proactive: config.proactiveNotice === true,
     steer: STEER_MODES.includes(config.autoReplySteer) ? config.autoReplySteer : 'off',
+    router,
   }
 }
 
