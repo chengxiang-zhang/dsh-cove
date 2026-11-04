@@ -310,6 +310,7 @@ Codex：
 - **宿主需要有 `claude`**：解析规则见 §9；解析不到时本轮返回 `provider-missing`。
 - **同步阻塞**：工具在本轮结束才返回，长任务的对话卡片只显示运行中，实时进度只在面板可见。
 - **互斥门 fail-closed**：原生外部 provider 没关时本能力完全不挂载，`/api/external-session/*` 返回 404（规则见 §12），不会与原生并存，也不会抢工具名。
+  - 自查：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3080/api/external-session/list` 回 `404` 说明没挂载（已挂载但调用方不在围栏内是 `403`，正常是 `200`）；宿主日志里 external-session 的装配拒绝消息会点名 `tool-subagent-claude-code` 与 `tool-subagent-codex`；`grep externalSession ~/.dsh/profiles/web/cordis.patch.yml` 为空说明就是还没迁移。
 - **迁移前这两个工具名仍归原生**：引擎服务缺席时预设层入口不注册工具（机制见 §7），所以 `subagent_claude_code` 与 `subagent_codex` 在四个原生行关掉之前仍由原生实现提供。
 - **`auth-required` 是 fail-closed**：CLI 的 401 与未登录一律判 `auth-required`（要人处理），不伪装成可重试的 `provider-error`。
 - **codex 需要可写的宿主 home**：真实成功路径要 `~/.codex` 可写；只读 home 会在 CLI 自己的 app-server 初始化阶段先失败，那是宿主 permissions 差异，不是适配器差异。
