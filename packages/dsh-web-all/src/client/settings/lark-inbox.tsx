@@ -70,6 +70,7 @@ export const LARK_INBOX_FIELDS = [
   'autoReplyPreamble',
   'retentionDays',
   'autoReplyReceipt',
+  'proactiveNotice',
 ] as const
 
 export type LarkInboxField = (typeof LARK_INBOX_FIELDS)[number]
@@ -102,6 +103,7 @@ export interface LarkInboxSettings {
   autoReplyPreamble?: string
   retentionDays?: number
   autoReplyReceipt?: boolean
+  proactiveNotice?: boolean
 }
 
 /** 共享 `feishu` 命名空间的字段子集。 */
@@ -206,6 +208,7 @@ export class LarkSettingsController {
       settingsTextField('autoReplyPreamble'),
       settingsNumberField('retentionDays'),
       booleanField('autoReplyReceipt'),
+      booleanField('proactiveNotice'),
     ])
     this.credentialForm = new SettingsFormModel<FeishuCredentialSettings>(scopes.credentials, [
       settingsTextField('appId'),
@@ -467,6 +470,18 @@ export function LarkSettingsPage(props: LarkPageProps): ReactNode {
           {...state.autoReplyReceipt}
           onEdit={(text) => { props.edit('autoReplyReceipt', text) }}
           onReset={() => { props.resetField('autoReplyReceipt') }}
+        />
+        <SettingsValueField
+          id="lark-proactive-notice"
+          label={t('settings.proactiveNotice')}
+          hint={t('settings.proactiveNoticeHint')}
+          overriddenLabel={t('settings.overridden')}
+          resetLabel={t('settings.reset')}
+          invalidLabel={t('settings.invalid')}
+          disabled={disabled}
+          {...state.proactiveNotice}
+          onEdit={(text) => { props.edit('proactiveNotice', text) }}
+          onReset={() => { props.resetField('proactiveNotice') }}
         />
       </SettingsForm>
       <h4 className={css.title}>{t('settings.credentialsTitle')}</h4>

@@ -43,6 +43,19 @@ export const DEFAULT_REPLY_PREAMBLE = [
 ].join('\n')
 
 /** Settings for answering a direct message with an agent turn. */
+/**
+ * Bounds on unprompted messages.
+ *
+ * Not settings: an operator decides whether the bot may speak first, and these
+ * decide how often it may. Making them editable would invite tuning the one number
+ * that decides how annoying the feature is, without the readings to tune it with.
+ */
+export const PROACTIVE_MAX_PER_HOUR = 3
+export const PROACTIVE_QUIET_FROM_HOUR = 22
+export const PROACTIVE_QUIET_TO_HOUR = 8
+/** A run shorter than this did not do anything worth reporting. */
+export const PROACTIVE_MIN_RUN_MS = 120_000
+
 export interface AutoReplyConfig {
   mode: (typeof REPLY_MODES)[number]
   /** open ids allowed to trigger an answer; empty means "no allowlist". */
@@ -60,6 +73,8 @@ export interface AutoReplyConfig {
   maxSubmitAttempts: number
   /** Whether to react to the message once its turn starts. */
   receipt: boolean
+  /** Whether the bot may speak first about work the person did not ask it about. */
+  proactive: boolean
 }
 
 /**
@@ -107,6 +122,8 @@ export interface LarkInboxConfig {
   retentionDays?: number
   /** React to the message when its turn starts, so the sender sees it was read. */
   autoReplyReceipt?: boolean
+  /** Let the bot speak first about long runs the person did not ask it about. */
+  proactiveNotice?: boolean
 }
 
 export const Config = z.object({
@@ -137,6 +154,9 @@ export const Config = z.object({
   // message the person just sent, and without it a queued message looks ignored
   // for as long as the turn ahead of it runs.
   autoReplyReceipt: z.boolean().default(true),
+  // Off: speaking first is the one behaviour that can be unwelcome without being
+  // wrong, so it waits for an operator to ask for it.
+  proactiveNotice: z.boolean().default(false),
 }) as unknown as z<LarkInboxConfig>
 
 /**
@@ -160,6 +180,7 @@ export function autoReplyConfig(config: Required<LarkInboxConfig>): AutoReplyCon
     maxSendAttempts: REPLY_MAX_ATTEMPTS,
     maxSubmitAttempts: REPLY_MAX_ATTEMPTS,
     receipt: config.autoReplyReceipt === true,
+    proactive: config.proactiveNotice === true,
   }
 }
 

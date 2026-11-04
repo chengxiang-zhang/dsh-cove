@@ -19,7 +19,7 @@ import type { AutoReplyConfig } from '../src/host/services/lark-inbox/config.ts'
 import { InboxStore } from '../src/host/services/lark-inbox/inbox-store.ts'
 import { ReplyResponder } from '../src/host/services/lark-inbox/responder.ts'
 import { createAutoReplyStatusTool } from '../src/host/services/lark-inbox/tools.ts'
-import { clearBotSessions, isBotSession } from '../src/host/services/feishu/bot-sessions.ts'
+import { clearBotSessions, isBotSession, markBotSession } from '../src/host/services/feishu/bot-sessions.ts'
 
 const OWNER = 'ou_owner'
 const CHAT = 'oc_chat'
@@ -89,9 +89,13 @@ interface Harness {
   deliver(envelope: LarkInboxEnvelope): void
 }
 
-function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
+/** Noon and three in the morning, local: the two sides of the quiet-hours gate. */
+const NOON = new Date('2023-11-15T12:00:00+08:00').getTime()
+const THREE_AM = new Date('2023-11-15T03:00:00+08:00').getTime()
+
+function harness(overrides: Partial<AutoReplyConfig> = {}, startClock = 1_700_000_000_000): Harness {
   const store = InboxStore.open({ rootDir: tempDir() })
-  let clock = 1_700_000_000_000
+  let clock = startClock
   const prompts: Harness['prompts'] = []
   const sessions: Harness['sessions'] = []
   const cancels: string[] = []
@@ -111,6 +115,7 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
     maxSendAttempts: 3,
     maxSubmitAttempts: 3,
     receipt: false,
+    proactive: false,
     ...overrides,
   }
   const ports: ConstructorParameters<typeof ReplyResponder>[1] = {
@@ -706,6 +711,94 @@ describe('status tool', () => {
   it('reports the not-running reason instead of an empty ledger', async () => {
     const tool = createAutoReplyStatusTool(() => undefined)
     await expect(tool.execute({})).resolves.toMatchObject({ error: expect.stringContaining('未运行') })
+  })
+})
+
+describe('proactive notice', () => {
+  /** Establish the direct conversation a notice could be sent into. */
+  function seedConversation(harnessed: Harness): string {
+    const sessionId = replySessionId(CHAT, 1)
+    harnessed.store.reply.ensureBinding({
+      convKey: CHAT,
+      chatId: CHAT,
+      chatType: 'p2p',
+      sessionId,
+      now: 1_700_000_000_000,
+    })
+    // The responder marks its own sessions when it admits a message; this test
+    // creates the conversation directly, so it marks the id the same way.
+    markBotSession(sessionId)
+    return sessionId
+  }
+
+  /** Let a run in someone else's session finish, which is the trigger. */
+  function finishedForeignRun(harnessed: Harness, minutes: number): void {
+    harnessed.responder.handleSessionEvent('human-1', { type: 'turn/start', data: { turn: 1 } })
+    harnessed.advance(minutes * 60_000)
+    harnessed.responder.handleSessionEvent('human-1', { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  }
+
+  it('asks the model to decide after a long run elsewhere, and honours silence', async () => {
+    // Midday: outside the quiet hours the gates enforce.
+    const harnessed = harness({ proactive: true }, NOON)
+    seedConversation(harnessed)
+
+    finishedForeignRun(harnessed, 5)
+    harnessed.responder.tick()
+    await harnessed.flush()
+
+    expect(harnessed.prompts).toHaveLength(1)
+    expect(harnessed.prompts[0].text).toContain('SILENT')
+
+    runTurn(harnessed, 1, { text: 'SILENT' })
+    await harnessed.flush()
+
+    // Silence is the delivered outcome here: nothing is sent, and the ledger says
+    // the turn chose not to speak rather than that it never ran.
+    expect(harnessed.sent).toHaveLength(0)
+    const job = harnessed.store.reply.recent(1)[0]
+    expect(job).toMatchObject({ kind: 'proactive', state: 'replied', outcome: 'empty' })
+    clearBotSessions()
+  })
+
+  it('sends what the model decided to say', async () => {
+    const harnessed = harness({ proactive: true }, NOON)
+    seedConversation(harnessed)
+
+    finishedForeignRun(harnessed, 5)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    runTurn(harnessed, 1, { text: '你让我跑的那批任务全过了。' })
+    await harnessed.flush()
+
+    expect(harnessed.sent).toHaveLength(1)
+    expect(harnessed.sent[0].text).toContain('全过了')
+    clearBotSessions()
+  })
+
+  it('stays out of a short run, a disabled switch, and the quiet hours', async () => {
+    const short = harness({ proactive: true }, NOON)
+    seedConversation(short)
+    finishedForeignRun(short, 0.2)
+    short.responder.tick()
+    await short.flush()
+    expect(short.prompts).toHaveLength(0)
+
+    const disabled = harness({ proactive: false }, NOON)
+    seedConversation(disabled)
+    finishedForeignRun(disabled, 5)
+    disabled.responder.tick()
+    await disabled.flush()
+    expect(disabled.prompts).toHaveLength(0)
+
+    // 03:00 local: the gate refuses before the model is ever asked.
+    const night = harness({ proactive: true }, THREE_AM)
+    seedConversation(night)
+    finishedForeignRun(night, 5)
+    night.responder.tick()
+    await night.flush()
+    expect(night.prompts).toHaveLength(0)
+    clearBotSessions()
   })
 })
 

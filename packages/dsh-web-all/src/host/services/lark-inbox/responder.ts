@@ -23,8 +23,14 @@
  * fake clock and a fake sender.
  */
 
-import { clearBotSessions, markBotSession } from '../feishu/index.ts'
+import { clearBotSessions, isBotSession, markBotSession } from '../feishu/index.ts'
 import type { LarkInboxEnvelope } from '../../../core/lark-inbox/queue.ts'
+import {
+  PROACTIVE_MAX_PER_HOUR,
+  PROACTIVE_MIN_RUN_MS,
+  PROACTIVE_QUIET_FROM_HOUR,
+  PROACTIVE_QUIET_TO_HOUR,
+} from './config.ts'
 import {
   admitReply,
   assistantTextOf,
@@ -51,6 +57,9 @@ export const REPLY_RECEIPT_EMOJI = 'SMILE'
 
 /** How long a sweep waits before assuming an in-flight send is not coming back. */
 export const SEND_GRACE_MS = 30_000
+
+/** What the model says when an unprompted message is not worth sending. */
+export const SILENT_REPLY_TOKEN = 'SILENT'
 
 /** Marker written to `last_error` while a cancelled turn's end is still expected. */
 const TIMEOUT_MARKER = 'timeout-requested'
@@ -160,6 +169,8 @@ export class ReplyResponder {
   private lastHeartbeatAt = Number.NEGATIVE_INFINITY
   /** Turn numbers seen per session, used to attribute a batch to its turn. */
   private readonly turnCursor = new Map<string, TurnCursor>()
+  /** When each session's current turn opened, so a run's length is measurable. */
+  private readonly turnStartedAt = new Map<string, number>()
   /** Assistant text per job, filled as messages arrive and consumed at turn end. */
   private readonly drafts = new Map<string, string>()
 
@@ -464,16 +475,23 @@ export class ReplyResponder {
       this.failBeforeRun(job, '会话绑定丢失', now)
       return
     }
-    const messages = this.store.reply.messagesOf(job.jobId)
-    if (messages.length === 0) {
-      this.failBeforeRun(job, '批次内没有消息', now)
-      return
+    let text: string
+    let carriesPreamble = false
+    if (job.kind === 'proactive') {
+      // No message to quote: the prompt has to describe what happened instead.
+      text = this.proactivePrompt(now)
+    } else {
+      const messages = this.store.reply.messagesOf(job.jobId)
+      if (messages.length === 0) {
+        this.failBeforeRun(job, '批次内没有消息', now)
+        return
+      }
+      const preamble = binding.preambleSent ? '' : config.preamble
+      text = composePrompt(messages.map(message => message.text), preamble)
+      carriesPreamble = preamble !== ''
     }
     if (!this.store.reply.claimSubmit(job.jobId, binding.sessionId, now, now + config.turnTimeoutMs)) return
-
-    const preamble = binding.preambleSent ? '' : config.preamble
-    const text = composePrompt(messages.map(message => message.text), preamble)
-    void this.submitAsync(job.jobId, binding.sessionId, binding.convKey, text, preamble !== '')
+    void this.submitAsync(job.jobId, binding.sessionId, binding.convKey, text, carriesPreamble)
   }
 
   /**
@@ -550,6 +568,27 @@ export class ReplyResponder {
     void sender.react(messageId, REPLY_RECEIPT_EMOJI).catch((error: unknown) => {
       this.ports.log.warn(`lark-inbox: 表情回执失败 message=${messageId}：${describeError(error)}`)
     })
+  }
+
+  /**
+   * The prompt that asks the model whether to speak, and lets it decline.
+   *
+   * Written as a decision with an explicit way out. The alternative - asking it to
+   * summarise the run - would produce a message every time, which is the behaviour
+   * this whole path is bounded against.
+   * @param now - current time, for the wording only.
+   * @returns the prompt body.
+   */
+  private proactivePrompt(now: number): string {
+    void now
+    return [
+      '这是一条自动提醒，不是有人在问你。',
+      '你刚才在另一个会话里完成了一段比较长的工作。',
+      '现在决定要不要主动告诉对方：',
+      '- 如果对方确实需要现在就知道，就直接输出你要发给对方的那段纯文本。',
+      `- 如果不需要打扰对方，就只输出 ${SILENT_REPLY_TOKEN} 这一行，不要有别的字。`,
+      '- 不要调用任何工具，不要解释你在做什么。',
+    ].join('\n')
   }
 
   /**
@@ -677,6 +716,25 @@ export class ReplyResponder {
    * @param endReason - the engine's reason, kept for diagnosis.
    * @returns true when this call closed the turn.
    */
+  /**
+   * Close a proactive batch that decided not to speak.
+   *
+   * Recorded as `empty` rather than `cancelled`: the turn ran and made a choice, and
+   * an operator reading the ledger needs to tell "chose silence" apart from "never
+   * got the chance". This is the one path where silence is the delivered outcome.
+   * @param job - the proactive job.
+   * @param now - current time.
+   * @returns true when this call closed it.
+   */
+  private closeSilently(job: ReplyJob, now: number): boolean {
+    if (!this.store.reply.finishTurn(job.jobId, 'empty', '', 'silent', now, now + SEND_GRACE_MS)) return false
+    this.drafts.delete(job.jobId)
+    this.store.reply.markSent(job.jobId, undefined, now)
+    this.ports.log.info(`lark-inbox: ${job.jobId} 决定不打扰，未发送`)
+    this.beat(true)
+    return true
+  }
+
   private closeTurn(job: ReplyJob, outcome: ReplyOutcome, text: string, endReason = ''): boolean {
     const now = this.ports.now()
     const body = clampReplyText(text, REPLY_TEXT_LIMIT)
@@ -702,6 +760,12 @@ export class ReplyResponder {
     const record = typeof event === 'object' && event !== null ? event as Record<string, unknown> : {}
     const type = typeof record.type === 'string' ? record.type : ''
     const data = typeof record.data === 'object' && record.data !== null ? record.data as Record<string, unknown> : {}
+    if (!isBotSession(sessionId)) {
+      // A session that answers Feishu is this file's own; every other session is
+      // the person working somewhere else, which is what a notice may be about.
+      this.observeForeignTurn(sessionId, type, data)
+      return
+    }
     const running = this.store.reply.runningJobForSession(sessionId)
     if (running === undefined) {
       // The job may already be closed (a timeout that the turn's own end reached
@@ -750,6 +814,65 @@ export class ReplyResponder {
   }
 
   /**
+   * Watch a run in someone else's session, and consider saying something about it.
+   *
+   * Three gates, cheapest first: the run must be long enough to have done something
+   * worth reporting, the hour must be one a person would accept a message in, and
+   * the conversation must be under its hourly budget. Only then does a turn run to
+   * decide whether to actually speak - the model decides, the gates only decide
+   * whether it gets asked.
+   * @param sessionId - the session that ran.
+   * @param type - event type.
+   * @param data - event payload.
+   */
+  private observeForeignTurn(sessionId: string, type: string, data: Record<string, unknown>): void {
+    const now = this.ports.now()
+    if (type === 'turn/start') {
+      const turn = typeof data.turn === 'number' ? data.turn : undefined
+      this.turnStartedAt.set(sessionId, now)
+      void turn
+      return
+    }
+    if (type !== 'turn/end') return
+    const startedAt = this.turnStartedAt.get(sessionId)
+    this.turnStartedAt.delete(sessionId)
+    const turn = typeof data.turn === 'number' ? data.turn : -1
+    const reason = typeof data.reason === 'object' && data.reason !== null ? data.reason as Record<string, unknown> : {}
+    if (reason.kind !== 'completed') return
+    if (startedAt === undefined || now - startedAt < PROACTIVE_MIN_RUN_MS) return
+
+    const config = this.ports.config()
+    if (!config.proactive) return
+    const hour = new Date(now).getHours()
+    const quiet = hour >= PROACTIVE_QUIET_FROM_HOUR || hour < PROACTIVE_QUIET_TO_HOUR
+    if (quiet) {
+      this.ports.log.info(`lark-inbox: 静默时段（${hour} 点），跳过主动通知 session=${sessionId}`)
+      return
+    }
+    const target = this.store.reply.latestDirectBinding()
+    if (target === undefined) {
+      // Nobody has ever written to this bot, so there is no conversation to speak in.
+      return
+    }
+    if (this.store.reply.proactiveCountSince(target.convKey, now - 3_600_000) >= PROACTIVE_MAX_PER_HOUR) {
+      this.ports.log.info(`lark-inbox: 本小时主动通知已达 ${PROACTIVE_MAX_PER_HOUR} 条，跳过`)
+      return
+    }
+    const jobId = `fp_${sessionId.replace(/[^A-Za-z0-9_-]/gu, '_')}_${turn}`.slice(0, 50)
+    const opened = this.store.reply.openProactive({
+      jobId,
+      convKey: target.convKey,
+      sessionId: target.sessionId,
+      now,
+      windowMs: 3_600_000,
+      max: PROACTIVE_MAX_PER_HOUR,
+    })
+    if (opened === undefined) return
+    this.ports.log.info(`lark-inbox: 考虑主动通知 job=${jobId}（会话 ${sessionId} 跑了 ${Math.round((now - startedAt) / 1000)} 秒）`)
+    this.requestSweep()
+  }
+
+  /**
    * Decide the outcome of a finished turn and send it.
    * @param job - the job the turn belongs to.
    * @param data - the `turn/end` payload.
@@ -761,6 +884,10 @@ export class ReplyResponder {
     const stopped = job.stopRequested || this.store.reply.stopRequested(job.jobId)
     const timedOut = job.lastError === TIMEOUT_MARKER
 
+    if (job.kind === 'proactive' && draft.trim().toUpperCase() === SILENT_REPLY_TOKEN) {
+      this.closeSilently(job, this.ports.now())
+      return
+    }
     if (kind === 'completed' || kind === 'max-tokens') {
       // A step that hit its token ceiling still produced usable text more often
       // than not, so partial text wins over an error sentence.

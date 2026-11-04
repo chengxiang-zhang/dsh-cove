@@ -26,6 +26,9 @@
 import type { DatabaseSync } from 'node:sqlite'
 
 /** Where one job is in its life. */
+/** What asked for this job: a person's message, or the answer path noticing something. */
+export type ReplyJobKind = 'request' | 'proactive'
+
 export type ReplyJobState =
   | 'collecting'
   | 'submitting'
@@ -57,6 +60,7 @@ export interface ReplyJob {
   readonly jobId: string
   readonly convKey: string
   readonly sessionId: string
+  readonly kind: ReplyJobKind
   readonly state: ReplyJobState
   readonly outcome?: ReplyOutcome
   readonly replyToMessageId: string
@@ -99,6 +103,7 @@ export interface ReplyStoreStats {
 interface JobRow {
   job_id: string | number | bigint | Uint8Array | null
   conv_key: string | number | bigint | Uint8Array | null
+  kind?: string | number | bigint | Uint8Array | null
   session_id: string | number | bigint | Uint8Array | null
   state: string | number | bigint | Uint8Array | null
   outcome: string | number | bigint | Uint8Array | null
@@ -118,7 +123,7 @@ interface JobRow {
   updated_at: number | bigint | null
 }
 
-const JOB_COLUMNS = `job_id, conv_key, session_id, state, outcome, reply_to_message_id, collect_until,
+const JOB_COLUMNS = `job_id, conv_key, session_id, kind, state, outcome, reply_to_message_id, collect_until,
   submitted_at, deadline_at, turn, next_attempt_at, submit_attempts, send_attempts, stop_requested,
   reply_text, reply_message_id, last_error, created_at, updated_at`
 
@@ -195,6 +200,16 @@ export class ReplyStore {
     this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_jobs_reply_msg
       ON reply_jobs(reply_message_id) WHERE reply_message_id IS NOT NULL`)
     this.db.exec('CREATE INDEX IF NOT EXISTS ix_jobs_due ON reply_jobs(state, collect_until, deadline_at)')
+    // Added after the first installations existed, so it is migrated in place
+    // rather than assumed: a host that already has jobs must keep working.
+    const jobColumns = this.db.prepare('PRAGMA table_info(reply_jobs)').all() as unknown as Array<{ name?: unknown }>
+    if (!jobColumns.some(column => text(column.name) === 'kind')) {
+      this.db.exec("ALTER TABLE reply_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'request'")
+    }
+    // A proactive job has no message to answer, so its reply target is nullable at
+    // the schema level too; the old NOT NULL is left in place for request jobs and
+    // enforced by the insert paths rather than by the column, because SQLite cannot
+    // relax a constraint in place.
     this.db.exec(`CREATE TABLE IF NOT EXISTS reply_job_messages (
       event_id TEXT PRIMARY KEY REFERENCES inbox_events(event_id),
       message_id TEXT NOT NULL UNIQUE,
@@ -262,6 +277,29 @@ export class ReplyStore {
       convKey: text(row.conv_key),
       chatId: text(row.chat_id),
       chatType: text(row.chat_type) === 'group' ? 'group' : 'p2p',
+      generation: numberOrZero(row.generation),
+      sessionId: text(row.session_id),
+      preambleSent: numberOrZero(row.preamble_sent) === 1,
+    }
+  }
+
+  /**
+   * The conversation an unprompted message would go to.
+   *
+   * The most recently active direct conversation: that is the chat the person
+   * actually talks to this bot in, and the only defensible guess when a notice has
+   * no message behind it to name a target.
+   * @returns the binding, or undefined when nobody has ever written in.
+   */
+  latestDirectBinding(): ConversationBinding | undefined {
+    const row = this.db.prepare(`SELECT conv_key, chat_id, chat_type, generation, session_id, preamble_sent
+      FROM conv_bindings WHERE chat_type = 'p2p' ORDER BY updated_at DESC LIMIT 1`)
+      .get() as unknown as Record<string, unknown> | undefined
+    if (row === undefined) return undefined
+    return {
+      convKey: text(row.conv_key),
+      chatId: text(row.chat_id),
+      chatType: 'p2p',
       generation: numberOrZero(row.generation),
       sessionId: text(row.session_id),
       preambleSent: numberOrZero(row.preamble_sent) === 1,
@@ -349,6 +387,72 @@ export class ReplyStore {
         .run(input.now, input.eventId)
       return { jobId, opened, attached: true }
     })
+  }
+
+  /**
+   * Open a proactive job for a conversation, if the budget allows it.
+   *
+   * Not a message that arrived: nothing asked for this, so there is no reply target
+   * and no batch to collect. The job exists so the turn that decides whether to
+   * speak is recorded exactly like any other, and so silence has somewhere to be
+   * counted rather than being invisible.
+   * @param input - conversation, session, and the budget window.
+   * @returns the job id, or undefined when the budget is spent.
+   */
+  openProactive(input: {
+    jobId: string
+    convKey: string
+    sessionId: string
+    now: number
+    windowMs: number
+    max: number
+  }): string | undefined {
+    const recent = this.db.prepare(`SELECT COUNT(*) AS n FROM reply_jobs
+      WHERE kind = 'proactive' AND created_at >= ?`).get(input.now - input.windowMs) as unknown as { n?: unknown }
+    if (numberOrZero(recent.n) >= input.max) return undefined
+    this.db.prepare(`INSERT INTO reply_jobs
+      (job_id, conv_key, session_id, kind, state, reply_to_message_id, collect_until, next_attempt_at, created_at, updated_at)
+      VALUES (?, ?, '', 'proactive', 'collecting', '', ?, 0, ?, ?)`)
+      .run(input.jobId, input.convKey, input.now, input.now, input.now)
+    return input.jobId
+  }
+
+  /**
+   * Whether a session has already spoken unprompted recently.
+   *
+   * The budget is per conversation, not per session: what a person experiences is
+   * how often their chat gets an unasked-for message.
+   * @param convKey - conversation key.
+   * @param since - epoch milliseconds.
+   * @returns how many proactive jobs were opened since then.
+   */
+  proactiveCountSince(convKey: string, since: number): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM reply_jobs
+      WHERE kind = 'proactive' AND conv_key = ? AND created_at >= ?`).get(convKey, since) as unknown as { n?: unknown }
+    return numberOrZero(row.n)
+  }
+
+  /**
+   * Counts for proactive jobs: how many were opened, and how many chose silence.
+   * @returns the counts the acceptance readings report.
+   */
+  proactiveStats(): { opened: number; spoke: number; silent: number } {
+    const rows = this.db.prepare(`SELECT state, outcome, COUNT(*) AS n FROM reply_jobs
+      WHERE kind = 'proactive' GROUP BY state, outcome`).all() as unknown as Array<{
+        state?: unknown
+        outcome?: unknown
+        n?: unknown
+      }>
+    let opened = 0
+    let spoke = 0
+    let silent = 0
+    for (const row of rows) {
+      const count = numberOrZero(row.n)
+      opened += count
+      if (text(row.state) === 'replied' && text(row.outcome) === 'answer') spoke += count
+      if (text(row.state) === 'replied' && text(row.outcome) === 'empty') silent += count
+    }
+    return { opened, spoke, silent }
   }
 
   /**
@@ -865,6 +969,7 @@ function toJob(row: JobRow): ReplyJob {
     jobId: text(row.job_id),
     convKey: text(row.conv_key),
     sessionId: text(row.session_id),
+    kind: text(row.kind) === 'proactive' ? 'proactive' : 'request',
     state,
     ...(outcome === undefined ? {} : { outcome }),
     replyToMessageId: text(row.reply_to_message_id),
