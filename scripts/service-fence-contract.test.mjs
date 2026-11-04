@@ -55,6 +55,7 @@ function routeDirectories() {
  */
 const PRIVILEGED_FENCE_TOKEN = new Map([
   ['access-trust', null],
+  ['external-session', 'accessTrustOf'],
   ['git-graph', 'accessTrustOf'],
   ['lark-inbox', 'accessTrustOf'],
   ['notify', 'accessTrustOf'],
