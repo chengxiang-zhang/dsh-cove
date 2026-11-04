@@ -228,6 +228,8 @@ describe('reply admission', () => {
       text: '在的',
       target: { replyToMessageId: 'om_1', idempotencyKey: 'fj_om_1' },
     })
+    // One attempt means one attempt, including the one that worked.
+    expect(harnessed.store.reply.job('fj_om_1')?.sendAttempts).toBe(1)
     expect(harnessed.store.reply.job('fj_om_1')?.state).toBe('replied')
     // The message's own queue row is settled as answered, not left for a tool.
     expect(harnessed.store.stats()).toMatchObject({ done: 1, pending: 0, routed: 0 })

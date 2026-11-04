@@ -617,6 +617,10 @@ export class ReplyResponder {
     }
     const binding = this.store.reply.binding(job.convKey)
     const chatId = binding?.chatId ?? job.convKey
+    // Counted before the call, not after it fails: a reply that went out on the
+    // first try is one attempt, and a ledger that says zero cannot be used to read
+    // how much retrying an installation actually needed.
+    const attempts = this.store.reply.bumpSendAttempt(job.jobId)
     const attempt = await sender.send(chatId, body, {
       replyToMessageId: job.replyToMessageId,
       idempotencyKey: job.jobId,
@@ -629,7 +633,6 @@ export class ReplyResponder {
       return
     }
     const detail = attempt.error ?? '未知错误'
-    const attempts = this.store.reply.bumpSendAttempt(job.jobId)
     if (attempt.retryable === true && attempts < config.maxSendAttempts) {
       // Same idempotency token on the retry, so the platform collapses a copy the
       // first attempt may have delivered before the error surfaced.
