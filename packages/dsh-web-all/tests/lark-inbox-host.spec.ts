@@ -137,21 +137,26 @@ describe('JSONL + SQLite queue and tools', () => {
 
     const tools = Object.fromEntries(createInboxTools(() => store).map(tool => [tool.name, tool]))
     const exec = { signal: new AbortController().signal } as never
-    await expect(tools.lark_inbox_peek.execute({ limit: 10 }, exec)).resolves.toMatchObject({ pending: 1, processing: 0, dead: 0, items: [{ eventId: 'evt-1' }] })
-    await expect(tools.lark_inbox_pop.execute({}, exec)).resolves.toMatchObject({ pending: 0, item: { eventId: 'evt-1', content: 'message-evt-1' } })
+    await expect(tools.lark_inbox_peek.execute({ limit: 10 }, exec)).resolves.toMatchObject({ pending: 1, processing: 0, dead: 0, items: [{ eventId: 'evt-1', chatId: 'oc_1' }] })
+    await expect(tools.lark_inbox_pop.execute({}, exec)).resolves.toMatchObject({ pending: 0, item: { eventId: 'evt-1', content: 'message-evt-1', chatId: 'oc_1' } })
     await expect(tools.lark_inbox_ack.execute({ event_id: 'evt-1', ok: false }, exec)).resolves.toEqual({ status: 'pending' })
     await tools.lark_inbox_pop.execute({}, exec)
-    await expect(tools.lark_inbox_ack.execute({ event_id: 'evt-1', ok: false }, exec)).resolves.toEqual({ status: 'pending' })
+    // Second claim already used the last attempt, so the retry retires the message.
+    await expect(tools.lark_inbox_ack.execute({ event_id: 'evt-1', ok: false }, exec)).resolves.toEqual({ status: 'dead' })
     expect(store.stats()).toEqual({ pending: 0, processing: 0, done: 0, dead: 1, total: 1 })
-    await expect(tools.lark_inbox_ack.execute({ event_id: 'missing', ok: true }, exec)).resolves.toEqual({ status: 'done' })
+    // Settling something the queue never claimed is reported, not silently accepted.
+    await expect(tools.lark_inbox_ack.execute({ event_id: 'missing', ok: true }, exec)).resolves.toEqual({ status: 'not-found' })
+    await expect(tools.lark_inbox_ack.execute({ event_id: 'evt-1', ok: true }, exec)).resolves.toEqual({ status: 'not-found' })
     store.close()
   })
 
   it('returns the structured not-running envelope when disabled/unconfigured', async () => {
     const tools = createInboxTools(() => undefined)
     for (const tool of tools) {
-      const args = tool.name === 'lark_inbox_ack' ? { event_id: 'evt', ok: true } : {}
-      await expect(tool.execute(args, { signal: new AbortController().signal } as never)).resolves.toEqual({ error: expect.stringContaining('未运行') })
+      const args = tool.name === 'lark_inbox_ack' ? { event_id: 'evt', ok: true }
+        : tool.name === 'lark_inbox_reply' ? { event_id: 'evt', text: 'hi' }
+          : {}
+      await expect(tool.execute(args, { signal: new AbortController().signal } as never)).resolves.toMatchObject({ error: expect.stringContaining('未运行') })
     }
   })
 })
@@ -166,11 +171,12 @@ describe('gateway conversion and gating', () => {
       domain: { Feishu: 0, Lark: 1 },
       createDispatcher: () => ({ register(handlers) { handler = handlers['im.message.receive_v1']; return { handlers } } }),
       createClient: options => { expect(options).toMatchObject({ appId: 'cli_a', appSecret: 'secret', domain: 0, wsConfig: { pingTimeout: 3 } }); return { start, close } },
+      createApiClient: () => ({ botOpenId: async () => 'ou_bot' }),
     }
     const gateway = new LarkGateway({ appId: 'cli_a', appSecret: 'secret', sdk, onEvent })
     await gateway.start()
     handler?.({ message: { mentions: [{ id: { open_id: 'ou_bot' } }] } })
-    expect(onEvent).toHaveBeenCalledWith(expect.any(Object), { mentionBot: true })
+    expect(onEvent).toHaveBeenCalledWith(expect.any(Object), { mentionBot: true, botOpenId: 'ou_bot' })
     await gateway.stop()
     expect(close).toHaveBeenCalledOnce()
   })
@@ -178,9 +184,13 @@ describe('gateway conversion and gating', () => {
   it('gates app messages, unmentioned groups, and non-allowlisted senders in order', () => {
     const config = { dropAppMessages: true, requireMentionInGroup: true, allowedOpenIds: ['ou_allowed'] }
     expect(gateEvent({ senderType: 'app', chatType: 'group' }, config)).toEqual({ accept: false, reason: 'app-message' })
-    expect(gateEvent({ senderType: 'user', chatType: 'group', senderOpenId: 'ou_allowed' }, config)).toEqual({ accept: false, reason: 'group-without-mention' })
+    expect(gateEvent({ senderType: 'user', chatType: 'group', senderOpenId: 'ou_allowed' }, config)).toEqual({ accept: false, reason: 'group-without-bot-identity' })
+    expect(gateEvent({ senderType: 'user', chatType: 'group', senderOpenId: 'ou_allowed', botOpenId: 'ou_bot' }, config)).toEqual({ accept: false, reason: 'group-without-mention' })
     expect(gateEvent({ senderType: 'user', chatType: 'p2p', senderOpenId: 'ou_other' }, config)).toEqual({ accept: false, reason: 'sender-not-allowed' })
-    expect(gateEvent({ senderType: 'user', chatType: 'group', senderOpenId: 'ou_allowed', mentionBot: true }, config)).toEqual({ accept: true })
+    expect(gateEvent({ senderType: 'user', chatType: 'group', senderOpenId: 'ou_allowed', mentionBot: true, botOpenId: 'ou_bot' }, config)).toEqual({ accept: true })
+    // A direct message is addressed to the bot by construction: no mention and
+    // no learned identity are needed to admit it.
+    expect(gateEvent({ senderType: 'user', chatType: 'p2p', senderOpenId: 'ou_allowed' }, config)).toEqual({ accept: true })
   })
 })
 
@@ -192,6 +202,7 @@ describe('gateway late-start rollback', () => {
     const onEvent = vi.fn()
     const sdk = {
       domain: { Feishu: 'feishu', Lark: 'lark' },
+      createApiClient: () => ({ botOpenId: async () => 'ou_bot' }),
       createClient: () => ({ start: () => new Promise<void>(resolve => { ready = resolve }), close }),
       createDispatcher: () => ({ register: (events: Record<string, (data: unknown) => void>) => {
         handler = events['im.message.receive_v1']!
@@ -200,6 +211,9 @@ describe('gateway late-start rollback', () => {
     } as unknown as GatewaySdk
     const gateway = new LarkGateway({ appId: 'test', appSecret: 'test-only', sdk, onEvent })
     const starting = gateway.start()
+    // The bot identity is resolved before the socket is created, so wait for the
+    // SDK startup to be reached before stopping it mid-handshake.
+    await vi.waitFor(() => { expect(typeof ready).toBe('function') })
     await gateway.stop()
     ready()
     await starting
@@ -235,7 +249,7 @@ describe('runtime settings and optional announcement', () => {
       const createStore = vi.fn()
       const createGateway = vi.fn()
       const dispose = register(ctx as never, {}, { createStore, createGateway })
-      expect(definitions.map(tool => tool.name)).toEqual(['lark_inbox_peek', 'lark_inbox_pop', 'lark_inbox_ack'])
+      expect(definitions.map(tool => tool.name)).toEqual(['lark_inbox_peek', 'lark_inbox_pop', 'lark_inbox_ack', 'lark_inbox_reply'])
       expect(routes).toEqual(expect.arrayContaining(['/lark-inbox/wizard/status', '/lark-inbox/wizard/start-new', '/lark-inbox/wizard/cancel']))
       expect(createStore).not.toHaveBeenCalled()
       expect(createGateway).not.toHaveBeenCalled()
@@ -255,7 +269,7 @@ describe('runtime settings and optional announcement', () => {
       return releaseRoute
     }
     expect(() => register(ctx as never)).toThrow('route conflict')
-    expect(releaseTool).toHaveBeenCalledTimes(3)
+    expect(releaseTool).toHaveBeenCalledTimes(4)
     expect(releaseRoute).toHaveBeenCalledOnce()
   })
 

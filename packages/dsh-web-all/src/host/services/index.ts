@@ -6,6 +6,7 @@ import * as ssh from './ssh/index.ts'
 import * as worktree from './worktree/index.ts'
 import * as gitGraph from './git-graph/index.ts'
 import * as rightPane from './right-pane/index.ts'
+import * as feishu from './feishu/index.ts'
 import * as larkInbox from './lark-inbox/index.ts'
 import * as notify from './notify/index.ts'
 import * as playwrightSessions from './playwright-sessions/index.ts'
@@ -56,6 +57,9 @@ export function assembleServices(ctx: Context, deps: ServiceAssemblyDeps = {}): 
   mount('worktree', () => worktree.register(ctx, deps.worktree))
   mount('git-graph', () => gitGraph.register(ctx))
   mount('right-pane', () => rightPane.register(ctx))
+  // Mounted before the two Feishu consumers: it owns the one answer to "which
+  // application is this host talking to", which they both resolve through.
+  mount('feishu', () => feishu.register(ctx))
   mount('lark-inbox', () => larkInbox.register(ctx))
   // Mounted straight after the inbox because it is the same integration's
   // outbound half and borrows its credentials when it has none of its own.

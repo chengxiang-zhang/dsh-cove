@@ -11,6 +11,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { FAMILY_SETTINGS_NAMESPACE, familyNamespaceScope } from '../src/client/settings/family-scope.ts'
 import { en as notifyEn, zh as notifyZh, makeT as makeNotifyT } from '../src/client/notify/i18n.ts'
+import { FAMILY_NAMESPACES } from '../src/host/services/family-config.ts'
+import { Config as feishuSchema, FEISHU_SETTINGS_NAMESPACE } from '../src/host/services/feishu/config.ts'
+import { Config as notifySchema, NOTIFY_SETTINGS_NAMESPACE, effectiveConfig as notifyDefaults } from '../src/host/services/notify/config.ts'
 import type { SettingsFormScope, SettingsFormScopeSnapshot } from '../src/client/settings/primitives-0.2.ts'
 
 /** A scope whose only job is to record what a page asked to read and write. */
@@ -113,5 +116,43 @@ describe('notification dictionary', () => {
   it('substitutes named parameters and leaves an unknown one alone', () => {
     const t = makeNotifyT({ documentElement: { lang: 'en' } } as unknown as Document)
     expect(t('settings.title', { missing: 'x' })).toBe('Run-finished notifications')
+  })
+
+  it('points a blank application id at the shared Feishu page', () => {
+    // The wording is part of the credential migration: the outbound half reuses
+    // the one application configured on the Feishu page, not the inbox's fields.
+    expect(notifyZh['settings.feishuAppIdHint']).toContain('飞书')
+    expect(notifyZh['settings.feishuAppIdHint']).not.toContain('收件箱')
+    expect(notifyEn['settings.feishuAppIdHint']).toContain('Feishu page')
+  })
+})
+
+describe('credential ownership in the settings document', () => {
+  /** The `meta.role` a schema node carries, which is how a secret is recognized. */
+  function roleOf(schema: unknown, field: string): unknown {
+    const dict = (schema as { dict?: Record<string, { meta?: Record<string, unknown> } | undefined> }).dict
+    return dict?.[field]?.meta?.role
+  }
+
+  it('declares the shared application namespace before the capabilities using it', () => {
+    // Order is the contract: every other Feishu namespace falls back to this one,
+    // so the aggregated document carries it first for the settings page.
+    expect(FAMILY_NAMESPACES[0]).toBe(FEISHU_SETTINGS_NAMESPACE)
+    expect(FAMILY_NAMESPACES).toContain(NOTIFY_SETTINGS_NAMESPACE)
+  })
+
+  it('marks both secrets so the host strips them from every read', () => {
+    expect(roleOf(feishuSchema, 'appSecret')).toBe('secret')
+    expect(roleOf(notifySchema, 'feishuAppSecret')).toBe('secret')
+    // The ids stay readable: they name the application without opening it.
+    expect(roleOf(feishuSchema, 'appId')).toBeUndefined()
+    expect(roleOf(notifySchema, 'feishuAppId')).toBeUndefined()
+  })
+
+  it('offers the override fields blank, so the shared application stays the default', () => {
+    const defaults = notifyDefaults({})
+    expect(defaults.feishuAppId).toBe('')
+    expect(defaults.feishuAppSecret).toBe('')
+    expect(defaults.feishuDomain).toBe('feishu')
   })
 })

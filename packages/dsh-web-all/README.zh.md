@@ -10,7 +10,7 @@
 - **开发工作台**：输入区的 Git 分支 chip 与图谱对话框，以及右栏 Source Control 工作台。
 - **HiOpen 模型路由**：不含凭据的 `llm-pi-ai` 预置提供一份精选模型目录，端点自带（在 `config/deployment.local.json` 填 `llm.hiopen.baseUrl`，再跑 `node scripts/config-render.mjs`），仓库不提交任何端点与凭据，并为 DSH Agent 精选准确模型 id、上下文/输出上限、推理档位和文本/图片模态。
 - **远程运维**：SSH 主机、终端、传输、隧道和集群执行。远程浏览器入口不再由本插件签发账号会话；远程可访问性由部署的 `--trusted-host` 与网络门禁共同决定，见 [docs/remote-access.md](../../docs/remote-access.md)。
-- **飞书接入**：飞书 bot 长连接收件箱与 `lark_inbox_peek`、`lark_inbox_pop`、`lark_inbox_ack` 工具、连接向导，以及 **设置 → 内置插件 → 飞书** 里的配置页。
+- **飞书 bot**：一套共享应用凭据——`feishu` 命名空间（`appId`、`appSecret`、`domain`；`appSecret` 支持 `env:变量名`，环境变量 `FEISHU_APP_SECRET` 优先、兼容旧的 `LARK_APP_SECRET`）——同时服务同一个 bot 的三条链路：带 `lark_inbox_peek`、`lark_inbox_pop`、`lark_inbox_ack`、`lark_inbox_reply` 工具的长连接收件箱，agent 对入站消息的回复，以及运行结束推送。连接向导与 **设置 → 内置插件 → 飞书** 页里的凭据区都能配置它；手工凭据区让没装 lark-cli 的安装也能收尾。
 - **运行结束通知**：会话每结束一轮就记录一条结果，聚合到只读的 `GET /api/dsh-notify/feed`，由桌面端与手机端的机器列表据此标出未查看的结果，并可在运行停稳后把结果推送到飞书。配置在 **设置 → 内置插件 → 通知**。
 - **浏览器自动化**：按会话隔离的 Playwright 浏览器，以 `mcp__playwright__*` 工具命名空间对外提供。
 - **自动化任务运行目标**：原生自动化任务默认投递回创建它的会话；本能力让每条任务可选「每次新会话」——每次运行开一条全新会话，原对话只保留任务定义。**没有单独的设置界面**：在创建任务时说清楚（自然语言）即可，agent 用 `schedule_mode_set` 一次设好。
@@ -74,7 +74,7 @@ Profile 覆写示例：
     noBrowserAuth: true
 ```
 
-各能力域的配置聚合在同一个 `web-all` 条目的命名空间下：`lark-inbox`、`notify`、`dsh-ssh`、`workspace-model`、`web-render`、`schedule-mode`。Web GUI 为飞书与通知各提供一个配置页（**设置 → 内置插件 → 飞书 / 通知**）；飞书页只负责「怎么收」，通知页负责「怎么发」与客户端读取，其余命名空间通过 profile 覆写或设置文档编辑。
+各能力域的配置聚合在同一个 `web-all` 条目的命名空间下：`feishu`、`lark-inbox`、`notify`、`dsh-ssh`、`workspace-model`、`web-render`、`schedule-mode`。Web GUI 为飞书与通知各提供一个配置页（**设置 → 内置插件 → 飞书 / 通知**）；飞书页同时负责「怎么收」与共享应用凭据，通知页负责「怎么发」与客户端读取。凭据里的密钥是只写的：宿主保存它、并从每一次读取结果里剥离它，因此页面只能提交新密钥、不会报告已存的密钥值，输入框留空即表示保持不变；`lark-inbox` 仍保留迁移前的 `appId`、`appSecret`、`domain` 供早于本次迁移的安装使用，向导路由只写 `feishu`。其余命名空间通过 profile 覆写或设置文档编辑。
 
 内置 `hiopen` 路由通过 DSH credentials 解析 `HIOPEN_API_KEY`；密钥只应写入 `$DSH_HOME/.credentials.yaml` 的 `refs.HIOPEN_API_KEY`，不得写进 profile 或仓库。预置只暴露精选的聊天/Agent 子集，而不是照搬 `/v1/models` 的全部条目：端点同时会列出 embedding、guard、detector 和暂时不可用的路由。端点变化时可用 profile 覆写替换或扩展 `hiopen.models`。
 
@@ -184,13 +184,16 @@ DSH 原生 `@deepseek-ai/dsh-schedule` 把任务绑定在创建它的会话上�
 - TLS 是可选项。未配置 `serverTlsCert` 与 `serverTlsKey` 时，凭据、cookie 与流量都使用明文 HTTP，网关应只留在可信网络。`serverTlsKey` 是可读的文件系统路径而不是密钥内容，`bootstrapAdminPassword` 则是 secret schema 字段；请保护 settings source，并在创建首个账户后清空或轮换 bootstrap 凭据。首个账户会被强制为 admin，最后一个已启用管理员不能被降级、禁用或删除。
 - SSH 密钥、密码和 passphrase 属于 host 侧配置。列表投影不会返回机密字段，但凭据以未加密形式写入 DSH 主目录下原子替换、仅 owner 可读写的 `0600` 文件（保存时也修复已有文件权限），远程命令输出也不会脱敏；请相应保护系统账号和文件系统。服务器密钥校验不提供远程执行隔离，也不限制 SSH 账户权限。同一主机的连接建立采用 single-flight，认证完成后再次核对当前配置与信任；卸载后拒绝待完成与新连接。损坏的主机存储拒绝读取，不会被空表覆盖。协作 writer 对完整读改写持排他锁，最多等待两秒；竞争超时报告 `SSH_HOST_STORE_BUSY`。崩溃遗留锁不会按时间或 PID 自动抢占：必须停止全部 writer、核对所有权后人工恢复。这不是抵御同用户恶意进程的 OS 安全边界。
 - Playwright 工具可以使用本地 DSH 进程和浏览器会话的权限访问站点并修改外部系统。请保留唯一工具命名空间、检查目标 URL，并在敏感操作结束后关闭会话。
-- 飞书凭据由宿主访问围栏后的向导路由写入 profile 设置文档。通知域默认沿用同一套应用凭据（也可在通知页单独填写 `feishuAppId` 与 `feishuAppSecret`，支持 `env:变量名`）。请把该文档视为凭据敏感数据，并保持 loopback web 服务器私有。
+- 飞书应用凭据保存在 profile 设置文档的 `feishu` 命名空间里，由向导路由或飞书页的凭据区写入，两者都在共享宿主访问围栏之后。密钥是只写的：宿主把 `role('secret')` 字段从每一次读取结果里剥离，因此页面只能提交新密钥、不会显示已存的密钥，用 `env:变量名` 还能让它完全不落进文档。同一个 bot 服务入站收件箱、回复与运行结束通知；通知域也可以继续单独使用自己的 `feishuAppId` 与 `feishuAppSecret`。两个命名空间都没有密钥时，宿主读取环境变量 `FEISHU_APP_SECRET`，其次读取旧的 `LARK_APP_SECRET`。请把该文档视为凭据敏感数据，并保持 loopback web 服务器私有。
 
 ## 已知限制
 
 - 所有服务域共享一个 `web-all` 生命周期，不能作为单独的 profile 条目分别启停。
 - 共享宿主访问围栏判定的是「请求是否来自被承认的浏览器入口」，不是「它属于哪个账号」：围栏只暴露一个布尔值。因此数据归属于某个会话的面（Agent Browser 实时视图 `/playwright-sessions/ws/browser`、工作区内的 `git-status`、以会话 cwd 为键的工作区数据）对任何通过围栏、并且知道会话 id 或工作区路径的调用方可见；在宿主把调用方身份暴露给路由族之前，这些面无法按账号隔离。
 - 设置界面刻意保持最小：只为飞书与通知提供配置页，其余能力域配置通过 profile 覆写或设置文档编辑。
+- 飞书接入按 `$DSH_HOME` 单实例：同一 `$DSH_HOME` 只允许一个 dsh-web 进程消费飞书队列。应用的长连接在集群里是随机分发给某个已连接客户端的，不是广播，因此同目录下的第二个进程会漏消息，而不是与前者分担。
+- bot 未订阅 `im.message.recalled_v1`，被撤回的消息可能仍留在队列里，`lark_inbox_peek` 或 `lark_inbox_pop` 仍会把它交给 agent。`allowedOpenIds` 留空表示不限制发送者；填写后才限定谁能触达 agent。
+- 入站工具的返回面要按「能回答什么问题」读：`lark_inbox_peek` 带 `gateway`（`connected`/`connecting`/`error`）与 `gatewayError`，用来区分「没有新消息」和「网关没连上」；`peek`/`pop` 都带 `chatId`，与 `lark_inbox_reply` 配合把回答送回原会话（有原消息 id 时回复进原话题）；`lark_inbox_ack` 对不存在或已结算的事件返回 `not-found`，不会假装成功。群消息在 `requireMentionInGroup` 开启但 bot 自身 open_id 取不到时一律不入队（fail-closed），私聊不受影响；关掉该规则后不再需要这个身份。
 - 通知只记录「这个进程启动以来」的结果，不落盘：宿主重启后已记录的结果会清空，客户端未读取的编号随之失效。客户端遇到编号回退（宿主换了一个进程）会从零重读，因此新结果不会被永久隐藏；代价是重启后第一次读取会重复报告当前持有的结果。记录的是结束事件而非完整会话，正文只出现在会话日志里。
 - HiOpen 目录是保守的 Agent 可用子集。端点可用性和上游路由可能独立变化；通过模型清单但未通过聊天/工具探针的模型不会在验证前暴露。
 - Playwright 依赖随包浏览器运行时和本机可用的浏览器二进制。全局 `mcp-playwright` 条目会与本包拥有的 `mcp__playwright__*` 工具冲突，必须移除。

@@ -19,6 +19,24 @@ export interface SettingsFieldSpec {
   parse(text: string): SettingsFieldWrite | undefined
 }
 
+/**
+ * 只写字段（密钥）的声明。
+ *
+ * 只写字段不参与路径写入：`SettingsFormModel` 把它完全交给 `write`，`field()`
+ * 对它的投影恒定是「空草稿、未覆盖、合法」，所以宿主不回显的值不可能从表单里
+ * 泄漏出去。空草稿不产生任何写入，语义就是「保持不变」；只有非空草稿才会调用
+ * `write` 覆盖。
+ */
+export interface SettingsSecretSpec {
+  field: string
+  write(value: string): Promise<boolean>
+}
+
+/** 声明一个只写字段（供 `SettingsFormModel` 的第三个构造参数使用）。 */
+export function settingsSecretField(field: string, write: (value: string) => Promise<boolean>): SettingsSecretSpec {
+  return { field, write }
+}
+
 /** 单个控件的渲染状态。 */
 export interface SettingsFieldState {
   /** 控件渲染的草稿文本。 */
@@ -80,7 +98,7 @@ export interface SettingsFormModel<T> {
 }
 
 interface SettingsFormModelCtor {
-  new <T>(scope: SettingsFormScope<T>, specs: SettingsFieldSpec[], secrets?: readonly unknown[]): SettingsFormModel<T>
+  new <T>(scope: SettingsFormScope<T>, specs: SettingsFieldSpec[], secrets?: readonly SettingsSecretSpec[]): SettingsFormModel<T>
 }
 
 /** 值控件的 props。 */
@@ -111,6 +129,25 @@ export interface CheckboxProps {
   className?: string
 }
 
+/**
+ * 只写字段控件的 props。
+ *
+ * 控件渲染一个 `type="password"` 的输入框，并带一个状态徽标。`configured` 只
+ * 用来决定徽标的视觉强弱：宿主把 `role('secret')` 字段从每一项读取结果里剥掉，
+ * 调用方通常无从得知「是否已配置」，此时传 `false`，徽标文案应说明该字段只能
+ * 写入，而不是断言它未配置。
+ */
+export interface SettingsSecretFieldProps {
+  id: string
+  label: string
+  hint?: string
+  text: string
+  configured: boolean
+  stateLabel: string
+  disabled: boolean
+  onEdit(text: string): void
+}
+
 /** 表单框架文案。 */
 export interface SettingsFormLabels {
   unavailable: string
@@ -135,6 +172,7 @@ const table = primitives as unknown as {
   Checkbox: Component<CheckboxProps>
   SettingsForm: Component<SettingsFormProps>
   SettingsFormModel: SettingsFormModelCtor
+  SettingsSecretField: Component<SettingsSecretFieldProps>
   SettingsValueField: Component<SettingsValueFieldProps>
   settingsTextField(field: string): SettingsFieldSpec
   settingsNumberField(field: string): SettingsFieldSpec
@@ -143,6 +181,7 @@ const table = primitives as unknown as {
 export const Checkbox = table.Checkbox
 export const SettingsForm = table.SettingsForm
 export const SettingsFormModel = table.SettingsFormModel
+export const SettingsSecretField = table.SettingsSecretField
 export const SettingsValueField = table.SettingsValueField
 export const settingsTextField = table.settingsTextField
 export const settingsNumberField = table.settingsNumberField

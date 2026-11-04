@@ -1,4 +1,12 @@
-/** Host-side lark-cli credential wizard. */
+/**
+ * Host-side lark-cli credential wizard.
+ *
+ * The wizard decides *which* Feishu application this host is, so what it writes
+ * is the shared `feishu` settings namespace (`updateFamilyNamespace(ctx,
+ * FEISHU_SETTINGS_NAMESPACE, patch)` in the service domain), not the inbox's own
+ * deprecated credential fields. The inbox, the run-finished push and the reply
+ * path all read the same application through that namespace.
+ */
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
@@ -22,8 +30,15 @@ export type WizardPhase =
 
 export type SpawnFn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess
 
+/** The credential patch the wizard writes into the shared `feishu` namespace. */
+export interface FeishuCredentialPatch {
+  appId?: string
+  appSecret?: string
+}
+
 export interface LarkWizardOptions {
-  settingsWrite(patch: { appId?: string; appSecret?: string }): Promise<void>
+  /** Writes the patch into the shared `feishu` settings namespace. */
+  settingsWrite(patch: FeishuCredentialPatch): Promise<void>
   log?(level: 'info' | 'warn' | 'error', message: string): void
   larkCli?: string
   qrDir?: string

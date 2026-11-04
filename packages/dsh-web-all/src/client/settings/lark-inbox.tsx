@@ -5,8 +5,21 @@
  * 只在宿主确实提供 `lark-inbox` 命名空间时才出现（`configForms.whileServed`，
  * 与官方 Agent loop / Subagent 等配置页同一套机制）。
  *
- * 数据：表单走官方 `SettingsFormModel` + `SettingsForm`（staged 编辑、保存时才
- * 落盘、写入带 revision 闸门），凭据仍由连接向导经宿主 loopback 路由写入。
+ * 页面有两个命名空间、两段表单：
+ *
+ * - 「接入行为」编辑 `lark-inbox`（准入规则、队列、重试），沿用官方
+ *   `SettingsFormModel` + `SettingsForm` 的 staged 编辑与 revision 闸门；
+ * - 「应用凭据」编辑共享的 `feishu` 命名空间，也就是同一个 bot 服务入站收件箱、
+ *   回复与运行结束推送时使用的那套 `appId` / `appSecret` / `domain`。
+ *
+ * 两个命名空间各自有修订号，所以是两个独立的 `SettingsForm`（各自的保存与放弃），
+ * 而不是硬塞进一张表单：把 `feishu` 的写操作挂在 `lark-inbox` 的表单上会让一次
+ * 保存横跨两个修订闸门。
+ *
+ * `appSecret` 是只写字段：宿主读出口把 `role('secret')` 字段剥掉，客户端永远拿
+ * 不到它的值，因此输入框恒为空、不显示「当前密钥」、也不给假的占位值。空草稿表示
+ * 保持不变，只有非空草稿才会覆盖——这条语义由 `SettingsFormModel` 的只写字段通道
+ * 保证，见 `settingsSecretField`。
  */
 import { type ReactNode } from 'react'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
@@ -16,8 +29,10 @@ import {
   Checkbox,
   SettingsForm,
   SettingsFormModel,
+  SettingsSecretField,
   SettingsValueField,
   settingsNumberField,
+  settingsSecretField,
   settingsTextField,
   type SettingsFieldSpec,
   type SettingsFieldState,
@@ -32,19 +47,56 @@ import { FAMILY_SETTINGS_NAMESPACE, familyNamespaceScope } from './family-scope.
 /** 家族聚合条目在宿主 settings 镜像里的命名空间（host FAMILY_ENTRY_ID）。 */
 export { FAMILY_SETTINGS_NAMESPACE }
 
-/** 条目里飞书能力域的子键（host 的 family namespace）。 */
+/** 条目里飞书入站能力域的子键（host 的 family namespace）。 */
 export const LARK_INBOX_NAMESPACE = 'lark-inbox'
+
+/** 共享飞书应用凭据在条目里的子键（host 的 family namespace）。 */
+export const FEISHU_NAMESPACE = 'feishu'
+
+/** 「接入行为」表单编辑的字段子集。 */
+export const LARK_INBOX_FIELDS = [
+  'enabled',
+  'announceToAgent',
+  'domain',
+  'requireMentionInGroup',
+  'dropAppMessages',
+  'allowedOpenIds',
+  'queueDir',
+  'maxAttempts',
+  'staleTimeoutMs',
+] as const
+
+export type LarkInboxField = (typeof LARK_INBOX_FIELDS)[number]
+
+/**
+ * 「应用凭据」表单编辑的字段子集。
+ *
+ * `appSecret` 只写：它出现在这份清单里只为了被投影成空草稿的控件，写操作走
+ * `settingsSecretField` 的通道，不经过路径写入。
+ */
+export const FEISHU_CREDENTIAL_FIELDS = ['appId', 'appSecret', 'domain'] as const
+
+export type FeishuCredentialField = (typeof FEISHU_CREDENTIAL_FIELDS)[number]
 
 /** 面板编辑的字段子集。 */
 export interface LarkInboxSettings {
   enabled?: boolean
   announceToAgent?: boolean
+  /** 旧 `lark-inbox` 命名空间里的兼容域名，仅当凭据来自旧字段时生效。 */
   domain?: 'feishu' | 'lark'
   requireMentionInGroup?: boolean
   allowedOpenIds?: string[]
+  dropAppMessages?: boolean
   queueDir?: string
   maxAttempts?: number
   staleTimeoutMs?: number
+}
+
+/** 共享 `feishu` 命名空间的字段子集。 */
+export interface FeishuCredentialSettings {
+  appId?: string
+  appSecret?: string
+  domain?: 'feishu' | 'lark'
 }
 
 /** 布尔字段：草稿文本用 'true'/'false'，空草稿表示恢复默认。 */
@@ -73,17 +125,11 @@ function openIdsField(): SettingsFieldSpec {
   }
 }
 
-/** 设置页投影给组件的状态。 */
-interface LarkCardState extends SettingsFormShell {
-  enabled: SettingsFieldState
-  announceToAgent: SettingsFieldState
-  domain: SettingsFieldState
-  requireMentionInGroup: SettingsFieldState
-  allowedOpenIds: SettingsFieldState
-  queueDir: SettingsFieldState
-  maxAttempts: SettingsFieldState
-  staleTimeoutMs: SettingsFieldState
-}
+/** 「接入行为」表单投影给组件的状态。 */
+type LarkCardState = SettingsFormShell & Record<LarkInboxField, SettingsFieldState>
+
+/** 「应用凭据」表单投影给组件的状态。 */
+type FeishuCardState = SettingsFormShell & Record<FeishuCredentialField, SettingsFieldState>
 
 /** 组件读取的 store 面（SnapshotStore 的结构子集）。 */
 interface LarkCardStore {
@@ -91,56 +137,92 @@ interface LarkCardStore {
   subscribe(listener: () => void): () => void
 }
 
-/** 页面控制器：把 `lark-inbox` 命名空间桥到官方 staged 表单。 */
+/** 凭据表单的 store 面。 */
+interface FeishuCardStore {
+  getSnapshot(): FeishuCardState
+  subscribe(listener: () => void): () => void
+}
+
+/** 页面控制器要桥接的两个命名空间读写面。 */
+export interface LarkSettingsScopes {
+  /** 「接入行为」所在的 `lark-inbox` 命名空间。 */
+  inbox: SettingsFormScope<LarkInboxSettings>
+  /** 共享应用凭据所在的 `feishu` 命名空间。 */
+  credentials: SettingsFormScope<FeishuCredentialSettings>
+}
+
+/** 页面控制器：把 `lark-inbox` 与 `feishu` 两个命名空间桥到官方 staged 表单。 */
 export class LarkSettingsController {
   private readonly form: SettingsFormModel<LarkInboxSettings>
+  private readonly credentialForm: SettingsFormModel<FeishuCredentialSettings>
   private readonly store: LarkCardStore
+  private readonly credentialStore: FeishuCardStore
 
-  constructor(scope: SettingsFormScope<LarkInboxSettings>) {
-    this.form = new SettingsFormModel<LarkInboxSettings>(scope, [
+  constructor(scopes: LarkSettingsScopes) {
+    this.form = new SettingsFormModel<LarkInboxSettings>(scopes.inbox, [
       booleanField('enabled'),
       booleanField('announceToAgent'),
       settingsTextField('domain'),
       booleanField('requireMentionInGroup'),
+      booleanField('dropAppMessages'),
       openIdsField(),
       settingsTextField('queueDir'),
       settingsNumberField('maxAttempts'),
       settingsNumberField('staleTimeoutMs'),
     ])
+    this.credentialForm = new SettingsFormModel<FeishuCredentialSettings>(scopes.credentials, [
+      settingsTextField('appId'),
+      settingsTextField('domain'),
+    ], [
+      // 只写通道：空草稿不写，非空草稿把字面值写进 `feishu.appSecret`。模型不会
+      // 把该值投影回控件，所以密钥既不会回显也不会进入页面状态。
+      settingsSecretField('appSecret', value => scopes.credentials.mutate([{ op: 'set', path: ['appSecret'], value }])),
+    ])
     this.store = this.form.bind(() => this.projection())
+    this.credentialStore = this.credentialForm.bind(() => this.credentialProjection())
   }
 
   private projection(): LarkCardState {
-    return {
-      ...this.form.shell(),
-      enabled: this.form.field('enabled'),
-      announceToAgent: this.form.field('announceToAgent'),
-      domain: this.form.field('domain'),
-      requireMentionInGroup: this.form.field('requireMentionInGroup'),
-      allowedOpenIds: this.form.field('allowedOpenIds'),
-      queueDir: this.form.field('queueDir'),
-      maxAttempts: this.form.field('maxAttempts'),
-      staleTimeoutMs: this.form.field('staleTimeoutMs'),
-    }
+    const fields = Object.fromEntries(LARK_INBOX_FIELDS.map(field => [field, this.form.field(field)])) as Record<LarkInboxField, SettingsFieldState>
+    return { ...this.form.shell(), ...fields }
   }
 
-  /** 槽注入面：投影 store + 表单动作。 */
+  private credentialProjection(): FeishuCardState {
+    const fields = Object.fromEntries(FEISHU_CREDENTIAL_FIELDS.map(field => [field, this.credentialForm.field(field)])) as Record<FeishuCredentialField, SettingsFieldState>
+    return { ...this.credentialForm.shell(), ...fields }
+  }
+
+  /** 槽注入面：两个投影 store + 两套表单动作。 */
   inject(): Record<string, unknown> {
-    return { hooks: { larkCard: this.store }, ...this.form.actions() }
+    const credentials = this.credentialForm.actions()
+    return {
+      hooks: { larkCard: this.store, larkCredentials: this.credentialStore },
+      ...this.form.actions(),
+      credentialEdit: credentials.edit,
+      credentialResetField: credentials.resetField,
+      credentialSave: credentials.save,
+      credentialDiscard: credentials.discard,
+    }
   }
 
   dispose(): void {
     this.form.dispose()
+    this.credentialForm.dispose()
   }
 }
 
 interface LarkPageProps {
   view?: 'summary' | 'full'
   useLarkCard<T>(select: (state: LarkCardState) => T): T
+  useLarkCredentials<T>(select: (state: FeishuCardState) => T): T
   edit(field: string, text: string): void
   resetField(field: string): void
   save(): void
   discard(): void
+  credentialEdit(field: string, text: string): void
+  credentialResetField(field: string): void
+  credentialSave(): void
+  credentialDiscard(): void
   t: Translate
 }
 
@@ -149,7 +231,7 @@ function BooleanRow({ id, label, hint, field, state, disabled, edit, resetField,
   id: string
   label: string
   hint: string
-  field: 'enabled' | 'announceToAgent' | 'requireMentionInGroup'
+  field: 'enabled' | 'announceToAgent' | 'requireMentionInGroup' | 'dropAppMessages'
   state: LarkCardState
   disabled: boolean
   edit(field: string, text: string): void
@@ -181,28 +263,31 @@ export function larkWizardVisible(state: Pick<LarkCardState, 'enabled'>): boolea
   return state.enabled.text === '' ? true : state.enabled.text === 'true'
 }
 
-/** 设置标签页主体：连接向导 + 命名空间配置表单。 */
+/** 设置标签页主体：连接向导 + 接入行为表单 + 应用凭据表单。 */
 export function LarkSettingsPage(props: LarkPageProps): ReactNode {
   const state = props.useLarkCard(value => value)
+  const credentials = props.useLarkCredentials(value => value)
   if (props.view === 'summary') return props.t('settings.summary')
   const t = props.t
   const disabled = !state.writable
+  const credentialDisabled = !credentials.writable
   // 已关闭的功能不显示连接向导：宿主也会拒绝它的写操作，显示一个必然失败的
   // 向导只会误导用户。
   const enabled = larkWizardVisible(state)
+  const formLabels = {
+    unavailable: t('settings.unavailable'),
+    readOnly: t('settings.readOnly'),
+    saveFailed: t('settings.saveFailed'),
+    save: t('settings.save'),
+    saving: t('settings.saving'),
+  }
   return (
     <div className={css.page} data-dsh-plugin="lark-inbox" data-dsh-part="settings">
       <h3 className={css.title}>{t('settings.title')}</h3>
       <p className={css.intro}>{t('settings.intro')}</p>
       {enabled ? <LarkInboxWizard t={t}/> : null}
       <SettingsForm
-        labels={{
-          unavailable: t('settings.unavailable'),
-          readOnly: t('settings.readOnly'),
-          saveFailed: t('settings.saveFailed'),
-          save: t('settings.save'),
-          saving: t('settings.saving'),
-        }}
+        labels={formLabels}
         state={state}
         onSave={props.save}
         onDiscard={props.discard}
@@ -222,6 +307,7 @@ export function LarkSettingsPage(props: LarkPageProps): ReactNode {
           onReset={() => { props.resetField('domain') }}
         />
         <BooleanRow id="lark-mention-hint" label={t('settings.requireMention')} hint={t('settings.requireMentionHint')} field="requireMentionInGroup" state={state} disabled={disabled} edit={props.edit} resetField={props.resetField} t={t}/>
+        <BooleanRow id="lark-drop-app-hint" label={t('settings.dropAppMessages')} hint={t('settings.dropAppMessagesHint')} field="dropAppMessages" state={state} disabled={disabled} edit={props.edit} resetField={props.resetField} t={t}/>
         <SettingsValueField
           id="lark-open-ids"
           label={t('settings.allowedOpenIds')}
@@ -273,6 +359,52 @@ export function LarkSettingsPage(props: LarkPageProps): ReactNode {
           onReset={() => { props.resetField('staleTimeoutMs') }}
         />
       </SettingsForm>
+      <h4 className={css.title}>{t('settings.credentialsTitle')}</h4>
+      <p className={css.intro}>{t('settings.credentialsIntro')}</p>
+      <SettingsForm
+        labels={formLabels}
+        state={credentials}
+        onSave={props.credentialSave}
+        onDiscard={props.credentialDiscard}
+      >
+        <SettingsValueField
+          id="feishu-app-id"
+          label={t('settings.appId')}
+          hint={t('settings.appIdHint')}
+          overriddenLabel={t('settings.overridden')}
+          resetLabel={t('settings.reset')}
+          invalidLabel={t('settings.invalid')}
+          disabled={credentialDisabled}
+          {...credentials.appId}
+          onEdit={(text) => { props.credentialEdit('appId', text) }}
+          onReset={() => { props.credentialResetField('appId') }}
+        />
+        <SettingsSecretField
+          id="feishu-app-secret"
+          label={t('settings.appSecret')}
+          hint={t('settings.appSecretHint')}
+          stateLabel={t('settings.appSecretState')}
+          // 状态徽标只说「该字段只能写入」，不断言「已配置」：设置作用域的快照里
+          // 不含密钥位置信息，而 appSecret 在 schema 上带默认值，describe 侧车的
+          // `set` 因此分不出「填过」和「取默认值」。拿不到可信读数就不显示读数。
+          configured={false}
+          text={credentials.appSecret.text}
+          disabled={credentialDisabled}
+          onEdit={(text) => { props.credentialEdit('appSecret', text) }}
+        />
+        <SettingsValueField
+          id="feishu-domain"
+          label={t('settings.credentialDomain')}
+          hint={t('settings.credentialDomainHint')}
+          overriddenLabel={t('settings.overridden')}
+          resetLabel={t('settings.reset')}
+          invalidLabel={t('settings.invalid')}
+          disabled={credentialDisabled}
+          {...credentials.domain}
+          onEdit={(text) => { props.credentialEdit('domain', text) }}
+          onReset={() => { props.credentialResetField('domain') }}
+        />
+      </SettingsForm>
     </div>
   )
 }
@@ -296,12 +428,23 @@ export function larkInboxScope(entry: SettingsFormScope<Record<string, unknown>>
   return familyNamespaceScope<LarkInboxSettings>(entry, LARK_INBOX_NAMESPACE)
 }
 
+/**
+ * 把 `web-all` 条目的读写面收窄到共享凭据的 `feishu` 子键。
+ *
+ * 凭据表单用独立作用域，写操作因此落在 `feishu.*` 路径上，不会误写进
+ * `lark-inbox` 的兼容字段。
+ */
+export function feishuCredentialsScope(entry: SettingsFormScope<Record<string, unknown>>): SettingsFormScope<FeishuCredentialSettings> {
+  return familyNamespaceScope<FeishuCredentialSettings>(entry, FEISHU_NAMESPACE)
+}
+
 /** 注册「内置插件 → 飞书」标签页；宿主不再提供该命名空间时自动撤下。 */
 export function mountLarkSettings(ctx: ClientContext): () => void {
   const configForms = optionalConfigForms(ctx)
   if (configForms === undefined) return () => {}
   const t = makeT()
-  const controller = new LarkSettingsController(larkInboxScope(configForms.get(FAMILY_SETTINGS_NAMESPACE)))
+  const entry = configForms.get(FAMILY_SETTINGS_NAMESPACE)
+  const controller = new LarkSettingsController({ inbox: larkInboxScope(entry), credentials: feishuCredentialsScope(entry) })
   const offPage = configForms.whileServed([FAMILY_SETTINGS_NAMESPACE], () => ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
     name: 'settings.plugins.tab',
     id: LARK_INBOX_NAMESPACE,

@@ -36,6 +36,9 @@ export const FAMILY_ENTRY_ID = 'web-all'
  * 任意对象），客户端写入不会因缺键被 Host 拒绝。
  */
 export const FAMILY_NAMESPACES = [
+  // The shared Feishu application identity. First because every other Feishu
+  // namespace resolves its credentials through this one.
+  'feishu',
   'lark-inbox',
   'notify',
   'dsh-ssh',

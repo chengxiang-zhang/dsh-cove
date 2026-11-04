@@ -6,14 +6,20 @@
  * hide the vendor SDK behind a narrow injected seam so the behaviour the
  * capability actually promises can be tested without a network or a tenant.
  *
- * Two properties matter more than throughput here, because this runs from an
+ * Three properties matter more than throughput here, because this runs from an
  * event handler rather than from a request:
  *
  * 1. It never throws into the emitter. A notification that cannot be delivered
- *    is logged and dropped; it must not turn a finished run into a failed one.
+ *    is reported and dropped; it must not turn a finished run into a failed one.
  * 2. It stays under the application's rate limit. Feishu caps one application at
  *    five calls per second, and one finished run addresses several recipients,
  *    so sends are serialized with a minimum gap instead of fired in parallel.
+ * 3. It distinguishes "later" from "never". Feishu answers business errors
+ *    inside a resolved promise and only some of them are worth another attempt;
+ *    flattening them all into "failed" makes rate limiting look like a
+ *    permission bug. The target's id namespace is inferred for the same reason:
+ *    a chat id sent as `open_id` fails in a way that reads like a permission
+ *    problem but is really a wrong declaration.
  *
  * Messages are plain text rather than interactive cards on purpose: a card's
  * schema is versioned and a rejected card is a silently lost notification,
@@ -22,6 +28,7 @@
 
 import { Domain, Client } from '@larksuiteoapi/node-sdk'
 import { OUTCOME_LABEL_ZH, type RunNotice } from '../../../core/notify/contract.ts'
+import { detectReceiveIdType, isRetryableFeishuCode, type ReceiveIdType } from '../feishu/send.ts'
 import type { FeishuCredentials } from './config.ts'
 
 /** The vendor surface this module uses, so tests can supply their own. */
@@ -44,12 +51,47 @@ export interface DeliveryAttempt {
   ok: boolean
   /** Vendor error text when the call failed. */
   error?: string
+  /** Vendor business code, when the failure carried one. */
+  code?: number
+  /**
+   * Whether the failure could plausibly succeed later (rate limiting, transport)
+   * as opposed to a refusal that will hold on every attempt (permission, format,
+   * unknown target). `false` for a delivered message.
+   */
+  retryable?: boolean
+}
+
+/** One recipient that could not be reached, in the shape the report carries. */
+export interface DeliveryFailure {
+  recipient: string
+  code?: number
+  error: string
+  retryable: boolean
+}
+
+/**
+ * What one `notify` call did.
+ *
+ * Kept on the sender (and returned to the owning service) so the last push is a
+ * diagnosable fact rather than a log line someone has to recall: which
+ * recipients were reached, which were not, and whether the failure was the
+ * retryable kind.
+ */
+export interface DeliveryReport {
+  /** When the report was produced. */
+  at: number
+  /** True only when every recipient was reached. */
+  ok: boolean
+  /** Messages the vendor accepted. */
+  delivered: number
+  /** Recipients that were not reached, with their classification. */
+  failed: DeliveryFailure[]
 }
 
 /** Options for one sender instance. */
 export interface FeishuSenderOptions {
   credentials: FeishuCredentials
-  /** Open ids (`ou_…`), user ids, or chat ids to address as `open_id`. */
+  /** Open ids (`ou_…`), user ids, or chat ids (`oc_…`) to address. */
   recipients: readonly string[]
   /** Human name of the machine the run happened on. */
   hostLabel: string
@@ -57,12 +99,22 @@ export interface FeishuSenderOptions {
   sdk?: FeishuSenderSdk
   /** Minimum gap between two vendor calls, keeping the app under its rate limit. */
   minGapMs?: number
+  /** Attempts per recipient, including the first one. Never unbounded. */
+  maxAttempts?: number
+  /** First backoff delay; every further retry doubles it. */
+  backoffBaseMs?: number
   now?: () => number
   sleep?: (ms: number) => Promise<void>
 }
 
 /** Default gap: five calls per second is the application ceiling, so 250 ms is the floor. */
 const DEFAULT_MIN_GAP_MS = 250
+
+/** Attempts one recipient gets: the first send plus two backoff retries. */
+const DEFAULT_MAX_ATTEMPTS = 3
+
+/** First backoff delay, doubled per retry. */
+const DEFAULT_BACKOFF_BASE_MS = 500
 
 /**
  * Compose the message body for one delivery.
@@ -96,6 +148,11 @@ export function composeFeishuText(notices: readonly RunNotice[], hostLabel: stri
   return lines.join('\n')
 }
 
+/** One failure line inside the aggregated log, carrying what a reader needs. */
+function describeFailure(failure: DeliveryFailure): string {
+  return `${failure.recipient}（${failure.error}, retryable=${failure.retryable ? 'yes' : 'no'}）`
+}
+
 /**
  * Delivers composed messages to every configured recipient.
  *
@@ -108,18 +165,24 @@ export class FeishuSender {
   private readonly log: (message: string) => void
   private readonly sdk: FeishuSenderSdk
   private readonly minGapMs: number
+  private readonly maxAttempts: number
+  private readonly backoffBaseMs: number
   private readonly sleep: (ms: number) => Promise<void>
   private readonly now: () => number
   private client: ReturnType<FeishuSenderSdk['createClient']> | undefined
   /** Serializes sends and carries the last call time, so the rate limit holds across callers. */
   private chain: Promise<void> = Promise.resolve()
   private lastCallAt = 0
+  private lastReport: DeliveryReport | undefined
 
   constructor(options: FeishuSenderOptions) {
     this.options = options
     this.log = options.log ?? (() => undefined)
     this.sdk = options.sdk ?? officialSdk
     this.minGapMs = options.minGapMs ?? DEFAULT_MIN_GAP_MS
+    // A non-positive attempt count would make "send nothing" look like success.
+    this.maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS))
+    this.backoffBaseMs = Math.max(0, options.backoffBaseMs ?? DEFAULT_BACKOFF_BASE_MS)
     this.now = options.now ?? Date.now
     this.sleep = options.sleep ?? (ms => new Promise<void>(resolve => { setTimeout(resolve, ms) }))
   }
@@ -132,6 +195,11 @@ export class FeishuSender {
   /** Domain the credentials address. */
   get domain(): string {
     return this.options.credentials.domain
+  }
+
+  /** The most recent delivery attempt, or undefined when nothing was sent yet. */
+  get lastDelivery(): DeliveryReport | undefined {
+    return this.lastReport
   }
 
   private vendorClient(): ReturnType<FeishuSenderSdk['createClient']> {
@@ -162,30 +230,79 @@ export class FeishuSender {
   }
 
   private async sendOne(recipient: string, text: string): Promise<DeliveryAttempt> {
-    // Serialize every call through one chain: `notify()` is not concurrency safe
-    // and the vendor limit is per application, not per recipient.
-    const run = this.chain.then(async () => {
-      await this.respectGap()
-      try {
-        const response = await this.vendorClient().im.message.create({
-          params: { receive_id_type: 'open_id' },
-          data: { receive_id: recipient, msg_type: 'text', content: JSON.stringify({ text }) },
-        })
-        const code = (response as { code?: unknown } | undefined)?.code
-        // The SDK resolves even for a business error, so the envelope decides.
-        if (typeof code === 'number' && code !== 0) {
-          return { recipient, ok: false, error: `feishu code ${code}: ${String((response as { msg?: unknown }).msg ?? '')}` }
-        }
-        return { recipient, ok: true }
-      } catch (error) {
-        return { recipient, ok: false, error: error instanceof Error ? error.message : String(error) }
-      } finally {
-        this.lastCallAt = this.now()
-      }
-    })
+    // Serialize every call through one chain: `send` is not concurrency safe and
+    // the vendor limit is per application, not per recipient.
+    const run = this.chain.then(async () => this.attemptWithRetry(recipient, text))
     // Keep the chain alive after a rejection so one failure cannot block later sends.
     this.chain = run.then(() => undefined, () => undefined)
     return run
+  }
+
+  /**
+   * Try one recipient until it is delivered, permanently refused, or out of
+   * attempts.
+   *
+   * Only a failure classified retryable is repeated, and the number of attempts
+   * is bounded by construction, so a wedged tenant cannot turn the notification
+   * path into a retry storm. The terminal failure is returned rather than
+   * swallowed: rate limiting, a revoked permission and an unknown target are
+   * reported with their own code and classification.
+   *
+   * @param recipient - the target id.
+   * @param text - the message body.
+   * @returns the last attempt made.
+   */
+  private async attemptWithRetry(recipient: string, text: string): Promise<DeliveryAttempt> {
+    let attempt: DeliveryAttempt = { recipient, ok: false, error: 'dsh-notify: 未尝试发送', retryable: false }
+    for (let index = 1; index <= this.maxAttempts; index += 1) {
+      await this.respectGap()
+      attempt = await this.attemptOnce(recipient, text)
+      if (attempt.ok || attempt.retryable !== true || index === this.maxAttempts) return attempt
+      const delay = this.backoffBaseMs * 2 ** (index - 1)
+      this.log(`dsh-notify: 推送给 ${recipient} 失败（${attempt.error ?? '未知错误'}），${delay}ms 后第 ${index + 1} 次尝试`)
+      await this.sleep(delay)
+    }
+    return attempt
+  }
+
+  /**
+   * One vendor call for one recipient.
+   * @param recipient - the target id.
+   * @param text - the message body.
+   * @returns the attempt result; never throws for a vendor or transport failure.
+   */
+  private async attemptOnce(recipient: string, text: string): Promise<DeliveryAttempt> {
+    let receiveIdType: ReceiveIdType
+    try {
+      receiveIdType = detectReceiveIdType(recipient)
+    } catch (error) {
+      // An unusable target is a configuration mistake, not something a retry fixes.
+      return { recipient, ok: false, error: error instanceof Error ? error.message : String(error), retryable: false }
+    }
+    try {
+      const response = await this.vendorClient().im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: { receive_id: recipient.trim(), msg_type: 'text', content: JSON.stringify({ text }) },
+      })
+      const code = (response as { code?: unknown } | undefined)?.code
+      // The SDK resolves even for a business error, so the envelope decides.
+      if (typeof code === 'number' && code !== 0) {
+        return {
+          recipient,
+          ok: false,
+          code,
+          error: `feishu code ${code}: ${String((response as { msg?: unknown }).msg ?? '')}`,
+          retryable: isRetryableFeishuCode(code),
+        }
+      }
+      return { recipient, ok: true }
+    } catch (error) {
+      // A transport failure carries no vendor code: the message may never have
+      // reached the platform, so it stays in the retryable class.
+      return { recipient, ok: false, error: error instanceof Error ? error.message : String(error), retryable: true }
+    } finally {
+      this.lastCallAt = this.now()
+    }
   }
 
   private async respectGap(): Promise<void> {
@@ -195,26 +312,41 @@ export class FeishuSender {
   }
 
   /**
-   * Deliver and reduce the result to one log line.
+   * Deliver and reduce the result to one diagnosable log line.
    *
    * Event handlers cannot await a promise they do not own, and a rejected one
    * would be an unhandled rejection, so the caller uses this instead of
-   * {@link send} whenever the notification is fire-and-forget.
+   * {@link send} whenever the notification is fire-and-forget. Failures are
+   * aggregated into a single line naming each recipient, its vendor code and
+   * whether it was retryable; the same facts are kept as
+   * {@link lastDelivery} so the last push can be asked about instead of
+   * reconstructed from logs.
    *
    * @param notices - the finished runs to report.
+   * @returns the delivery report, or undefined when nothing was attempted.
    */
-  async notify(notices: readonly RunNotice[]): Promise<void> {
-    if (notices.length === 0) return
+  async notify(notices: readonly RunNotice[]): Promise<DeliveryReport | undefined> {
+    if (notices.length === 0) return undefined
     const text = composeFeishuText(notices, this.options.hostLabel)
     const attempts = await this.send(text)
-    const failed = attempts.filter(attempt => !attempt.ok)
-    const delivered = attempts.length - failed.length
-    if (attempts.length > 0 && failed.length === 0) {
-      this.log(`dsh-notify: 已推送 ${delivered} 条飞书通知`)
-      return
+    if (attempts.length === 0) return undefined
+    const failed: DeliveryFailure[] = []
+    for (const attempt of attempts) {
+      if (attempt.ok) continue
+      failed.push({
+        recipient: attempt.recipient,
+        ...(attempt.code === undefined ? {} : { code: attempt.code }),
+        error: attempt.error ?? '未知错误',
+        retryable: attempt.retryable === true,
+      })
     }
-    for (const attempt of failed) {
-      this.log(`dsh-notify: 推送给 ${attempt.recipient} 失败：${attempt.error ?? '未知错误'}`)
+    const report: DeliveryReport = { at: this.now(), ok: failed.length === 0, delivered: attempts.length - failed.length, failed }
+    this.lastReport = report
+    if (report.ok) {
+      this.log(`dsh-notify: 已推送 ${report.delivered} 条飞书通知`)
+      return report
     }
+    this.log(`dsh-notify: 推送失败 ${failed.length}/${attempts.length} 条未送达：${failed.map(describeFailure).join('; ')}`)
+    return report
   }
 }

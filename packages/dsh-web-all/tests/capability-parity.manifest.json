@@ -41,6 +41,7 @@
   "hostServices": [
     "family-config",
     "family-namespaces",
+    "feishu",
     "git-graph",
     "lark-inbox",
     "lifecycle",
@@ -67,6 +68,7 @@
     "lark_inbox_ack",
     "lark_inbox_peek",
     "lark_inbox_pop",
+    "lark_inbox_reply",
     "schedule_mode_list",
     "schedule_mode_set",
     "ssh_cluster",
@@ -81,6 +83,7 @@
   ],
   "settingsNamespaces": [
     "dsh-ssh",
+    "feishu",
     "lark-inbox",
     "schedule-mode",
     "web-render",

@@ -21,6 +21,7 @@ import {
   NOTIFY_FEED_PATH,
   clampLimit,
   clampWatermark,
+  type NotifyDeliverySnapshot,
   type NotifyFeed,
 } from '../../../core/notify/contract.ts'
 import { isLoopbackRequest } from '../access-trust/trust.ts'
@@ -44,6 +45,13 @@ export interface NotifyRouteDeps {
   isTrusted?: (request: IncomingMessage) => boolean
   /** Whether the capability is enabled right now, read per request. */
   enabled?: () => boolean
+  /**
+   * How the most recent push ended, or undefined when nothing was pushed.
+   *
+   * Read per request so a client polling the feed learns about a failed
+   * notification without the host keeping any per-client state.
+   */
+  lastDelivery?: () => NotifyDeliverySnapshot | undefined
 }
 
 function writeJson(response: ServerResponse, status: number, body: unknown): void {
@@ -121,10 +129,12 @@ export function makeNotifyRoutes(deps: NotifyRouteDeps): WebRoute[] {
         if (request.method !== 'GET') { writeJson(response, 405, { error: 'method-not-allowed' }); return }
         const query = readFeedQuery(request, deps.defaultLimit())
         const log = deps.log()
+        const lastDelivery = deps.lastDelivery?.()
         const body: NotifyFeed = {
           origin: requestAuthority(request),
           latest: log.latest,
           notices: log.since(query.since, query.limit),
+          ...(lastDelivery === undefined ? {} : { lastDelivery }),
         }
         writeJson(response, 200, body)
       },

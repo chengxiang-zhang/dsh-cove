@@ -1,13 +1,26 @@
 /**
  * Notification settings schema and host-side credential resolution.
  *
- * The notification capability is the outbound half of the Lark integration the
+ * The notification capability is the outbound half of the Feishu integration the
  * `lark-inbox` domain owns the inbound half of: a run finishes, and the person
- * who started it is told. It therefore needs the same Feishu application
- * credentials, and it borrows them when it has none of its own — one bot,
- * configured once. That fallback is deliberate rather than implicit: a
- * deployment that only ever configured the inbox still gets notifications, and
- * one that wants a separate sender can say so by filling in these fields.
+ * who started it is told. Both halves, and the reply path, address one Feishu
+ * application, and the decision of which application that is now belongs to the
+ * shared `feishu` credential domain (`services/feishu/credentials.ts`). This
+ * module only contributes the outbound half's own fields to that decision and
+ * stays a plain module with no Cordis dependency, so it can be read and tested
+ * on its own; the namespace reads that need the family bridge live in
+ * `notify/index.ts`.
+ *
+ * Two rules differ from the bare shared decision, and both exist so a
+ * half-configured push cannot quietly go out under the wrong bot:
+ *
+ * - A filled `feishuAppId` is an explicit choice of application. Its secret must
+ *   therefore belong to that same application: this capability's own
+ *   `feishuAppSecret`, or the shared namespace's secret when it names the same
+ *   application id. A blank secret is an error rather than an invitation to
+ *   borrow the inbound bot's secret.
+ * - With no `feishuAppId` the shared `feishu` namespace, then the legacy
+ *   `lark-inbox` fields, decide: one bot, configured once, still the default.
  */
 
 import { registerFamilyNamespace } from '../family-config.ts'
@@ -17,12 +30,27 @@ import {
   NOTIFY_MAX_LIMIT,
   type NotifyOutcome,
 } from '../../../core/notify/contract.ts'
-import { LARK_APP_SECRET_ENV, type LarkInboxConfig } from '../lark-inbox/config.ts'
+import { FEISHU_APP_SECRET_ENV, type FeishuConfig } from '../feishu/config.ts'
+import {
+  readSecret,
+  resolveFeishuCredentials as resolveSharedFeishuCredentials,
+  type FeishuCredentials,
+  type LegacyFeishuConfig,
+} from '../feishu/credentials.ts'
 
 /** Key this capability occupies inside the aggregated `web-all` entry. */
 export const NOTIFY_SETTINGS_NAMESPACE = 'notify'
 
-/** Ambient environment variable consulted when no secret is configured. */
+/**
+ * Ambient environment variable this capability used to own.
+ *
+ * Kept as an export and still honored, mapped onto the shared
+ * `FEISHU_APP_SECRET` variable: a deployment that exported it before the
+ * credentials moved into a shared namespace keeps sending without an edit.
+ *
+ * @deprecated configure the application in the shared `feishu` namespace, or
+ *   export `FEISHU_APP_SECRET`.
+ */
 export const NOTIFY_APP_SECRET_ENV = 'NOTIFY_FEISHU_APP_SECRET'
 
 /** Feishu deployments the sender knows how to address. */
@@ -47,13 +75,19 @@ export interface NotifyConfig {
   feedLimit?: number
   /** Whether finished runs are pushed to Feishu. */
   feishuEnabled?: boolean
-  /** Feishu/Lark application id; blank borrows the inbox's. */
+  /**
+   * Feishu/Lark application id; blank reuses the shared `feishu` application.
+   *
+   * Filling it is a promise that this capability sends as that application, so
+   * a filled id without its own secret is reported as a configuration error
+   * instead of falling back to another bot.
+   */
   feishuAppId?: string
   /** Feishu/Lark application secret; `env:NAME` reads an environment variable. */
   feishuAppSecret?: string
   /** Which Feishu deployment to address. */
   feishuDomain?: 'feishu' | 'lark'
-  /** Open ids (or chat ids) to notify. */
+  /** Open ids (`ou_…`) or chat ids (`oc_…`) to notify. */
   feishuRecipients?: string[]
   /**
    * `idle` sends one message when the agent stops working, which is what a
@@ -79,6 +113,10 @@ export const Config = z.object({
 
 registerFamilyNamespace(NOTIFY_SETTINGS_NAMESPACE, Config)
 
+// The credentials type is the shared domain's, re-exported so consumers of this
+// module keep one import and cannot drift into a local shape.
+export type { FeishuCredentials } from '../feishu/credentials.ts'
+
 /**
  * Fill every absent field with its documented default.
  * @param config - the namespace value as stored, possibly partial.
@@ -88,21 +126,26 @@ export function effectiveConfig(config: NotifyConfig | undefined): Required<Noti
   return Config(config ?? {}) as Required<NotifyConfig>
 }
 
-/** Resolved credentials the sender can actually use. */
-export interface FeishuCredentials {
-  appId: string
-  appSecret: string
-  domain: 'feishu' | 'lark'
-  /** Which namespace supplied them, for diagnostics. */
-  source: 'notify' | 'lark-inbox'
+/** Everything the outbound credential decision consults, highest priority first. */
+export interface NotifyCredentialSources {
+  /** This capability's own fields: an explicit choice of application. */
+  notify?: NotifyConfig
+  /** The shared `feishu` namespace, the deployment's default application. */
+  feishu?: FeishuConfig
+  /** The legacy `lark-inbox` fields, read for backward compatibility. */
+  legacyInbox?: LegacyFeishuConfig
+  /** Environment the `env:` references and ambient variables are read from. */
+  env?: NodeJS.ProcessEnv
 }
 
 /**
  * Read a secret field that may be a literal, an `env:NAME` reference, or blank.
  *
- * The ambient variable is only consulted for the inbox's own field name, so a
- * deployment that hard-codes a secret in `notify` never silently picks up an
- * unrelated environment value.
+ * The parsing itself is the credential domain's `readSecret`: two
+ * implementations of `env:` were exactly the drift this migration removes. The
+ * ambient fallback stays here because it is a per-capability policy — which
+ * variable an unconfigured deployment may rely on — rather than a property of
+ * the shared application.
  *
  * @param raw - the configured value.
  * @param ambientVar - environment variable to consult when `raw` is blank.
@@ -111,52 +154,83 @@ export interface FeishuCredentials {
  * @throws when an `env:` reference names no variable or that variable is empty.
  */
 export function resolveSecret(raw: string | undefined, ambientVar: string | undefined, env: NodeJS.ProcessEnv): string {
-  const value = raw ?? ''
-  if (value.startsWith('env:')) {
-    const name = value.slice('env:'.length).trim()
-    if (name === '') throw new Error('dsh-notify: 密钥的 env: 引用缺少变量名（例如 env:NOTIFY_FEISHU_APP_SECRET）')
-    const resolved = env[name]
-    if (resolved === undefined || resolved === '') {
-      throw new Error(`dsh-notify: 密钥引用的环境变量 ${name} 未设置或为空`)
-    }
-    return resolved
+  if ((raw ?? '').trim() === '') return ambientVar === undefined ? '' : env[ambientVar] ?? ''
+  return readSecret(raw, env, 'dsh-notify')
+}
+
+/**
+ * Let the capability's historical ambient variable reach the shared resolver.
+ *
+ * It is mapped onto the shared variable instead of being read separately so the
+ * legacy name cannot answer a question the shared domain did not ask. An
+ * explicitly set shared variable always wins, and the caller's environment is
+ * never mutated.
+ *
+ * @param env - the environment to read.
+ * @returns the same object, or a copy carrying the mapped alias.
+ */
+function withLegacyAmbient(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const legacy = env[NOTIFY_APP_SECRET_ENV]
+  if (legacy === undefined || legacy === '' || env[FEISHU_APP_SECRET_ENV] !== undefined) return env
+  return { ...env, [FEISHU_APP_SECRET_ENV]: legacy }
+}
+
+/**
+ * Credentials for the application this capability names explicitly.
+ *
+ * The secret is only read from a source that belongs to the same application:
+ * this capability's own field, or the shared namespace when it carries the same
+ * application id. The inbound bot's fields are deliberately unreachable from
+ * here, because borrowing them is what turned "I forgot the secret" into
+ * "notifications were sent by a bot I did not choose".
+ *
+ * @param own - this capability's complete configuration.
+ * @param ownId - its non-empty application id.
+ * @param feishu - the shared namespace, used only for a same-application secret.
+ * @param env - the environment `env:` references are read from.
+ * @returns the credentials for that application.
+ * @throws when that application's secret cannot be resolved.
+ */
+function ownApplication(
+  own: Required<NotifyConfig>,
+  ownId: string,
+  feishu: FeishuConfig | undefined,
+  env: NodeJS.ProcessEnv,
+): FeishuCredentials {
+  const sharedId = (feishu?.appId ?? '').trim()
+  const sharedSecret = feishu?.appSecret ?? ''
+  let secret = ''
+  if ((own.feishuAppSecret ?? '').trim() !== '') {
+    secret = readSecret(own.feishuAppSecret, env, 'dsh-notify')
+  } else if (sharedId === ownId && sharedSecret.trim() !== '') {
+    // Same application, configured once: the shared secret is this bot's own.
+    secret = readSecret(sharedSecret, env, 'feishu')
   }
-  if (value.trim() !== '') return value
-  if (ambientVar === undefined) return ''
-  const ambient = env[ambientVar]
-  return ambient ?? ''
+  if (secret === '') {
+    throw new Error(`dsh-notify: 已填写 feishuAppId（${ownId}）但找不到该应用的 feishuAppSecret；请在「通知」页填写，或用 env:VARNAME 引用环境变量，或清空 feishuAppId 以沿用共享的「飞书」应用`)
+  }
+  return { appId: ownId, appSecret: secret, domain: own.feishuDomain, source: 'feishu', secretSource: 'feishu' }
 }
 
 /**
  * Decide which Feishu application sends the notifications.
  *
- * `notify`'s own fields win; a blank `feishuAppId` borrows the inbox's
- * application, because both halves are the same bot. The ambient environment
- * variables are consulted per namespace (`NOTIFY_FEISHU_APP_SECRET` for this
- * capability, `LARK_APP_SECRET` for the inbox's).
- *
- * @param config - the notification namespace value.
- * @param inbox - the inbox namespace value, used only as a fallback.
- * @param env - the environment to read secrets from.
- * @returns the credentials, or null when no application is configured.
- * @throws when a configured secret reference cannot be resolved.
+ * @param sources - the three namespaces and the environment, in priority order.
+ * @returns the credentials, or null when no application is configured at all.
+ * @throws when an application id exists but no secret belonging to it can be
+ *   resolved. The caller drops the sender and warns; the failure must not become
+ *   a silent no-op, and must not be papered over with another bot's secret.
  */
-export function resolveFeishuCredentials(
-  config: NotifyConfig | undefined,
-  inbox: LarkInboxConfig | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): FeishuCredentials | null {
-  const own = effectiveConfig(config)
-  const ownSecret = resolveSecret(own.feishuAppSecret, NOTIFY_APP_SECRET_ENV, env)
-  if (own.feishuAppId.trim() !== '' && ownSecret !== '') {
-    return { appId: own.feishuAppId.trim(), appSecret: ownSecret, domain: own.feishuDomain, source: 'notify' }
-  }
-  const borrowedSecret = resolveSecret(inbox?.appSecret, LARK_APP_SECRET_ENV, env)
-  const borrowedId = (inbox?.appId ?? '').trim()
-  if (borrowedId !== '' && borrowedSecret !== '') {
-    return { appId: borrowedId, appSecret: borrowedSecret, domain: inbox?.domain ?? 'feishu', source: 'lark-inbox' }
-  }
-  return null
+export function resolveFeishuCredentials(sources: NotifyCredentialSources = {}): FeishuCredentials | null {
+  const own = effectiveConfig(sources.notify)
+  const env = sources.env ?? process.env
+  const ownId = own.feishuAppId.trim()
+  if (ownId !== '') return ownApplication(own, ownId, sources.feishu, env)
+  return resolveSharedFeishuCredentials({
+    feishu: sources.feishu,
+    legacyInbox: sources.legacyInbox,
+    env: withLegacyAmbient(env),
+  })
 }
 
 /**

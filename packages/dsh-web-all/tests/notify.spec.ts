@@ -30,7 +30,14 @@ import { composeFeishuText, FeishuSender, type FeishuSenderSdk } from '../src/ho
 import { makeNotifyRoutes, readFeedQuery, requestAuthority } from '../src/host/services/notify/host-routes.ts'
 import { register as registerAccessTrust, accessTrustOf } from '../src/host/services/access-trust/index.ts'
 import { effectiveConfig, normalizeRecipients, resolveFeishuCredentials, resolveSecret } from '../src/host/services/notify/config.ts'
-import { isSubagentSession, register, type NotifySender } from '../src/host/services/notify/index.ts'
+import {
+  PENDING_FLUSH_DEADLINE_MS,
+  PENDING_TURN_CAP,
+  isSubagentSession,
+  register,
+  type NotifySender,
+  type NotifyServiceDeps,
+} from '../src/host/services/notify/index.ts'
 import { bindFamilyConfig, notifyFamilyConfigChange } from '../src/host/services/family-config.ts'
 
 afterEach(() => { bindFamilyConfig(undefined) })
@@ -272,35 +279,101 @@ describe('Feishu sender', () => {
     return { sdk, createClient, create }
   }
 
-  const credentials = { appId: 'cli_x', appSecret: 'secret', domain: 'feishu' as const, source: 'notify' as const }
+  const credentials = {
+    appId: 'cli_x',
+    appSecret: 'secret',
+    domain: 'feishu' as const,
+    source: 'feishu' as const,
+    secretSource: 'feishu' as const,
+  }
 
-  it('addresses every recipient as open_id with a text body and no gap when it is the first call', async () => {
+  it('declares the id namespace each recipient actually needs', async () => {
     const { sdk, create, createClient } = sdkSpy()
-    const sender = new FeishuSender({ credentials, recipients: ['ou_a', 'ou_b'], hostLabel: 'm', sdk, minGapMs: 0 })
+    const sender = new FeishuSender({ credentials, recipients: ['ou_a', 'oc_chat'], hostLabel: 'm', sdk, minGapMs: 0 })
     const attempts = await sender.send('hello')
-    expect(attempts).toEqual([{ recipient: 'ou_a', ok: true }, { recipient: 'ou_b', ok: true }])
+    expect(attempts).toEqual([{ recipient: 'ou_a', ok: true }, { recipient: 'oc_chat', ok: true }])
     expect(createClient).toHaveBeenCalledWith({ appId: 'cli_x', appSecret: 'secret', domain: 0 })
-    expect(create).toHaveBeenCalledTimes(2)
     expect(create).toHaveBeenNthCalledWith(1, {
       params: { receive_id_type: 'open_id' },
       data: { receive_id: 'ou_a', msg_type: 'text', content: JSON.stringify({ text: 'hello' }) },
     })
+    // A chat id declared as `open_id` fails like a permission problem; the prefix
+    // is the only thing that tells the two namespaces apart.
+    expect(create).toHaveBeenNthCalledWith(2, {
+      params: { receive_id_type: 'chat_id' },
+      data: { receive_id: 'oc_chat', msg_type: 'text', content: JSON.stringify({ text: 'hello' }) },
+    })
   })
 
-  it('reports a business error the SDK resolved instead of throwing', async () => {
+  it('retries a rate-limited failure with exponential backoff and then succeeds', async () => {
     const { sdk, create } = sdkSpy()
-    create.mockResolvedValue({ code: 99991400, msg: 'rate limited' })
-    const sender = new FeishuSender({ credentials, recipients: ['ou_a'], hostLabel: 'm', sdk, minGapMs: 0 })
+    const slept: number[] = []
+    create.mockResolvedValueOnce({ code: 99991400, msg: 'rate limited' }).mockResolvedValue({ code: 0 })
+    const sender = new FeishuSender({
+      credentials,
+      recipients: ['ou_a'],
+      hostLabel: 'm',
+      sdk,
+      minGapMs: 0,
+      backoffBaseMs: 500,
+      sleep: async (ms) => { slept.push(ms) },
+    })
     const attempts = await sender.send('hello')
-    expect(attempts).toEqual([{ recipient: 'ou_a', ok: false, error: 'feishu code 99991400: rate limited' }])
+    expect(attempts).toEqual([{ recipient: 'ou_a', ok: true }])
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(slept).toEqual([500])
+  })
+
+  it('stops after the bounded attempt count and keeps the retryable terminal failure', async () => {
+    const { sdk, create } = sdkSpy()
+    const slept: number[] = []
+    create.mockResolvedValue({ code: 230020, msg: 'per-chat limit' })
+    const sender = new FeishuSender({
+      credentials,
+      recipients: ['ou_a'],
+      hostLabel: 'm',
+      sdk,
+      minGapMs: 0,
+      maxAttempts: 3,
+      backoffBaseMs: 500,
+      sleep: async (ms) => { slept.push(ms) },
+    })
+    const attempts = await sender.send('hello')
+    expect(create).toHaveBeenCalledTimes(3)
+    // Base 500 doubling: the retry storm is bounded by construction.
+    expect(slept).toEqual([500, 1_000])
+    expect(attempts).toEqual([
+      { recipient: 'ou_a', ok: false, code: 230020, error: 'feishu code 230020: per-chat limit', retryable: true },
+    ])
+  })
+
+  it('does not retry a permanent refusal and surfaces its vendor code', async () => {
+    const { sdk, create } = sdkSpy()
+    const slept: number[] = []
+    create.mockResolvedValue({ code: 230013, msg: 'bot capability disabled' })
+    const sender = new FeishuSender({
+      credentials,
+      recipients: ['ou_a'],
+      hostLabel: 'm',
+      sdk,
+      minGapMs: 0,
+      sleep: async (ms) => { slept.push(ms) },
+    })
+    const attempts = await sender.send('hello')
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(slept).toEqual([])
+    expect(attempts).toEqual([
+      { recipient: 'ou_a', ok: false, code: 230013, error: 'feishu code 230013: bot capability disabled', retryable: false },
+    ])
   })
 
   it('contains a thrown failure and keeps serving later recipients', async () => {
     const { sdk, create } = sdkSpy()
     create.mockRejectedValueOnce(new Error('network down')).mockResolvedValue({ code: 0 })
-    const sender = new FeishuSender({ credentials, recipients: ['ou_a', 'ou_b'], hostLabel: 'm', sdk, minGapMs: 0 })
+    const sender = new FeishuSender({ credentials, recipients: ['ou_a', 'ou_b'], hostLabel: 'm', sdk, minGapMs: 0, maxAttempts: 1 })
     const attempts = await sender.send('hello')
-    expect(attempts).toEqual([{ recipient: 'ou_a', ok: false, error: 'network down' }, { recipient: 'ou_b', ok: true }])
+    // A transport failure stays retryable; this test only pins the containment.
+    expect(attempts).toEqual([{ recipient: 'ou_a', ok: false, error: 'network down', retryable: true }, { recipient: 'ou_b', ok: true }])
   })
 
   it('waits out the application rate limit between calls', async () => {
@@ -332,39 +405,110 @@ describe('Feishu sender', () => {
     expect(createClient).not.toHaveBeenCalled()
   })
 
-  it('logs a failure and stays silent on success', async () => {
+  it('aggregates a failure into one diagnosable line and records the last delivery', async () => {
     const { sdk, create } = sdkSpy()
     const messages: string[] = []
-    const sender = new FeishuSender({ credentials, recipients: ['ou_a', 'ou_b'], hostLabel: 'm', sdk, minGapMs: 0, log: message => { messages.push(message) } })
-    await sender.notify([notice()])
+    let clock = 5_000
+    const sender = new FeishuSender({
+      credentials,
+      recipients: ['ou_a', 'ou_b'],
+      hostLabel: 'm',
+      sdk,
+      minGapMs: 0,
+      now: () => clock,
+      log: message => { messages.push(message) },
+    })
+    const delivered = await sender.notify([notice()])
     expect(messages).toEqual(['dsh-notify: 已推送 2 条飞书通知'])
+    expect(delivered).toEqual({ at: 5_000, ok: true, delivered: 2, failed: [] })
+    expect(sender.lastDelivery).toEqual({ at: 5_000, ok: true, delivered: 2, failed: [] })
 
     messages.length = 0
-    create.mockRejectedValue(new Error('boom'))
+    create.mockClear()
+    create.mockResolvedValueOnce({ code: 230013, msg: 'bot capability disabled' }).mockResolvedValue({ code: 0 })
+    clock = 6_000
     await sender.notify([notice()])
     expect(messages).toEqual([
-      'dsh-notify: 推送给 ou_a 失败：boom',
-      'dsh-notify: 推送给 ou_b 失败：boom',
+      'dsh-notify: 推送失败 1/2 条未送达：ou_a（feishu code 230013: bot capability disabled, retryable=no）',
     ])
+    expect(sender.lastDelivery).toEqual({
+      at: 6_000,
+      ok: false,
+      delivered: 1,
+      failed: [{ recipient: 'ou_a', code: 230013, error: 'feishu code 230013: bot capability disabled', retryable: false }],
+    })
   })
 
-  it('sends nothing for an empty batch', async () => {
+  it('sends nothing for an empty batch and records no delivery', async () => {
     const { sdk, create } = sdkSpy()
     const sender = new FeishuSender({ credentials, recipients: ['ou_a'], hostLabel: 'm', sdk, minGapMs: 0 })
-    await sender.notify([])
+    expect(await sender.notify([])).toBeUndefined()
     expect(create).not.toHaveBeenCalled()
+    expect(sender.lastDelivery).toBeUndefined()
   })
 })
 
 describe('credential resolution', () => {
-  it('prefers this capability own application and otherwise borrows the inbox bot', () => {
-    const env = {}
-    expect(resolveFeishuCredentials({ feishuAppId: 'cli_send', feishuAppSecret: 's1' }, { appId: 'cli_inbox', appSecret: 's2' }, env))
-      .toEqual({ appId: 'cli_send', appSecret: 's1', domain: 'feishu', source: 'notify' })
-    expect(resolveFeishuCredentials({}, { appId: 'cli_inbox', appSecret: 's2', domain: 'lark' }, env))
-      .toEqual({ appId: 'cli_inbox', appSecret: 's2', domain: 'lark', source: 'lark-inbox' })
-    expect(resolveFeishuCredentials({}, {}, env)).toBeNull()
-    expect(resolveFeishuCredentials(undefined, undefined, env)).toBeNull()
+  it('uses this capability own application when it names one', () => {
+    expect(resolveFeishuCredentials({ notify: { feishuAppId: 'cli_send', feishuAppSecret: 's1' }, env: {} }))
+      .toEqual({ appId: 'cli_send', appSecret: 's1', domain: 'feishu', source: 'feishu', secretSource: 'feishu' })
+    // Its own deployment setting wins over the shared one.
+    expect(resolveFeishuCredentials({
+      notify: { feishuAppId: 'cli_send', feishuAppSecret: 's1', feishuDomain: 'lark' },
+      feishu: { appId: 'cli_shared', appSecret: 's2' },
+      env: {},
+    })).toEqual({ appId: 'cli_send', appSecret: 's1', domain: 'lark', source: 'feishu', secretSource: 'feishu' })
+  })
+
+  it('refuses to pair an explicit application id with another bot secret', () => {
+    // A half-configured override used to send as the inbound bot. Guessing which
+    // bot an operator meant is how a private notification leaves under the wrong
+    // identity, so the missing secret is reported instead.
+    expect(() => resolveFeishuCredentials({
+      notify: { feishuAppId: 'cli_send' },
+      legacyInbox: { appId: 'cli_inbox', appSecret: 'inbox-secret' },
+      env: {},
+    })).toThrow(/feishuAppSecret/)
+    expect(() => resolveFeishuCredentials({
+      notify: { feishuAppId: 'cli_send' },
+      feishu: { appId: 'cli_other', appSecret: 'other-secret' },
+      env: {},
+    })).toThrow(/feishuAppSecret/)
+  })
+
+  it('reuses the shared secret when it belongs to the same application', () => {
+    expect(resolveFeishuCredentials({
+      notify: { feishuAppId: 'cli_same' },
+      feishu: { appId: 'cli_same', appSecret: 'shared-secret' },
+      env: {},
+    })).toEqual({ appId: 'cli_same', appSecret: 'shared-secret', domain: 'feishu', source: 'feishu', secretSource: 'feishu' })
+  })
+
+  it('follows the shared namespace when it names no application of its own', () => {
+    expect(resolveFeishuCredentials({ notify: {}, feishu: { appId: 'cli_shared', appSecret: 's', domain: 'lark' }, env: {} }))
+      .toEqual({ appId: 'cli_shared', appSecret: 's', domain: 'lark', source: 'feishu', secretSource: 'feishu' })
+  })
+
+  it('still borrows the inbox bot for an installation configured before the migration', () => {
+    expect(resolveFeishuCredentials({ notify: {}, legacyInbox: { appId: 'cli_inbox', appSecret: 's2', domain: 'lark' }, env: {} }))
+      .toEqual({ appId: 'cli_inbox', appSecret: 's2', domain: 'lark', source: 'lark-inbox', secretSource: 'lark-inbox' })
+  })
+
+  it('reports nothing configured as null and a half-configured shared namespace as an error', () => {
+    expect(resolveFeishuCredentials({ env: {} })).toBeNull()
+    expect(resolveFeishuCredentials({ notify: {}, legacyInbox: {}, env: {} })).toBeNull()
+    expect(() => resolveFeishuCredentials({ notify: {}, feishu: { appId: 'cli_shared' }, env: {} })).toThrow(/appSecret/)
+  })
+
+  it('honors this capability historical ambient variable through the shared alias', () => {
+    expect(resolveFeishuCredentials({ notify: {}, feishu: { appId: 'cli_shared' }, env: { NOTIFY_FEISHU_APP_SECRET: 'ambient' } }))
+      .toEqual({ appId: 'cli_shared', appSecret: 'ambient', domain: 'feishu', source: 'feishu', secretSource: 'env' })
+    // An explicitly configured shared variable always wins over the legacy name.
+    expect(resolveFeishuCredentials({
+      notify: {},
+      feishu: { appId: 'cli_shared' },
+      env: { NOTIFY_FEISHU_APP_SECRET: 'ambient', FEISHU_APP_SECRET: 'shared' },
+    })?.appSecret).toBe('shared')
   })
 
   it('reads an env: reference and refuses one that names nothing', () => {
@@ -377,7 +521,7 @@ describe('credential resolution', () => {
   })
 
   it('normalizes a recipient list', () => {
-    expect(normalizeRecipients([' ou_a ', 'ou_a', '', 'ou_b'])).toEqual(['ou_a', 'ou_b'])
+    expect(normalizeRecipients([' ou_a ', 'ou_a', '', 'oc_chat'])).toEqual(['ou_a', 'oc_chat'])
     expect(normalizeRecipients(undefined)).toEqual([])
   })
 
@@ -570,14 +714,24 @@ describe('subagent detection', () => {
 })
 
 describe('notification service', () => {
-  function harness(config: Record<string, unknown>, deps: Parameters<typeof register>[2] = {}) {
-    bindFamilyConfig({ notify: config })
+  function harness(
+    config: Record<string, unknown>,
+    deps: Parameters<typeof register>[2] = {},
+    family: Record<string, unknown> = {},
+  ) {
+    bindFamilyConfig({ notify: config, ...family })
     const handlers = new Map<string, (...args: unknown[]) => void>()
     const mounted: Array<{ path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }> = []
     const releases: Array<() => void> = []
     const warnings: string[] = []
     const ctx = {
-      logger: () => ({ info: vi.fn(), warn: (format: string) => { warnings.push(format) }, error: vi.fn() }),
+      // Warnings carry their format arguments; record them joined so a test can
+      // assert on the sentence a person would actually read.
+      logger: () => ({
+        info: vi.fn(),
+        warn: (format: string, ...args: unknown[]) => { warnings.push([format, ...args.map(String)].join(' ')) },
+        error: vi.fn(),
+      }),
       // A real deployment always has the shared fence mounted, so the harness
       // supplies one; the fence's own behaviour is pinned in its own tests.
       get: (name: string) => name === 'webAllAccessTrust' ? { isTrusted: () => true } : undefined,
@@ -596,12 +750,35 @@ describe('notification service', () => {
         },
       },
     }
-    const dispose = register(ctx as never, {}, deps)
+    // The deadline is a timer, so the harness owns it: a test can advance it
+    // without waiting a minute, and no real timer outlives the test.
+    const timers: Array<{ callback: () => void; ms: number; cancelled: boolean }> = []
+    const dispose = register(ctx as never, {}, {
+      setTimeout: (callback: () => void, ms: number) => {
+        timers.push({ callback, ms, cancelled: false })
+        return timers.length - 1
+      },
+      clearTimeout: (handle: unknown) => {
+        const entry = timers[handle as number]
+        if (entry !== undefined) entry.cancelled = true
+      },
+      ...deps,
+    })
     const emit = (name: string, ...args: unknown[]) => { handlers.get(name)?.(...args) }
     const session = (id: string, header: Record<string, unknown> = {}) => ({ id, header })
     const step = (turn: number, at: number) => ({ type: 'step/start', data: { turn }, time: at })
     const end = (turn: number, kind: string, at: number) => ({ type: 'turn/end', data: { turn, reason: { kind } }, time: at })
-    return { dispose, emit, session, step, end, mounted, routes: mounted.map(route => route.path), releases, warnings }
+    const fireDeadline = () => {
+      for (const timer of timers) {
+        if (timer.cancelled) continue
+        timer.cancelled = true
+        timer.callback()
+      }
+    }
+    return {
+      dispose, emit, session, step, end, mounted, timers, fireDeadline,
+      routes: mounted.map(route => route.path), releases, warnings,
+    }
   }
 
   function senderSpy(): NotifySender & { notify: ReturnType<typeof vi.fn> } {
@@ -738,15 +915,111 @@ describe('notification service', () => {
     expect(credentials.warnings.join('\n')).toMatch(/凭据/)
   })
 
-  it('drops a disposed session pending buffer instead of pushing it later', async () => {
+  it('delivers a disposed session buffer instead of dropping it', async () => {
     const sender = senderSpy()
     const { emit, session, step, end } = harness({ feishuEnabled: true, feishuAppId: 'cli_x', feishuAppSecret: 's', feishuRecipients: ['ou_a'], feishuMode: 'idle' }, { createSender: () => sender })
     emit('session/event', session('s1'), step(1, 10))
     emit('session/event', session('s1'), end(1, 'completed', 20))
+    // A disposed session can no longer report idle, so this is its last chance to
+    // report the turn that did finish: dropping it here loses the run silently.
     emit('session/disposed', session('s1'))
+    await flush()
+    expect(sender.notify).toHaveBeenCalledTimes(1)
+    expect(sender.notify.mock.calls[0]?.[0]).toHaveLength(1)
     emit('agent/status', { agent: { id: 's1' }, status: 'idle' })
     await flush()
+    expect(sender.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('rebuilds the sender when the shared feishu namespace changes', () => {
+    const created: Array<{ appId: string; source: string; secretSource: string }> = []
+    type SenderOptions = Parameters<NonNullable<NotifyServiceDeps['createSender']>>[0]
+    const createSender = vi.fn((options: SenderOptions) => {
+      const credentials = options.credentials
+      created.push({
+        appId: credentials?.appId ?? '',
+        source: credentials?.source ?? '',
+        secretSource: credentials?.secretSource ?? '',
+      })
+      return senderSpy()
+    })
+    harness({ feishuEnabled: true, feishuRecipients: ['ou_a'] }, { createSender }, { feishu: { appId: 'cli_one', appSecret: 's1' } })
+    expect(created).toEqual([{ appId: 'cli_one', source: 'feishu', secretSource: 'feishu' }])
+
+    // Editing only the shared namespace must reach the outbound half: that is the
+    // whole point of resolving through one credential domain.
+    bindFamilyConfig({ notify: { feishuEnabled: true, feishuRecipients: ['ou_a'] }, feishu: { appId: 'cli_two', appSecret: 's2' } })
+    notifyFamilyConfigChange()
+    expect(created).toEqual([
+      { appId: 'cli_one', source: 'feishu', secretSource: 'feishu' },
+      { appId: 'cli_two', source: 'feishu', secretSource: 'feishu' },
+    ])
+  })
+
+  it('builds no sender from a half-configured override', () => {
+    const createSender = vi.fn()
+    // The shared bot is perfectly usable, and that is exactly why borrowing it
+    // here would be silent: the operator named a different application.
+    const harnessed = harness(
+      { feishuEnabled: true, feishuAppId: 'cli_own', feishuRecipients: ['ou_a'] },
+      { createSender },
+      { feishu: { appId: 'cli_shared', appSecret: 'shared' } },
+    )
+    expect(createSender).not.toHaveBeenCalled()
+    expect(harnessed.warnings.join('\n')).toMatch(/feishuAppSecret/)
+  })
+
+  it('delivers the idle buffer on dispose instead of waiting for an idle that never comes', async () => {
+    const sender = senderSpy()
+    const harnessed = harness({ feishuEnabled: true, feishuAppId: 'cli_x', feishuAppSecret: 's', feishuRecipients: ['ou_a'], feishuMode: 'idle' }, { createSender: () => sender })
+    harnessed.emit('session/event', harnessed.session('s1'), harnessed.step(1, 10))
+    harnessed.emit('session/event', harnessed.session('s1'), harnessed.end(1, 'completed', 20))
+    await flush()
     expect(sender.notify).not.toHaveBeenCalled()
+
+    harnessed.dispose()
+    await flush()
+    expect(sender.notify).toHaveBeenCalledTimes(1)
+    expect(sender.notify.mock.calls[0]?.[0]).toHaveLength(1)
+    // The deadline armed for that session is released with it, so nothing fires twice.
+    expect(harnessed.timers.every(timer => timer.cancelled)).toBe(true)
+  })
+
+  it('delivers a buffered batch when its deadline expires without an idle event', async () => {
+    const sender = senderSpy()
+    const harnessed = harness({ feishuEnabled: true, feishuAppId: 'cli_x', feishuAppSecret: 's', feishuRecipients: ['ou_a'], feishuMode: 'idle' }, { createSender: () => sender })
+    harnessed.emit('session/event', harnessed.session('s1'), harnessed.step(1, 10))
+    harnessed.emit('session/event', harnessed.session('s1'), harnessed.end(1, 'completed', 20))
+    await flush()
+    expect(harnessed.timers).toHaveLength(1)
+    expect(harnessed.timers[0]?.ms).toBe(PENDING_FLUSH_DEADLINE_MS)
+    expect(sender.notify).not.toHaveBeenCalled()
+
+    harnessed.fireDeadline()
+    await flush()
+    expect(sender.notify).toHaveBeenCalledTimes(1)
+    expect(sender.notify.mock.calls[0]?.[0]).toHaveLength(1)
+
+    // One deadline per session, and the batch is drained: a late idle or a second
+    // deadline must not repeat the notification.
+    harnessed.fireDeadline()
+    harnessed.emit('agent/status', { agent: { id: 's1' }, status: 'idle' })
+    await flush()
+    expect(sender.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('says so when a session buffer overflows instead of silently dropping turns', async () => {
+    const sender = senderSpy()
+    const turns = PENDING_TURN_CAP + 2
+    const harnessed = harness({ feishuEnabled: true, feishuAppId: 'cli_x', feishuAppSecret: 's', feishuRecipients: ['ou_a'], feishuMode: 'idle' }, { createSender: () => sender })
+    for (let turn = 1; turn <= turns; turn += 1) {
+      harnessed.emit('session/event', harnessed.session('s1'), harnessed.step(turn, turn * 10))
+      harnessed.emit('session/event', harnessed.session('s1'), harnessed.end(turn, 'completed', turn * 10 + 1))
+    }
+    expect(harnessed.warnings.join('\n')).toMatch(/上限/)
+    harnessed.fireDeadline()
+    await flush()
+    expect(sender.notify.mock.calls[0]?.[0]).toHaveLength(PENDING_TURN_CAP)
   })
 
   it('serves through its own route what it recorded from the event stream', async () => {

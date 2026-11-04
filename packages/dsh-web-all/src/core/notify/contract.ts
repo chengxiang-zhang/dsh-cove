@@ -66,6 +66,34 @@ export interface NotifyFeed {
   readonly latest: number
   /** Notices newer than the request's `since`, oldest first, capped by `limit`. */
   readonly notices: readonly RunNotice[]
+  /**
+   * How the most recent push to Feishu ended, when this host has pushed at all.
+   *
+   * A push is fire-and-forget from the run's point of view, so its failure exists
+   * only in the host log otherwise. Publishing the last outcome makes "the
+   * notification never arrived" a fact a reader can see. Optional because a host
+   * that has never pushed has nothing to report, and because clients written
+   * before this field must keep parsing the document.
+   */
+  readonly lastDelivery?: NotifyDeliverySnapshot
+}
+
+/** The last push's outcome, in the shape the feed publishes. */
+export interface NotifyDeliverySnapshot {
+  /** When the push finished. */
+  readonly at: number
+  /** True only when every recipient was reached. */
+  readonly ok: boolean
+  /** Recipients that were not reached, with the vendor's classification. */
+  readonly failed: readonly NotifyDeliveryFailure[]
+}
+
+/** One recipient the last push could not reach. */
+export interface NotifyDeliveryFailure {
+  readonly recipient: string
+  readonly code?: number
+  readonly error: string
+  readonly retryable: boolean
 }
 
 /** Reasons that mean the model finished the work it was given. */
