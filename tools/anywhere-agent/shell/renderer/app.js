@@ -156,7 +156,9 @@ function apply() {
   renderTabs(tabs, services);
   renderBanner();
   applyPage(tab, services, tabs);
-  pageOwnedByService = tab?.kind === 'service';
+  // Both a catalogue service and a link opened from a page are native surfaces over the
+  // page area; the shell's own pages (home, settings) are the only ones drawn in DOM.
+  pageOwnedByService = tab?.kind === 'service' || tab?.kind === 'link';
   scheduleDetailBounds();
 
   if (tab && tab.id !== lastActiveTabId) {
@@ -185,7 +187,15 @@ function renderTabs(tabs, services) {
 
     const glyph = document.createElement('span');
     glyph.className = 'mono';
-    if (tab.kind === 'home' || tab.kind === 'settings' || !service) {
+    if (tab.kind === 'link') {
+      // A link opened from a page has no catalogue glyph of its own: the globe says "a
+      // page you followed", and the address is the tooltip.
+      glyph.style.background = colorOf(tab.serviceId || tab.id);
+      glyph.innerHTML =
+        '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.4"/><path d="M2.6 8h10.8M8 2.6c2.6 2.9 2.6 7.9 0 10.8M8 2.6c-2.6 2.9-2.6 7.9 0 10.8"/></svg>';
+      glyph.style.color = '#ffffff';
+      glyph.title = tab.url || tab.serviceId || '';
+    } else if (tab.kind === 'home' || tab.kind === 'settings' || !service) {
       glyph.style.background = tab.kind === 'home' ? '#0F766E' : '#475569';
       glyph.innerHTML =
         tab.kind === 'home'
@@ -209,6 +219,11 @@ function renderTabs(tabs, services) {
     const title = document.createElement('span');
     title.className = 'tab-title';
     title.textContent = tab.title || tab.serviceId || '未命名';
+    if (tab.kind === 'link' && tab.url) {
+      // The strip shows the page's title; the address behind it is what a person checks
+      // when two pages of the same host are open.
+      title.title = tab.url;
+    }
     button.append(title);
 
     const close = document.createElement('button');

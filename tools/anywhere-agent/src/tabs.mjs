@@ -1,14 +1,17 @@
 /**
  * The tab model.
  *
- * One window, one tab strip. A tab is either the home (the service launcher), the
- * settings page, or one service. Two invariants make the strip predictable:
+ * One window, one tab strip. A tab is the home (the service launcher), the settings page,
+ * one service, or one link opened from inside a page. Three invariants make the strip
+ * predictable:
  *
  * 1. **A service has at most one tab.** Opening something already open activates it
  *    instead of stacking a second copy - the reason is not the engine's limit but that
  *    a second copy of the same page has nothing to show that the first does not.
  * 2. **The home exists minimum once.** Closing the last tab re-creates it instead of
  *    leaving an empty window, so there is always a way to open something.
+ * 3. **An address is one tab.** A link opened from a page is identified by its address,
+ *    so the same link pressed twice is a switch, not a second copy.
  *
  * Pure: every function takes a state and returns a new one. The main process owns the
  * state (it also owns the views), the renderer only draws what it is given, and the
@@ -21,6 +24,22 @@ export const SETTINGS_TAB_ID = 'settings';
 /** The shape every tab carries; `title` is a snapshot the strip can draw without the catalogue. */
 function makeTab({ id, kind, serviceId = '', title = '' }) {
   return { id, kind, serviceId, title };
+}
+
+/**
+ * The id of a link tab.
+ *
+ * A link is opened from inside a page rather than chosen from the catalogue, so the
+ * address is the whole of what the tab is: the same address is the same tab (opening it
+ * again switches instead of stacking), and closing and reopening loses nothing.
+ */
+export function linkTabId(url) {
+  return `link:${String(url ?? '').trim()}`;
+}
+
+/** Whether an address is one a link tab may load. */
+function isWebAddress(url) {
+  return /^https?:\/\/[^/\s]+/i.test(String(url ?? '').trim());
 }
 
 /** An empty state, which is not a valid window state: `openHome` is what makes it usable. */
@@ -66,6 +85,29 @@ export function openService(state, serviceId, title = '') {
   }
   const id = serviceTabId(serviceId);
   const tab = makeTab({ id, kind: 'service', serviceId, title });
+  return { state: { tabs: [...state.tabs, tab], activeId: id }, id, created: true };
+}
+
+/**
+ * Opens an address as a link tab, or activates the tab that already has it.
+ *
+ * A link tab is not a catalogue service: nothing published it, and it has no id of its
+ * own beyond the address. It lives beside the services in the same strip and obeys the
+ * same rules - one tab per address, opening it again switches to the tab that exists.
+ *
+ * @returns {{state: object, id: string, created: boolean}}
+ */
+export function openLink(state, url, title = '') {
+  const target = String(url ?? '').trim();
+  if (!isWebAddress(target)) {
+    return { state, id: '', created: false };
+  }
+  const id = linkTabId(target);
+  const existing = state.tabs.find((tab) => tab.id === id);
+  if (existing) {
+    return { state: withActive(state, existing.id), id: existing.id, created: false };
+  }
+  const tab = makeTab({ id, kind: 'link', serviceId: target, title });
   return { state: { tabs: [...state.tabs, tab], activeId: id }, id, created: true };
 }
 
@@ -156,9 +198,11 @@ export function serialize(state) {
 /**
  * Rebuilds a state from disk.
  *
- * A service that no longer exists in the catalogue is dropped (`known` answers that),
- * and the active tab falls back to the home when its tab did not survive. Restoring
- * never opens anything: the caller decides whether to load pages.
+ * A service that no longer exists in the catalogue is dropped (`known` answers that), and
+ * a link tab whose address is no longer a loadable URL is dropped the same way - the
+ * address is the tab, so a restored link needs nothing else to be valid. The active tab
+ * falls back to the home when its tab did not survive. Restoring never opens anything:
+ * the caller decides whether to load pages.
  */
 export function restore(items, { known = () => true, activeId = '' } = {}) {
   const tabs = [];
@@ -175,6 +219,17 @@ export function restore(items, { known = () => true, activeId = '' } = {}) {
     if (item.kind === 'settings') {
       if (!tabs.some((tab) => tab.kind === 'settings')) {
         tabs.push(makeTab({ id: SETTINGS_TAB_ID, kind: 'settings', title: '设置' }));
+      }
+      continue;
+    }
+    if (item.kind === 'link') {
+      const url = String(item.serviceId ?? '').trim();
+      if (!isWebAddress(url)) {
+        continue;
+      }
+      const id = linkTabId(url);
+      if (!tabs.some((tab) => tab.id === id)) {
+        tabs.push(makeTab({ id, kind: 'link', serviceId: url }));
       }
       continue;
     }

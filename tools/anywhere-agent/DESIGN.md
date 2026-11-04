@@ -4,6 +4,7 @@
 > 现行界面与交互规格见 `review/desktop-product-design-spec-2026-10-30.md`，决策与分期见 `review/desktop-intranet-browser-plan-2026-10-30.md`。
 > 窗口尺寸、原生页面几何与层序（`WebContentsView` 与 DOM 的边界）见 `review/window-layout-contract-2026-11-02.md`。
 > 页签常驻（切页签、睡眠醒来都不重建不重载；只有用户显式刷新会重载页面）见 `review/tab-residency-contract-2026-11-02.md`。
+> 页面返回的链接（内网地址开成页签、公网地址交给系统浏览器、不产生裸窗口）见 `review/link-routing-contract-2026-11-04.md`。
 > 仍然有效且继续执行的部分：第一节（产品是什么）、第八节（登录是可选项）、第九节（只读本机状态）、第十一节（未查看结果）、第十二节（文案）、第十三节（视觉与可访问性）、第十五到十六节（版本与安装包）、第十七节（agent 契约）。
 
 本文件是客户端交互与视觉的唯一验收依据。它不发明规则:每条都标出来源,并写清在本产品里**长什么样、怎么被机器检查**。

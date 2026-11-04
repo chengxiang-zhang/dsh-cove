@@ -20,7 +20,7 @@ import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeTheme, net, powerMo
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync, appendFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { homedir, hostname } from 'node:os';
@@ -33,8 +33,9 @@ import { buildRegistry } from '../src/discovery.mjs';
 import * as Tabs from '../src/tabs.mjs';
 import { parseServices } from '../src/services.mjs';
 import { createClaimState, startAgentBridge } from '../src/agent-bridge.mjs';
+import { LINK_ROUTE, classifyLink, hostOfAddress } from '../src/link-routing.mjs';
 import { isCloudZone } from '../src/netbird-names.mjs';
-import { DSH_ZONES } from '../src/generated/fleetConfig.mjs';
+import { CLOUD_DNS_DOMAIN, DSH_ZONES, OVERLAY_UPDATE_BASE_URL } from '../src/generated/fleetConfig.mjs';
 import { createPeerResolver, parsePeers, parseSelfStatus } from '../src/netbird-status.mjs';
 import { TunnelClient } from '../src/tunnel-client.mjs';
 import { localEntry, markLocalEntries, mergeEntries, uiState } from '../src/panel-state.mjs';
@@ -196,8 +197,8 @@ function parseArgs(argv) {
   // that also advanced the cursor swallowed its neighbour (`--engine --dir X`
   // lost the directory), which is a silent failure: the app keeps working, on the
   // wrong profile.
-  const valueFlags = new Set(['--proxy', '--netbird', '--dir', '--tunnel', '--states', '--setup-key', '--management-url', '--services', '--agent-port']);
-  const args = { proxy: '', engine: true, acceptance: false, netbird: '', dir: '', tunnel: '', states: '', setupKey: '', managementUrl: '', fleet: false };
+  const valueFlags = new Set(['--proxy', '--netbird', '--dir', '--tunnel', '--states', '--setup-key', '--management-url', '--services', '--agent-port', '--external-log']);
+  const args = { proxy: '', engine: true, acceptance: false, netbird: '', dir: '', tunnel: '', states: '', setupKey: '', managementUrl: '', fleet: false, externalLog: '' };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
     if (!key.startsWith('--')) {
@@ -1526,6 +1527,9 @@ function workspaceViewFor(entry) {
     webPreferences: { partition: PARTITION, contextIsolation: true, nodeIntegration: false },
   });
   view.setBackgroundColor(windowBackground());
+  // A machine's page is a page like any other: its links are routed by the same rule, so
+  // an overlay link becomes a tab and a public one leaves for the platform browser.
+  installPageLinkRouting(view);
   // A navigation that fails inside the view would otherwise be invisible.
   view.webContents.on('did-fail-load', (_event, code, description, url) => {
     process.stderr.write(`shell: workspace did-fail-load ${url} code=${code} ${description}\n`);
@@ -1777,22 +1781,26 @@ function dropWorkspaceView(host) {
 /**
  * Reloads the page that is on screen, keeping its route.
  *
- * Refresh is the user's own answer to a screen that looks stuck, and a resident page
- * that has lost its update socket looks exactly like one that is merely idle: the
- * machine list around it is fine, so only the page itself can be replaced. Reloading
- * the page the view already has also keeps the route, so the conversation stays open.
+ * Refresh is the user's own answer to a screen that looks stuck, and a resident page that
+ * has lost its update socket looks exactly like one that is merely idle: the machine list
+ * around it is fine, so only the page itself can be replaced. Reloading the page the view
+ * already has also keeps the route, so the conversation stays open.
+ *
+ * The page area is owned either by a machine's resident workspace or by the active tab's
+ * own page (a catalogue service, or a link opened from one), and "refresh this screen"
+ * means the same thing in each case. Keeping the decision here - in the one function that
+ * every refresh entry point calls - is what makes "only the user replaces a page" a
+ * property of the code rather than a promise in a comment.
  *
  * @returns {boolean} whether a page was reloaded
  */
 function reloadActiveWorkspace() {
-  if (activeWorkspace === '') {
-    return false;
-  }
-  const view = workspaceViews.get(activeWorkspace);
+  const owner = activeWorkspace !== '' ? activeWorkspace : tabsState.activeId;
+  const view = activeWorkspace !== '' ? workspaceViews.get(activeWorkspace) : webViews.get(tabsState.activeId);
   if (!view || !shouldReloadOnRefresh({ hasPage: view.webContents.getURL() !== '' })) {
     return false;
   }
-  process.stderr.write(`shell: reloading ${activeWorkspace} for an explicit refresh\n`);
+  process.stderr.write(`shell: reloading ${owner} for an explicit refresh\n`);
   view.webContents.reload();
   return true;
 }
@@ -2357,6 +2365,123 @@ function catalogOf(snapshot) {
   return services.filter((service) => service.id !== '' && service.name !== '');
 }
 
+/** A short label for an address, so a link tab has a name before its page has a title. */
+function hostLabel(url) {
+  const host = hostOfAddress(url);
+  return host === '' ? String(url ?? '') : host;
+}
+
+/**
+ * What the deployment publishes as reachable inside this window.
+ *
+ * The fleet's zones decide which names the overlay answers for; the catalogue and the
+ * machine list decide which hosts were offered to the person; the channel document's own
+ * overlay prefix is the one address a deployment declares outside both. A host that is
+ * here is an overlay address by construction - nothing else could have published it - so
+ * the link decision never has to guess at a deployment's naming scheme.
+ */
+function linkContext() {
+  const zones = new Set(
+    FLEET_ZONES.map((zone) => String(zone ?? '').trim().toLowerCase()).filter((zone) => zone !== ''),
+  );
+  const cloudZone = String(CLOUD_DNS_DOMAIN ?? '').trim().toLowerCase();
+  if (cloudZone !== '') {
+    zones.add(cloudZone);
+  }
+  // Read the published hosts rather than the rendered catalogue: this answers "what did the
+  // deployment name", and building the catalogue here would also rewrite the list the home
+  // page is drawn from as a side effect of routing one link.
+  const hosts = [];
+  for (const service of webServices()) {
+    hosts.push(String(service.host ?? ''));
+  }
+  for (const service of Array.isArray(lastSnapshot?.services) ? lastSnapshot.services : []) {
+    hosts.push(String(service.host ?? ''));
+  }
+  for (const entry of offeredEntries) {
+    hosts.push(String(entry?.host ?? ''));
+  }
+  const overlayHost = hostOfAddress(OVERLAY_UPDATE_BASE_URL);
+  // A placeholder is not a deployment address; only a real one can name an intranet host.
+  if (overlayHost !== '' && !/(^|\.)example\.com$/.test(overlayHost)) {
+    hosts.push(overlayHost);
+  }
+  return { zones: [...zones], hosts };
+}
+
+/** Whether a navigation stays on the page's own origin. */
+function sameOrigin(left, right) {
+  try {
+    const a = new URL(left);
+    const b = new URL(right);
+    return a.protocol === b.protocol && a.host === b.host;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Hands one address to the platform's browser.
+ *
+ * An acceptance run asks for a log instead (`--external-log`): a check must not open a
+ * browser window on whoever runs it, and "handed over" is then a line in that file.
+ */
+async function handOffToBrowser(url) {
+  if (args.externalLog !== '') {
+    appendFileSync(args.externalLog, `${url}\n`, 'utf8');
+    return { opened: true, logged: true };
+  }
+  await electronShell.openExternal(url);
+  return { opened: true };
+}
+
+/**
+ * Routes one address a page asked to open, and records why.
+ *
+ * Two paths from a page arrive here: a popup request (`window.open`, `target=_blank`) and
+ * a navigation that would replace the page with a different origin. Both end the same way
+ * - an overlay address becomes a tab in this window, a public one is handed to the platform
+ * browser - because the window's only network is the overlay, and a public page inside it
+ * fails to load no matter which path asked for it.
+ */
+function routePageLink(target) {
+  const decision = classifyLink(target, linkContext());
+  process.stderr.write(`shell: link ${decision.route} ${decision.url || target} (${decision.reason})\n`);
+  if (decision.route === LINK_ROUTE.tab) {
+    void openLinkTab(decision.url);
+  } else if (decision.route === LINK_ROUTE.external) {
+    void handOffToBrowser(decision.url);
+  }
+  return decision;
+}
+
+/**
+ * Keeps a page's links from leaving this window on their own.
+ *
+ * A popup request is answered here rather than by Chromium: a raw second `BrowserWindow`
+ * is a browser without the tab strip - no title, no close, no way back to the list - and a
+ * public page inside it could not load anyway. The popup is always denied, and the address
+ * is routed instead.
+ *
+ * A navigation that stays on the page's own origin is the page's business (SPA routes,
+ * query strings, form posts). Anything else is routed the same way and prevented, so a
+ * public address can never take the page's place - before this, following one replaced the
+ * machine's page with a dead page that had no way back.
+ */
+function installPageLinkRouting(view) {
+  view.webContents.setWindowOpenHandler(({ url }) => {
+    routePageLink(url);
+    return { action: 'deny' };
+  });
+  view.webContents.on('will-navigate', (event, target) => {
+    if (sameOrigin(view.webContents.getURL(), target)) {
+      return;
+    }
+    event.preventDefault();
+    routePageLink(target);
+  });
+}
+
 
 /** The tab strip as the window draws it: ids, kinds, titles and the per-tab marks. */
 function tabsPayload() {
@@ -2368,11 +2493,20 @@ function tabsPayload() {
       items: tabsState.tabs.map((tab) => {
         const service = tab.serviceId ? byId.get(tab.serviceId) : null;
         const failure = tabFailures.get(tab.id) ?? null;
+        // A link tab has no catalogue entry to take a title from; its page title arrives
+        // with the page, so the host is the name until then.
+        const linkUrl = tab.kind === 'link' ? tab.serviceId : '';
         return {
           id: tab.id,
           kind: tab.kind,
           serviceId: tab.serviceId,
-          title: tab.kind === 'service' ? service?.name ?? tab.title : tab.title,
+          url: linkUrl,
+          title:
+            tab.kind === 'service'
+              ? service?.name ?? tab.title
+              : tab.kind === 'link'
+                ? tab.title || hostLabel(linkUrl)
+                : tab.title,
           active: tab.id === tabsState.activeId,
           tone: failure ? 'error' : 'normal',
           // A scripted state can also mark one service, so the badge and the bar are part
@@ -2453,14 +2587,8 @@ function webViewFor(tabId, url) {
       pushTabs();
     }
   });
-  view.webContents.on('will-navigate', (event, target) => {
-    // A web tab stays inside the overlay: only http(s) to a name the engine can reach.
-    // Anything else is opened by the system browser instead of turning this window into
-    // a general browser.
-    if (!/^https?:\/\//i.test(target)) {
-      event.preventDefault();
-    }
-  });
+  // This page is a page like any other: its links are routed, not left to Chromium.
+  installPageLinkRouting(view);
   view.webContents.loadURL(url).catch((error) => {
     // `did-fail-load` already recorded a precise reason; this rejection only carries the
     // generic "ERR_FAILED (-2)" wrapper and would replace it with something less useful.
@@ -2521,6 +2649,27 @@ async function openServiceTab(serviceId) {
   return { ok: true, id: opened.id };
 }
 
+/**
+ * Opens an address a page linked to as a tab, or switches to the tab that already has it.
+ *
+ * A link tab is not a catalogue service, so nothing has to be published for it: the
+ * address itself is the tab's identity, and the page is loaded the way a web service's
+ * is. Failure is the tab's own state - the same error page and retry a dead service gets -
+ * which is what keeps a link to a machine that is down from looking like a dead click.
+ */
+async function openLinkTab(url, title = '') {
+  const opened = Tabs.openLink(tabsState, url, title);
+  if (opened.id === '') {
+    return { ok: false, reason: '这个地址不能在这里打开' };
+  }
+  tabsState = opened.state;
+  const view = webViewFor(opened.id, url);
+  showWebView(opened.id, view);
+  tabFailures.delete(opened.id);
+  pushTabs();
+  return { ok: true, id: opened.id };
+}
+
 /** Switches to a tab, which for a machine means showing its resident page. */
 async function activateTab(id) {
   const tab = tabsState.tabs.find((candidate) => candidate.id === id);
@@ -2528,7 +2677,12 @@ async function activateTab(id) {
     return { ok: false };
   }
   tabsState = Tabs.activate(tabsState, id);
-  if (tab.kind === 'service') {
+  if (tab.kind === 'link') {
+    // A link tab owns its page by address: no catalogue lookup, and closing it later
+    // destroys the view the same way a service tab's is destroyed.
+    showWebView(tab.id, webViewFor(tab.id, tab.serviceId));
+    tabFailures.delete(tab.id);
+  } else if (tab.kind === 'service') {
     const service = catalogOf(lastSnapshot).find((candidate) => candidate.id === tab.serviceId);
     if (service && service.kind === 'machine') {
       for (const view of webViews.values()) {
@@ -2704,8 +2858,18 @@ ipcMain.handle('tabs:activate', async (_event, id) => activateTab(String(id ?? '
 ipcMain.handle('tabs:close', async (_event, id) => closeTab(String(id ?? '')));
 ipcMain.handle('tabs:reload', async (_event, id) => {
   const tab = tabsState.tabs.find((candidate) => candidate.id === String(id ?? ''));
-  if (!tab || tab.kind !== 'service') {
+  if (!tab || (tab.kind !== 'service' && tab.kind !== 'link')) {
     return { ok: false };
+  }
+  if (tab.kind === 'link') {
+    // The error page's retry for a page of its own: show it, then ask for the page again
+    // through the one explicit-reload path - a link tab does not get a reload path of
+    // its own, or "the user asked for it" would stop being the only reason a page is
+    // replaced.
+    await activateTab(tab.id);
+    const reloaded = reloadActiveWorkspace();
+    pushTabs();
+    return { ok: reloaded };
   }
   tabFailures.delete(tab.id);
   const service = catalogOf(lastSnapshot).find((candidate) => candidate.id === tab.serviceId);
@@ -2801,8 +2965,7 @@ ipcMain.handle('open-external', async (_event, value) => {
     return { opened: false, reason: 'already-open' };
   }
   openedExternally.set(url, now);
-  await electronShell.openExternal(url);
-  return { opened: true };
+  return handOffToBrowser(url);
 });
 ipcMain.handle('scheme', () => ({ scheme: schemeChoice === 'system' ? '' : schemeChoice, label: schemeLabel() }));
 /**

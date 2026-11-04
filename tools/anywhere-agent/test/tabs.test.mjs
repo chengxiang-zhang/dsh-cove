@@ -7,7 +7,9 @@ import {
   close,
   createState,
   isServiceOpen,
+  linkTabId,
   openHome,
+  openLink,
   openService,
   openSettings,
   reorder,
@@ -136,4 +138,46 @@ test('restoring keeps the previously active tab when it survived', () => {
   ];
   const state = restore(items, { known: () => true, activeId: 'svc:machine:b' });
   assert.equal(state.activeId, 'svc:machine:b');
+});
+
+test('a link opens one tab, keyed by its address', () => {
+  const home = openHome(createState()).state;
+  const first = openLink(home, 'http://dsh.peer-a.netbird/chat/1', '会话');
+  assert.equal(first.created, true);
+  assert.equal(first.id, linkTabId('http://dsh.peer-a.netbird/chat/1'));
+  assert.equal(first.state.tabs.length, 2);
+  assert.equal(first.state.tabs[1].kind, 'link');
+  assert.equal(first.state.tabs[1].serviceId, 'http://dsh.peer-a.netbird/chat/1');
+  assert.equal(first.state.activeId, first.id);
+
+  const again = openLink(first.state, 'http://dsh.peer-a.netbird/chat/1');
+  assert.equal(again.created, false, 'the same address is the same tab');
+  assert.equal(again.state.tabs.length, 2);
+});
+
+test('a link that is not a web address opens nothing', () => {
+  const home = openHome(createState()).state;
+  for (const bad of ['', '   ', 'javascript:alert(1)', 'about:blank', 'mailto:someone@example.com', 'dsh.peer-a.netbird']) {
+    const opened = openLink(home, bad);
+    assert.equal(opened.id, '', `${JSON.stringify(bad)} must not become a tab`);
+    assert.equal(opened.state, home);
+  }
+});
+
+test('link tabs survive a restart, and a broken one does not', () => {
+  const state = openLink(
+    openService(openHome(createState()).state, 'machine:a').state,
+    'http://dsh.peer-b.netbird/report',
+    '报表',
+  ).state;
+  const items = serialize(state);
+  assert.deepEqual(items.map((item) => item.kind), ['home', 'service', 'link']);
+
+  const back = restore(items, { known: (id) => id === 'machine:a', activeId: linkTabId('http://dsh.peer-b.netbird/report') });
+  assert.deepEqual(back.tabs.map((tab) => tab.id), ['home', 'svc:machine:a', 'link:http://dsh.peer-b.netbird/report']);
+  assert.equal(back.activeId, 'link:http://dsh.peer-b.netbird/report');
+  assert.equal(back.tabs[2].title, '', 'a restored link takes its title from the page it loads');
+
+  const broken = restore([{ kind: 'home' }, { kind: 'link', serviceId: 'javascript:alert(1)' }, { kind: 'link', serviceId: '' }]);
+  assert.deepEqual(broken.tabs.map((tab) => tab.id), ['home']);
 });
