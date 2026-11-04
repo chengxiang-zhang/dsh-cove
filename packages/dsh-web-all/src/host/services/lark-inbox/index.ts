@@ -34,6 +34,7 @@ import { Config, LARK_INBOX_SETTINGS_NAMESPACE, autoReplyConfig, effectiveConfig
 import { LarkGateway, type GatewayHealth, type GatewaySdk } from './gateway.ts'
 import { InboxStore } from './inbox-store.ts'
 import { ReplyResponder, type ReplyEnginePorts } from './responder.ts'
+import { bindReplySession } from './session-binding.ts'
 import { makeLarkWizardRoutes } from './host-routes.ts'
 import { accessTrustOf } from '../access-trust/index.ts'
 import { registerInboxTools, type InboxReplyCapability, type InboxReplySender } from './tools.ts'
@@ -81,6 +82,7 @@ function readSenderType(event: unknown): string {
  */
 interface SessionControllerFace {
   create(request: { sessionId?: string; cwd?: string; agentPreset?: string }): Promise<{ sessionId?: unknown }>
+  inspect?(sessionId: string): Promise<{ meta?: { cwd?: unknown } }>
   prompt(
     request: {
       requestId: string
@@ -188,14 +190,14 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
       async ensureSession({ sessionId, cwd }): Promise<void> {
         // An explicit id makes the session deterministic, so a restart reattaches
         // to the conversation's existing session instead of starting another one
-        // with no memory of what was already discussed.
-        const created = await controller().create({
-          sessionId,
-          ...(cwd.trim() === '' ? {} : { cwd: cwd.trim() }),
-        })
-        const returned = typeof created?.sessionId === 'string' ? created.sessionId : ''
-        if (returned !== sessionId) {
-          throw new Error(`会话创建返回了意外的 id（期望 ${sessionId}，得到 ${returned === '' ? '空' : returned}）`)
+        // with no memory of what was already discussed. Adoption covers the case
+        // where that id already exists under another working directory: refusing
+        // to adopt would fail every later message in that conversation forever.
+        const outcome = await bindReplySession(controller(), { sessionId, cwd })
+        if (outcome.adopted) {
+          log.warn(
+            `dsh-lark-inbox: 会话 ${sessionId} 已存在（工作目录 ${outcome.cwd === undefined ? '未知' : outcome.cwd}），沿用它而不是重建`,
+          )
         }
       },
       async prompt({ requestId, sessionId, text }): Promise<void> {

@@ -430,6 +430,11 @@ export class ReplyResponder {
     try {
       await this.ports.engine.ensureSession({ sessionId, cwd: config.cwd })
       await this.ports.engine.prompt({ requestId: jobId, sessionId, text })
+      // One line per submitted turn: without it the first live run leaves no trace
+      // to read, and "no reply" is indistinguishable from "never submitted".
+      this.ports.log.info(
+        `lark-inbox: 已提交回话回合 job=${jobId} session=${sessionId} 字符=${text.length}${marksPreamble ? ' 含前言' : ''}`,
+      )
       if (marksPreamble) this.store.reply.markPreambleSent(convKey, this.ports.now())
       this.store.reply.markRunning(jobId, this.ports.now() + config.turnTimeoutMs, this.ports.now())
     } catch (error) {
@@ -526,6 +531,9 @@ export class ReplyResponder {
     const now = this.ports.now()
     const body = clampReplyText(text, REPLY_TEXT_LIMIT)
     if (!this.store.reply.finishTurn(job.jobId, outcome, body, endReason, now)) return false
+    this.ports.log.info(
+      `lark-inbox: 回合结案 job=${job.jobId} outcome=${outcome} 原因=${endReason === '' ? '-' : endReason} 字符=${body.length}`,
+    )
     this.drafts.delete(job.jobId)
     const closed = this.store.reply.job(job.jobId)
     if (closed !== undefined) void this.deliver(closed, now)
