@@ -46,6 +46,9 @@ export const REPLY_TEXT_LIMIT = 6000
 /** How long a cancelled turn is given to report its own end before it is closed. */
 export const TIMEOUT_GRACE_MS = 15_000
 
+/** The platform's emoji key for the receipt; a plain smile reads as "seen". */
+export const REPLY_RECEIPT_EMOJI = 'SMILE'
+
 /** How long a sweep waits before assuming an in-flight send is not coming back. */
 export const SEND_GRACE_MS = 30_000
 
@@ -67,6 +70,12 @@ export interface ReplySendPort {
     text: string,
     target?: { replyToMessageId?: string; idempotencyKey?: string },
   ): Promise<ReplySendResult>
+  /**
+   * Best-effort receipt on the message being answered. A port that returns a
+   * promise is awaited only for its rejection to be swallowed; nothing the answer
+   * path needs depends on it.
+   */
+  react?(messageId: string, emojiType: string): Promise<boolean>
 }
 
 /** The three engine capabilities the answer path needs. */
@@ -442,6 +451,7 @@ export class ReplyResponder {
       this.ports.log.info(
         `lark-inbox: 已提交回话回合 job=${jobId} session=${sessionId} 字符=${text.length}${marksPreamble ? ' 含前言' : ''}`,
       )
+      this.sendReceipt(jobId)
       if (marksPreamble) this.store.reply.markPreambleSent(convKey, this.ports.now())
     } catch (error) {
       const detail = describeError(error)
@@ -461,6 +471,27 @@ export class ReplyResponder {
         this.ports.log.warn(`lark-inbox: ${jobId} 提交失败且已绑定回合，等待回合自身结束：${detail}`)
       }
     }
+  }
+
+  /**
+   * Mark the message as read with a reaction, if the operator asked for that.
+   *
+   * Fire-and-forget on purpose: the answer has not been generated yet, and a
+   * receipt that failed - a missing scope, a recalled message, a rate limit - must
+   * cost a log line rather than the reply. Skipped in probe mode, where the whole
+   * point is to touch nothing visible.
+   * @param jobId - the batch that just started running.
+   */
+  private sendReceipt(jobId: string): void {
+    const config = this.ports.config()
+    if (!config.receipt || config.mode === 'probe') return
+    const sender = this.ports.sender()
+    if (sender?.react === undefined) return
+    const job = this.store.reply.job(jobId)
+    if (job === undefined) return
+    void sender.react(job.replyToMessageId, REPLY_RECEIPT_EMOJI).catch((error: unknown) => {
+      this.ports.log.warn(`lark-inbox: 表情回执失败 job=${jobId}：${describeError(error)}`)
+    })
   }
 
   /**

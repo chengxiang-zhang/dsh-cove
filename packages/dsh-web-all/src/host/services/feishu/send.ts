@@ -104,6 +104,14 @@ export interface FeishuClientLike {
       create(payload: unknown): Promise<unknown>
       reply(payload: unknown): Promise<unknown>
     }
+    /**
+     * Reactions, used only as a receipt. Optional because a client built for
+     * sending alone does not have to speak this API, and a missing receipt must
+     * never be a reason a reply cannot be sent.
+     */
+    messageReaction?: {
+      create(payload: unknown): Promise<unknown>
+    }
   }
 }
 
@@ -150,6 +158,39 @@ export class FeishuTextSender {
     const mapped = credentials.domain === 'feishu' ? this.sdk.domain.Feishu : this.sdk.domain.Lark
     this.client = this.sdk.createClient({ appId: credentials.appId, appSecret: credentials.appSecret, domain: mapped })
     return this.client
+  }
+
+  /**
+   * Add a reaction to one message, as a receipt that the bot saw it.
+   *
+   * Deliberately best-effort: this runs before the answer exists, and a receipt
+   * that failed is a cosmetic loss, while a receipt that threw would take the
+   * answer with it. Every failure is logged and swallowed here rather than left to
+   * the caller to remember.
+   * @param messageId - the message to react to.
+   * @param emojiType - the platform's emoji key, e.g. `SMILE`.
+   * @returns whether the reaction was added.
+   */
+  async react(messageId: string, emojiType: string): Promise<boolean> {
+    const id = messageId.trim()
+    if (id === '') return false
+    try {
+      const reactions = this.vendorClient().im.messageReaction
+      if (reactions === undefined) return false
+      const response = await reactions.create({
+        path: { message_id: id },
+        data: { reaction_type: { emoji_type: emojiType } },
+      })
+      const code = (response as { code?: unknown } | undefined)?.code
+      if (typeof code === 'number' && code !== 0) {
+        this.log(`feishu: 表情回执失败 code ${code}：${String((response as { msg?: unknown }).msg ?? '')}`)
+        return false
+      }
+      return true
+    } catch (error) {
+      this.log(`feishu: 表情回执失败：${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
   }
 
   /**

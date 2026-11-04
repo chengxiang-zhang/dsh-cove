@@ -70,7 +70,7 @@ describe('lark inbox config and wizard route contracts', () => {
       // an operator has said who may be answered. Timing knobs are constants in
       // config.ts, not settings, so they do not appear here.
       autoReplyMode: 'off', autoReplyOpenIds: [], autoReplyCwd: '', autoReplyPreamble: DEFAULT_REPLY_PREAMBLE,
-      retentionDays: 30,
+      retentionDays: 30, autoReplyReceipt: false,
     })
   })
 

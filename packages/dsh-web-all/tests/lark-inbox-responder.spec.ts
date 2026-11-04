@@ -61,6 +61,8 @@ interface EngineHooks {
   promptHangs?: boolean
   /** Makes the session bind pend forever, as a stalled engine does. */
   bindHangs?: boolean
+  /** Makes the reaction call throw, as a missing scope does. */
+  receiptFails?: boolean
 }
 
 interface Harness {
@@ -69,6 +71,7 @@ interface Harness {
   prompts: Array<{ requestId: string; sessionId: string; text: string }>
   sessions: Array<{ sessionId: string; cwd: string }>
   cancels: string[]
+  receipts: Array<{ messageId: string; emojiType: string }>
   sent: Array<{ to: string; text: string; target?: { replyToMessageId?: string; idempotencyKey?: string } }>
   sendResult: { ok: boolean; error?: string; retryable?: boolean }
   /** Knobs for the races a real engine can produce. */
@@ -91,7 +94,8 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
   const cancels: string[] = []
   const sent: Harness['sent'] = []
   const sendResult: Harness['sendResult'] = { ok: true }
-  const hooks: EngineHooks = {}
+  const receipts: Array<{ messageId: string; emojiType: string }> = []
+  const hooks: EngineHooks = { receiptFails: false }
   const config: AutoReplyConfig = {
     mode: 'self',
     openIds: [OWNER],
@@ -102,6 +106,7 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
     preamble: 'PREAMBLE',
     maxSendAttempts: 3,
     maxSubmitAttempts: 3,
+    receipt: false,
     ...overrides,
   }
   const ports: ConstructorParameters<typeof ReplyResponder>[1] = {
@@ -121,6 +126,11 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
       cancel(sessionId) { cancels.push(sessionId) },
     },
     sender: () => ({
+      async react(messageId, emojiType) {
+        receipts.push({ messageId, emojiType })
+        if (hooks.receiptFails === true) throw new Error('reaction rejected')
+        return true
+      },
       async send(to, text, target) {
         sent.push({ to, text, ...(target === undefined ? {} : { target }) })
         return sendResult.ok
@@ -140,6 +150,7 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
     sessions,
     cancels,
     sent,
+    receipts,
     sendResult,
     engineHooks: hooks,
     config,
@@ -684,6 +695,48 @@ describe('status tool', () => {
   it('reports the not-running reason instead of an empty ledger', async () => {
     const tool = createAutoReplyStatusTool(() => undefined)
     await expect(tool.execute({})).resolves.toMatchObject({ error: expect.stringContaining('未运行') })
+  })
+})
+
+describe('receipt', () => {
+  it('reacts to the message being answered once its turn starts', async () => {
+    const harnessed = harness({ receipt: true })
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    expect(harnessed.receipts).toEqual([{ messageId: 'om_1', emojiType: 'SMILE' }])
+  })
+
+  it('does not react while the receipt is off, or in probe mode', async () => {
+    const off = harness({ receipt: false })
+    off.deliver(message(1, '你好'))
+    off.advance(1500)
+    off.responder.tick()
+    await off.flush()
+    expect(off.receipts).toHaveLength(0)
+
+    const probe = harness({ receipt: true, mode: 'probe' })
+    probe.deliver(message(1, '你好'))
+    probe.advance(1500)
+    probe.responder.tick()
+    await probe.flush()
+    // Probe mode exists to touch nothing a person can see.
+    expect(probe.receipts).toHaveLength(0)
+  })
+
+  it('still answers when the reaction is refused', async () => {
+    const harnessed = harness({ receipt: true })
+    harnessed.engineHooks.receiptFails = true
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    runTurn(harnessed, 1, { text: '在的' })
+    await harnessed.flush()
+    // A missing scope is a cosmetic loss; losing the answer over it would not be.
+    expect(harnessed.sent).toHaveLength(1)
+    expect(harnessed.sent[0].text).toBe('在的')
   })
 })
 

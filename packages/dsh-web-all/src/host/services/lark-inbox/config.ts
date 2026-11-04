@@ -58,6 +58,8 @@ export interface AutoReplyConfig {
   preamble: string
   maxSendAttempts: number
   maxSubmitAttempts: number
+  /** Whether to react to the message once its turn starts. */
+  receipt: boolean
 }
 
 /**
@@ -99,6 +101,8 @@ export interface LarkInboxConfig {
   autoReplyPreamble?: string
   /** Days to keep finished queue rows and reply jobs; 0 keeps them forever. */
   retentionDays?: number
+  /** React to the message when its turn starts, so the sender sees it was read. */
+  autoReplyReceipt?: boolean
 }
 
 export const Config = z.object({
@@ -125,6 +129,9 @@ export const Config = z.object({
   // platform actually sent, so the index can forget. Zero disables pruning for an
   // installation that wants the index as its archive.
   retentionDays: z.number().step(1).min(0).default(30),
+  // Off by default: a reaction is visible to everyone in the conversation, and
+  // whether the bot should mark itself as reading is the operator's call.
+  autoReplyReceipt: z.boolean().default(false),
 }) as unknown as z<LarkInboxConfig>
 
 /**
@@ -147,6 +154,7 @@ export function autoReplyConfig(config: Required<LarkInboxConfig>): AutoReplyCon
     preamble: config.autoReplyPreamble,
     maxSendAttempts: REPLY_MAX_ATTEMPTS,
     maxSubmitAttempts: REPLY_MAX_ATTEMPTS,
+    receipt: config.autoReplyReceipt === true,
   }
 }
 

@@ -69,6 +69,7 @@ export const LARK_INBOX_FIELDS = [
   'autoReplyCwd',
   'autoReplyPreamble',
   'retentionDays',
+  'autoReplyReceipt',
 ] as const
 
 export type LarkInboxField = (typeof LARK_INBOX_FIELDS)[number]
@@ -100,6 +101,7 @@ export interface LarkInboxSettings {
   autoReplyCwd?: string
   autoReplyPreamble?: string
   retentionDays?: number
+  autoReplyReceipt?: boolean
 }
 
 /** 共享 `feishu` 命名空间的字段子集。 */
@@ -203,6 +205,7 @@ export class LarkSettingsController {
       settingsTextField('autoReplyCwd'),
       settingsTextField('autoReplyPreamble'),
       settingsNumberField('retentionDays'),
+      booleanField('autoReplyReceipt'),
     ])
     this.credentialForm = new SettingsFormModel<FeishuCredentialSettings>(scopes.credentials, [
       settingsTextField('appId'),
@@ -452,6 +455,18 @@ export function LarkSettingsPage(props: LarkPageProps): ReactNode {
           {...state.retentionDays}
           onEdit={(text) => { props.edit('retentionDays', text) }}
           onReset={() => { props.resetField('retentionDays') }}
+        />
+        <SettingsValueField
+          id="lark-auto-reply-receipt"
+          label={t('settings.autoReplyReceipt')}
+          hint={t('settings.autoReplyReceiptHint')}
+          overriddenLabel={t('settings.overridden')}
+          resetLabel={t('settings.reset')}
+          invalidLabel={t('settings.invalid')}
+          disabled={disabled}
+          {...state.autoReplyReceipt}
+          onEdit={(text) => { props.edit('autoReplyReceipt', text) }}
+          onReset={() => { props.resetField('autoReplyReceipt') }}
         />
       </SettingsForm>
       <h4 className={css.title}>{t('settings.credentialsTitle')}</h4>
