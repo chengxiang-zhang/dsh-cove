@@ -257,7 +257,7 @@ describe('runtime settings and optional announcement', () => {
       const createStore = vi.fn()
       const createGateway = vi.fn()
       const dispose = register(ctx as never, {}, { createStore, createGateway })
-      expect(definitions.map(tool => tool.name)).toEqual(['lark_inbox_peek', 'lark_inbox_pop', 'lark_inbox_ack', 'lark_inbox_reply'])
+      expect(definitions.map(tool => tool.name)).toEqual(['lark_inbox_peek', 'lark_inbox_pop', 'lark_inbox_ack', 'lark_inbox_reply', 'lark_autoreply_status'])
       expect(routes).toEqual(expect.arrayContaining(['/lark-inbox/wizard/status', '/lark-inbox/wizard/start-new', '/lark-inbox/wizard/cancel']))
       expect(createStore).not.toHaveBeenCalled()
       expect(createGateway).not.toHaveBeenCalled()
@@ -277,7 +277,7 @@ describe('runtime settings and optional announcement', () => {
       return releaseRoute
     }
     expect(() => register(ctx as never)).toThrow('route conflict')
-    expect(releaseTool).toHaveBeenCalledTimes(4)
+    expect(releaseTool).toHaveBeenCalledTimes(5)
     expect(releaseRoute).toHaveBeenCalledOnce()
   })
 

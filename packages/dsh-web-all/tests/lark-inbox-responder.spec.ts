@@ -18,6 +18,7 @@ import { replyJobId, replySessionId } from '../src/core/lark-inbox/reply-machine
 import type { AutoReplyConfig } from '../src/host/services/lark-inbox/config.ts'
 import { InboxStore } from '../src/host/services/lark-inbox/inbox-store.ts'
 import { ReplyResponder } from '../src/host/services/lark-inbox/responder.ts'
+import { createAutoReplyStatusTool } from '../src/host/services/lark-inbox/tools.ts'
 
 const OWNER = 'ou_owner'
 const CHAT = 'oc_chat'
@@ -470,6 +471,36 @@ describe('restart recovery', () => {
     await harnessed.flush()
     expect(harnessed.sent).toHaveLength(0)
     expect(harnessed.store.reply.job('fj_om_9')?.state).toBe('reply_uncertain')
+  })
+})
+
+describe('status tool', () => {
+  it('reports mode, counts and the text that would have been sent', async () => {
+    const harnessed = harness({ mode: 'probe' })
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    runTurn(harnessed, 1, { text: '在的' })
+    await harnessed.flush()
+    // A pending message nothing is answering is the reading that separates "we are
+    // waiting for a message" from "a message is waiting for us".
+    harnessed.deliver(message(2, '另一个问题', { senderOpenId: 'ou_stranger' }))
+
+    const tool = createAutoReplyStatusTool(() => harnessed.store, {
+      autoReply: () => harnessed.responder.status(),
+      gatewayStatus: () => ({ status: 'connected' }),
+    })
+    const value = await tool.execute({ limit: 5 }) as Record<string, unknown>
+    expect(value).toMatchObject({ mode: 'probe', answered: 1, open: 0, failed: 0, unattended: 1, gateway: 'connected' })
+    const jobs = value.jobs as Array<Record<string, unknown>>
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0]).toMatchObject({ state: 'replied', outcome: 'answer', replyPreview: '在的' })
+  })
+
+  it('reports the not-running reason instead of an empty ledger', async () => {
+    const tool = createAutoReplyStatusTool(() => undefined)
+    await expect(tool.execute({})).resolves.toMatchObject({ error: expect.stringContaining('未运行') })
   })
 })
 

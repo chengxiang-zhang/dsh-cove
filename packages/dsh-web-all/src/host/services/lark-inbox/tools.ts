@@ -162,6 +162,16 @@ export interface InboxToolOptions {
   gatewayStatus?(): GatewayHealth
   /** The reply capability for the current credentials, or why it is unavailable. */
   reply?(): InboxReplyCapability
+  /** Current state of the answer path, so its progress is readable without SQL. */
+  autoReply?(): InboxAutoReplyStatus
+}
+
+/** What the answer path reports about itself. */
+export interface InboxAutoReplyStatus {
+  mode: 'off' | 'probe' | 'self'
+  answered: number
+  open: number
+  failed: number
 }
 
 export function createInboxTools(getStore: () => InboxStore | undefined, options: InboxToolOptions = {}): ToolDefinition[] {
@@ -278,6 +288,81 @@ export function createInboxTools(getStore: () => InboxStore | undefined, options
   ]
 }
 
+/**
+ * The answer path's own view of itself.
+ *
+ * Exists because the difference between "the bot is quiet" and "the bot is not
+ * running" was, until now, only visible to whoever opened the SQLite file. The
+ * reply ledger records what it would send in probe mode, which is what makes the
+ * first live check readable without sending anything to a person.
+ * @param getStore - resolves the running queue, if any.
+ * @param options - live gateway health and answer-path state.
+ * @returns the status tool.
+ */
+export function createAutoReplyStatusTool(
+  getStore: () => InboxStore | undefined,
+  options: InboxToolOptions = {},
+): ToolDefinition {
+  return defineTool({
+    name: 'lark_autoreply_status',
+    description: 'Report the Feishu answer path: mode (off/probe/self), how many turns were answered or are open or failed, the newest jobs with the text that was or would be sent, and how many inbound messages nothing is answering. Use it to tell "no messages" apart from "not running" and to read probe-mode results before enabling sends.',
+    parameters: { limit: { type: 'integer', default: 5, description: 'How many recent jobs to list (clamped to 1..20).' } },
+    output: {
+      schema: {
+        type: 'object', additionalProperties: false, properties: {
+          mode: { type: 'string', enum: ['off', 'probe', 'self'] },
+          answered: { type: 'integer' }, open: { type: 'integer' }, failed: { type: 'integer' },
+          unattended: { type: 'integer' },
+          jobs: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+            jobId: { type: 'string', required: true },
+            state: { type: 'string', required: true },
+            outcome: { type: 'string' },
+            replyToMessageId: { type: 'string', required: true },
+            replyPreview: { type: 'string' },
+            replyMessageId: { type: 'string' },
+            lastError: { type: 'string' },
+            ageSeconds: { type: 'integer', required: true },
+          } } },
+          gateway: { type: 'string', enum: ['connecting', 'connected', 'error'] },
+          gatewayError: { type: 'string' },
+          error: { type: 'string' },
+        },
+      },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    async execute(args) {
+      const store = getStore()
+      if (!store) return { error: NOT_RUNNING }
+      const limit = Math.min(20, clampLimit(args.limit))
+      const state = options.autoReply?.() ?? { mode: 'off' as const, answered: 0, open: 0, failed: 0 }
+      const health = options.gatewayStatus?.() ?? { status: 'connecting' }
+      const stats = store.stats()
+      const now = Date.now()
+      return {
+        mode: state.mode,
+        answered: state.answered,
+        open: state.open,
+        failed: state.failed,
+        // Pending rows nothing is answering: the reading that separates "we are
+        // waiting for a message" from "a message is waiting for us".
+        unattended: stats.pending,
+        jobs: store.reply.recent(limit).map(job => ({
+          jobId: job.jobId,
+          state: job.state,
+          ...(job.outcome === undefined ? {} : { outcome: job.outcome }),
+          replyToMessageId: job.replyToMessageId,
+          ...(job.replyText === undefined ? {} : { replyPreview: job.replyText.slice(0, 120) }),
+          ...(job.replyMessageId === undefined ? {} : { replyMessageId: job.replyMessageId }),
+          ...(job.lastError === undefined ? {} : { lastError: job.lastError }),
+          ageSeconds: Math.max(0, Math.round((now - job.updatedAt) / 1000)),
+        })),
+        gateway: health.status,
+        ...(health.error === undefined || health.error === '' ? {} : { gatewayError: health.error }),
+      }
+    },
+  })
+}
+
 export function registerInboxTools(
   ctx: Context,
   getStore: () => InboxStore | undefined,
@@ -285,5 +370,6 @@ export function registerInboxTools(
 ): () => void {
   return registerResources(own => {
     for (const tool of createInboxTools(getStore, options)) own(ctx.tools.register(tool))
+    own(ctx.tools.register(createAutoReplyStatusTool(getStore, options)))
   })
 }

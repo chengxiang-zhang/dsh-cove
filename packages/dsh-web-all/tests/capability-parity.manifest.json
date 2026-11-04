@@ -66,6 +66,7 @@
   ],
   "toolNames": [
     "lark_inbox_ack",
+    "lark_autoreply_status",
     "lark_inbox_peek",
     "lark_inbox_pop",
     "lark_inbox_reply",

@@ -711,6 +711,21 @@ export class ReplyStore {
   }
 
   /**
+   * Newest jobs first, for the status tool and the acceptance readings.
+   *
+   * Ordered by `updated_at` rather than `created_at`: the question this answers is
+   * "what just happened", and a batch that sat collecting for a while moved last
+   * when it finally ran.
+   * @param limit - how many rows to return.
+   * @returns the newest jobs.
+   */
+  recent(limit: number): ReplyJob[] {
+    const rows = this.db.prepare(`SELECT ${JOB_COLUMNS} FROM reply_jobs
+      ORDER BY updated_at DESC LIMIT ?`).all(Math.max(1, Math.min(50, limit))) as unknown as JobRow[]
+    return rows.map(toJob)
+  }
+
+  /**
    * Counts per state, for the acceptance readings.
    * @returns per-state counts.
    */

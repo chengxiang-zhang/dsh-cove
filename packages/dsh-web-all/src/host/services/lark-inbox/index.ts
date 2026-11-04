@@ -395,6 +395,10 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
     own(registerInboxTools(ctx, () => activeStore, {
       gatewayStatus: () => gatewayHealth,
       reply: () => replyCapability,
+      // Read through the live responder rather than the settings document: the
+      // responder knows what the running process is actually doing, and a job
+      // count from the document would be a guess.
+      autoReply: () => activeResponder?.status() ?? { mode: 'off', answered: 0, open: 0, failed: 0 },
     }))
     // One subscription for the domain, not one per runtime: the responder is
     // rebuilt whenever settings or credentials change, and a per-runtime listener
