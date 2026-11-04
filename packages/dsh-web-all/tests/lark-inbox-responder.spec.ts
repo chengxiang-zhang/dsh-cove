@@ -200,6 +200,24 @@ describe('reply admission', () => {
     expect(harnessed.store.stats().pending).toBe(1)
   })
 
+  it('answers a group message only when the bot is named', async () => {
+    const harnessed = harness()
+    harnessed.deliver(message(1, '问个事', { chatType: 'group', chatId: 'oc_group', mentionBot: false }))
+    harnessed.advance(5000)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    expect(harnessed.prompts).toHaveLength(0)
+
+    harnessed.deliver(message(2, '@bot 问个事', { chatType: 'group', chatId: 'oc_group', mentionBot: true }))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    expect(harnessed.prompts).toHaveLength(1)
+    // One conversation key per room, so a second question in the same room
+    // continues the same session instead of starting over.
+    expect(harnessed.store.reply.binding('oc_group')).toMatchObject({ chatType: 'group' })
+  })
+
   it('admits everyone the operator allows when the allowlist is empty', async () => {
     const harnessed = harness({ openIds: [] })
     harnessed.deliver(message(1, '你好', { senderOpenId: 'ou_stranger' }))

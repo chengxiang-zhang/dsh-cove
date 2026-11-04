@@ -23,6 +23,7 @@
  * fake clock and a fake sender.
  */
 
+import { clearBotSessions, markBotSession } from '../feishu/index.ts'
 import type { LarkInboxEnvelope } from '../../../core/lark-inbox/queue.ts'
 import {
   admitReply,
@@ -139,6 +140,14 @@ export class ReplyResponder {
    */
   start(): void {
     try {
+      // Claim the sessions this ledger already bound before the first sweep: a
+      // notice for an answer-path session would duplicate the answer itself, and
+      // the notification path must be told before that session can run again.
+      for (const sessionId of this.store.reply.sessionIds()) markBotSession(sessionId)
+    } catch (error) {
+      this.ports.log.warn(`lark-inbox: 登记回话会话失败：${describeError(error)}`)
+    }
+    try {
       const recovered = this.store.reply.recoverInflight(this.ports.now(), 50 * 60_000)
       if (recovered.interrupted > 0 || recovered.resendable > 0 || recovered.uncertain > 0) {
         this.ports.log.warn(
@@ -218,6 +227,10 @@ export class ReplyResponder {
     }
     this.turnCursor.clear()
     this.drafts.clear()
+    // A teardown puts these sessions back among ordinary ones. On a
+    // settings-driven rebuild the replacement re-registers them in `start()`, so
+    // clearing here cannot leave an answer-path session unmarked.
+    clearBotSessions()
   }
 
   /**
@@ -248,7 +261,12 @@ export class ReplyResponder {
       return
     }
     const decision = admitReply(
-      { chatType: envelope.chatType, senderOpenId: envelope.senderOpenId, text: envelope.content },
+      {
+        chatType: envelope.chatType,
+        senderOpenId: envelope.senderOpenId,
+        mentionBot: envelope.mentionBot,
+        text: envelope.content,
+      },
       { mode: config.mode, openIds: config.openIds },
     )
     if (!decision.accept) {
@@ -286,6 +304,7 @@ export class ReplyResponder {
       return
     }
 
+    markBotSession(sessionId)
     const result = this.store.reply.attach({
       eventId: envelope.eventId,
       messageId,

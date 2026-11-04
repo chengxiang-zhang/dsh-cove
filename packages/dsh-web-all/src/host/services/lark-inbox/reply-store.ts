@@ -711,6 +711,19 @@ export class ReplyStore {
   }
 
   /**
+   * Every session this ledger has bound a conversation to.
+   *
+   * Read at mount so a restarted process can tell the notification path which
+   * sessions belong to it, without keeping a second copy of the same fact.
+   * @returns distinct session ids, oldest binding first.
+   */
+  sessionIds(): string[] {
+    const rows = this.db.prepare('SELECT session_id FROM conv_bindings ORDER BY created_at ASC')
+      .all() as unknown as Array<{ session_id?: unknown }>
+    return rows.map(row => text(row.session_id)).filter(id => id !== '')
+  }
+
+  /**
    * Newest jobs first, for the status tool and the acceptance readings.
    *
    * Ordered by `updated_at` rather than `created_at`: the question this answers is

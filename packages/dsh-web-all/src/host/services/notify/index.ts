@@ -44,6 +44,7 @@ import { registerResources } from '../resources.ts'
 import { accessTrustOf } from '../access-trust/index.ts'
 import { familyNamespace, onFamilyConfigChange } from '../family-config.ts'
 import { FEISHU_SETTINGS_NAMESPACE, type FeishuConfig } from '../feishu/config.ts'
+import { isBotSession } from '../feishu/bot-sessions.ts'
 import { describeFeishuCredentials } from '../feishu/credentials.ts'
 import { LARK_INBOX_SETTINGS_NAMESPACE, type LarkInboxConfig } from '../lark-inbox/config.ts'
 import {
@@ -327,7 +328,9 @@ export function register(ctx: Context, base: NotifyConfig = {}, deps: NotifyServ
     own(ctx.on('session/event', (session: SessionLike, event: SessionEventLike) => {
       if (!active.enabled) return
       const sessionId = typeof session?.id === 'string' ? session.id : ''
-      if (sessionId === '' || isSubagentSession(session)) return
+      // An answer-path session already speaks to this person in Feishu; a
+      // "run finished" push for it would be the same news twice.
+      if (sessionId === '' || isSubagentSession(session) || isBotSession(sessionId)) return
       const type = event?.type
       const data = event?.data
       if (type === 'session/title') {

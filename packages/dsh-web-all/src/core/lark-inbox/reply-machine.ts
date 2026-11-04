@@ -26,6 +26,7 @@ export type ReplyMode = 'off' | 'probe' | 'self'
 export type ReplyRejection =
   | 'disabled'
   | 'not-direct'
+  | 'group-not-addressed'
   | 'sender-not-allowed'
   | 'empty-text'
   | 'control-command'
@@ -34,6 +35,12 @@ export type ReplyRejection =
 export interface ReplyAdmissionInput {
   readonly chatType?: string | undefined
   readonly senderOpenId?: string | undefined
+  /**
+   * Whether the message addresses this bot by name. Required for a group: an
+   * answer there is visible to everyone in the room, so it waits for an explicit
+   * request rather than reacting to a conversation the bot happens to be in.
+   */
+  readonly mentionBot?: boolean | undefined
   /** The human-readable message body, as the envelope already renders it. */
   readonly text: string
 }
@@ -80,9 +87,16 @@ export function parseControlCommand(text: string): ControlCommand | undefined {
  */
 export function admitReply(input: ReplyAdmissionInput, config: ReplyAdmissionConfig): ReplyAdmission {
   if (config.mode === 'off') return { accept: false, reason: 'disabled' }
-  // Direct messages only for now: a group answer is visible to everyone in the
-  // room, so it waits until the direct path has readings behind it.
-  if (input.chatType !== 'p2p') return { accept: false, reason: 'not-direct' }
+  if (input.chatType === 'group') {
+    // A group is not addressed to the bot by construction, so being named is the
+    // request. The identity used here is the same one the inbound gate compares
+    // (`mentionsBot` against the bot's own open id), so "mentioned" cannot mean
+    // two different things on the two paths.
+    if (input.mentionBot !== true) return { accept: false, reason: 'group-not-addressed' }
+  } else if (input.chatType !== 'p2p') {
+    // Neither a direct message nor a group this bot can address unambiguously.
+    return { accept: false, reason: 'not-direct' }
+  }
   if (config.openIds.length > 0) {
     const sender = (input.senderOpenId ?? '').trim()
     // An empty sender cannot be shown to be allowed, so it is refused. Unlike

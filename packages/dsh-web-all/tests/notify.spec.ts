@@ -9,6 +9,7 @@
  */
 
 import { EventEmitter } from 'node:events'
+import { clearBotSessions, markBotSession } from '../src/host/services/feishu/bot-sessions.ts'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -805,6 +806,25 @@ describe('notification service', () => {
     await flush()
     expect(sender.notify).toHaveBeenCalledTimes(1)
     expect(sender.notify.mock.calls[0]?.[0]).toMatchObject([{ sessionId: 's1', turn: 1, reason: 'completed', outcome: 'completed', at: 20 }])
+  })
+
+  it('never records a session that answers a Feishu message', async () => {
+    const sender = senderSpy()
+    const { emit, session, step, end } = harness({ feishuEnabled: true, feishuAppId: 'cli_x', feishuAppSecret: 's', feishuRecipients: ['ou_a'], feishuMode: 'each-turn' }, { createSender: () => sender })
+    // The answer already reached that person in Feishu; a finished-run push for
+    // the same turn would be the same news twice.
+    markBotSession('feishu-abc')
+    try {
+      emit('session/event', session('feishu-abc'), step(1, 10))
+      emit('session/event', session('feishu-abc'), end(1, 'completed', 20))
+      emit('session/event', session('s1'), step(1, 10))
+      emit('session/event', session('s1'), end(1, 'completed', 20))
+      await flush()
+      expect(sender.notify).toHaveBeenCalledTimes(1)
+      expect(sender.notify.mock.calls[0]?.[0]).toMatchObject([{ sessionId: 's1' }])
+    } finally {
+      clearBotSessions()
+    }
   })
 
   it('never records a subagent session', async () => {

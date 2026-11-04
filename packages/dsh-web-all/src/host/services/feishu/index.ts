@@ -20,6 +20,7 @@ export { describeFeishuCredentials, readSecret, resolveFeishuCredentials } from 
 export type { FeishuCredentials, FeishuCredentialSources, LegacyFeishuConfig } from './credentials.ts'
 export { FeishuTextSender, createFeishuTextSender, detectReceiveIdType, isRetryableFeishuCode } from './send.ts'
 export type { FeishuClientLike, FeishuSendAttempt, FeishuSendTarget, FeishuSenderSdk, FeishuTextSenderOptions, ReceiveIdType } from './send.ts'
+export { clearBotSessions, isBotSession, markBotSession, unmarkBotSession } from './bot-sessions.ts'
 
 /**
  * Read the legacy credential fields without importing the inbox domain.
