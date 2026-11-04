@@ -111,6 +111,9 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
     receipt: false,
     proactive: false,
     steer: 'on',
+    // Required by the answer path and published in the heartbeat, so a fixture
+    // without it describes a configuration no process can actually be in.
+    router: 'off',
     ...overrides,
   }
   const ports: ConstructorParameters<typeof ReplyResponder>[1] = {
@@ -586,7 +589,7 @@ describe('reply text a person must never be shown', () => {
       config: () => ({
         mode: 'self', openIds: [OWNER], debounceMs: 1000, turnTimeoutMs: 600_000, tickMs: 1000,
         cwd: '/tmp/bot-repo', preamble: 'PREAMBLE', maxSendAttempts: 3, maxSubmitAttempts: 3,
-        receipt: false, proactive: true, steer: 'off',
+        receipt: false, proactive: true, steer: 'off', router: 'off',
       }),
       now: () => now,
       log: { info() {}, warn() {}, error() {} },

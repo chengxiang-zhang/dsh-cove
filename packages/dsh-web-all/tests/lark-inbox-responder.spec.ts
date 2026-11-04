@@ -12,6 +12,8 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import type { ToolExecutionToken, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { afterEach, describe, expect, it } from 'vitest'
 import { INBOX_EVENT_TYPE, type LarkInboxEnvelope } from '../src/core/lark-inbox/queue.ts'
 import { replyJobId, replySessionId } from '../src/core/lark-inbox/reply-machine.ts'
@@ -20,6 +22,30 @@ import { InboxStore } from '../src/host/services/lark-inbox/inbox-store.ts'
 import { ReplyResponder } from '../src/host/services/lark-inbox/responder.ts'
 import { createAutoReplyStatusTool } from '../src/host/services/lark-inbox/tools.ts'
 import { clearBotSessions, isBotSession, markBotSession } from '../src/host/services/feishu/bot-sessions.ts'
+
+/**
+ * The execution context the tool registry hands a tool.
+ *
+ * `ToolCallId` has a runtime constructor, so the call id is a real one; `token` is a
+ * symbol brand with no constructor outside the registry, so the fixture asserts the
+ * single value it cannot mint. The tools under test read only their arguments, and
+ * this is deliberately one narrow assertion on a value the test invents - not the
+ * per-call `as never` that switches the checker off for the whole expression.
+ * @returns a context the tool's signature accepts.
+ */
+function toolContext(): ToolRunContext {
+  const callId = ToolCallId('call-lark-inbox-test')
+  return {
+    callId,
+    rootCallId: callId,
+    name: 'lark_autoreply_status',
+    arguments: {},
+    signal: new AbortController().signal,
+    token: Symbol('token') as ToolExecutionToken,
+    deferContext: () => {},
+    concludeTurn: () => {},
+  }
+}
 
 const OWNER = 'ou_owner'
 const CHAT = 'oc_chat'
@@ -722,7 +748,7 @@ describe('status tool', () => {
       autoReply: () => harnessed.responder.status(),
       gatewayStatus: () => ({ status: 'connected' }),
     })
-    const value = await tool.execute({ limit: 5 }) as Record<string, unknown>
+    const value = await tool.execute({ limit: 5 }, toolContext()) as Record<string, unknown>
     expect(value).toMatchObject({ mode: 'probe', answered: 1, open: 0, failed: 0, unattended: 1, gateway: 'connected' })
     const jobs = value.jobs as Array<Record<string, unknown>>
     expect(jobs).toHaveLength(1)
@@ -731,7 +757,7 @@ describe('status tool', () => {
 
   it('reports the not-running reason instead of an empty ledger', async () => {
     const tool = createAutoReplyStatusTool(() => undefined)
-    await expect(tool.execute({})).resolves.toMatchObject({ error: expect.stringContaining('未运行') })
+    await expect(tool.execute({}, toolContext())).resolves.toMatchObject({ error: expect.stringContaining('未运行') })
   })
 })
 

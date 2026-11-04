@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { gateEvent, mentionsBot } from '../src/core/lark-inbox/gating.ts'
 import { describeContent, toEnvelope } from '../src/core/lark-inbox/queue.ts'
 import { bindFamilyConfig, notifyFamilyConfigChange } from '../src/host/services/family-config.ts'
@@ -20,6 +20,9 @@ import { LarkGateway, extractMentionOpenIds, type GatewaySdk } from '../src/host
 import { register } from '../src/host/services/lark-inbox/index.ts'
 import { InboxStore } from '../src/host/services/lark-inbox/inbox-store.ts'
 import { createInboxTools, replyToInboxMessage, type InboxReplySender } from '../src/host/services/lark-inbox/tools.ts'
+
+/** The optional third argument a reply may carry, taken from the contract itself. */
+type SenderTarget = Parameters<InboxReplySender['send']>[2]
 
 const roots: string[] = []
 afterEach(() => {
@@ -40,12 +43,18 @@ function tempDir(): string {
 
 const FEISHU = { appId: 'cli_test', appSecret: 'secret-value', domain: 'feishu' as const }
 
+/** The connection object the SDK hands back; the fake has to match its call shapes. */
+type FakeClient = ReturnType<GatewaySdk['createClient']>
+
 /** State shared with a fake SDK so a test can drive the connection callbacks. */
 interface FakeSdkState {
   handler?: (data: unknown) => void | Promise<void>
   clientOptions?: Record<string, unknown>
-  close: ReturnType<typeof vi.fn>
-  start: ReturnType<typeof vi.fn>
+  // Typed as the SDK's own signatures rather than plain `vi.fn()`: the fake is
+  // assigned to `GatewaySdk`, and a bare mock has no call signature the interface
+  // accepts. The mock methods the tests assert on survive either way.
+  close: Mock<FakeClient['close']>
+  start: Mock<FakeClient['start']>
   botOpenId?: string
   botFailure?: string
 }
@@ -144,7 +153,12 @@ async function mountInbox(options: {
   const { ctx, definitions, warn, info, error } = context()
   const mailbox = options.mailbox ?? { appended: [] }
   const created: Array<Pick<LarkGateway, 'start' | 'stop' | 'isRunning'>> = []
-  const createStore = options.createStore ?? (options.store === undefined ? undefined : () => options.store)
+  // Narrowed into a local so the factory's return type is `InboxStore` rather than
+// `InboxStore | undefined`: the optional property does not stay narrowed inside a
+// closure, and the store factory is declared as always returning one.
+  const providedStore = options.store
+  const createStore = options.createStore
+    ?? (providedStore === undefined ? undefined : () => providedStore)
   const dispose = register(ctx as never, {}, {
     dshHome: options.dshHome ?? tempDir(),
     gatewaySdk: options.sdk,
@@ -453,7 +467,10 @@ describe('reply', () => {
   }
 
   function sender(result: { ok: boolean; messageId?: string; error?: string } = { ok: true, messageId: 'om_sent' }) {
-    return { send: vi.fn(async () => result) }
+    // The parameters are named so the mock's call tuple has a shape: a bare `vi.fn()`
+    // records `calls` as `[]`, and a test asserting on the arguments it was given has
+    // nothing to index.
+    return { send: vi.fn(async (_to: string, _text: string, _target?: SenderTarget) => result) }
   }
 
   it('answers the original message in place', async () => {
