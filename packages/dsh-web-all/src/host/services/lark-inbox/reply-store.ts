@@ -796,6 +796,27 @@ export class ReplyStore {
   }
 
   /**
+   * Delete finished jobs, and their batch memberships, older than a cutoff.
+   *
+   * Messages first: `reply_job_messages` references both the job and the queue
+   * row, so deleting the job alone would leave a row pointing at nothing once the
+   * queue is pruned in turn.
+   * @param olderThan - epoch milliseconds; jobs last updated before this go.
+   * @returns how many jobs and memberships were removed.
+   */
+  pruneTerminal(olderThan: number): { jobs: number; messages: number } {
+    return this.transaction(() => {
+      const messages = this.db.prepare(`DELETE FROM reply_job_messages WHERE job_id IN (
+        SELECT job_id FROM reply_jobs
+        WHERE state IN ('replied','failed','cancelled','reply_uncertain') AND updated_at < ?
+      )`).run(olderThan)
+      const jobs = this.db.prepare(`DELETE FROM reply_jobs
+        WHERE state IN ('replied','failed','cancelled','reply_uncertain') AND updated_at < ?`).run(olderThan)
+      return { jobs: Number(jobs.changes), messages: Number(messages.changes) }
+    })
+  }
+
+  /**
    * Counts per state, for the acceptance readings.
    * @returns per-state counts.
    */

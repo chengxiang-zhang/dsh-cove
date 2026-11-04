@@ -97,6 +97,8 @@ export interface LarkInboxConfig {
   autoReplyCwd?: string
   /** Standing instructions carried by the first prompt of a conversation. */
   autoReplyPreamble?: string
+  /** Days to keep finished queue rows and reply jobs; 0 keeps them forever. */
+  retentionDays?: number
 }
 
 export const Config = z.object({
@@ -119,6 +121,10 @@ export const Config = z.object({
   autoReplyOpenIds: z.array(z.string()).default([]),
   autoReplyCwd: z.string().default(''),
   autoReplyPreamble: z.string().default(DEFAULT_REPLY_PREAMBLE),
+  // Finished rows are housekeeping, not history: the JSONL shards keep what the
+  // platform actually sent, so the index can forget. Zero disables pruning for an
+  // installation that wants the index as its archive.
+  retentionDays: z.number().step(1).min(0).default(30),
 }) as unknown as z<LarkInboxConfig>
 
 /**

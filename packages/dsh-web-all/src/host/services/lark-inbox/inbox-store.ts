@@ -307,6 +307,25 @@ export class InboxStore {
     }
   }
 
+  /**
+   * Delete finished queue rows older than a cutoff.
+   *
+   * Only terminal rows, and only ones no reply batch still points at: the index
+   * exists to answer "what is pending" and "what did we do", and neither question
+   * needs a row from months ago. The JSONL shards are deliberately untouched - the
+   * line on disk is the durable record of what the platform sent, and the SQLite
+   * file is an index over it. Pruning the index is housekeeping; pruning the
+   * shards would be deleting evidence.
+   * @param olderThan - epoch milliseconds; rows last updated before this go.
+   * @returns how many rows were removed.
+   */
+  pruneTerminal(olderThan: number): number {
+    const result = this.db.prepare(`DELETE FROM inbox_events
+      WHERE status IN ('done','dead') AND updated_at < ?
+        AND event_id NOT IN (SELECT event_id FROM reply_job_messages)`).run(olderThan)
+    return Number(result.changes)
+  }
+
   close(): void {
     if (this.closed) return
     this.closed = true

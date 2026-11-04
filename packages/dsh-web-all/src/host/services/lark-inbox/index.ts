@@ -347,6 +347,34 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
         if (stored === 'appended') activeResponder?.kick(envelope)
       },
     }
+    // Housekeeping, deliberately on the inbox domain rather than the answer path:
+    // the queue accumulates whether or not answering is enabled, so pruning must
+    // not depend on that switch.
+    const openRetention = (): void => {
+      const days = active.retentionDays
+      if (!Number.isFinite(days) || days <= 0) return
+      const cutoff = Date.now() - days * 86_400_000
+      try {
+        const replies = store.reply.pruneTerminal(cutoff)
+        const queueRows = store.pruneTerminal(cutoff)
+        if (replies.jobs > 0 || replies.messages > 0 || queueRows > 0) {
+          log.info(
+            `dsh-lark-inbox: 清理 ${days} 天前的记录：入站 ${queueRows} 行、回话作业 ${replies.jobs} 个、成员 ${replies.messages} 行`,
+          )
+        }
+      } catch (error) {
+        log.warn('dsh-lark-inbox: 清理旧记录失败：%s', error instanceof Error ? error.message : String(error))
+      }
+    }
+    openRetention()
+    let retentionTimer: ReturnType<typeof setInterval> | undefined
+    if (Number.isFinite(active.retentionDays) && active.retentionDays > 0) {
+      // Six hours: often enough that the file cannot grow unbounded within a day,
+      // rare enough that a long-running host does not re-run the same deletes.
+      retentionTimer = setInterval(openRetention, 6 * 3_600_000)
+      retentionTimer.unref?.()
+    }
+
     let gateway: ReturnType<NonNullable<LarkInboxServiceDeps['createGateway']>>
     try {
       gateway = (deps.createGateway ?? (options => new LarkGateway(options)))(gatewayOptions)
@@ -363,6 +391,10 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
         const responder = activeResponder
         activeResponder = undefined
         responder?.dispose()
+        if (retentionTimer !== undefined) {
+          clearInterval(retentionTimer)
+          retentionTimer = undefined
+        }
         try { await gateway.stop() } finally { store.close() }
       },
     }

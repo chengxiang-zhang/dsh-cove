@@ -101,7 +101,7 @@ describe('Feishu settings field inventory', () => {
     // The behavior form names each spec explicitly (the projection then walks
     // LARK_INBOX_FIELDS), so a field dropped from the constructor loses its
     // editor even though the list still claims it.
-    for (const call of ["booleanField('enabled')", "booleanField('announceToAgent')", "settingsTextField('domain')", "booleanField('requireMentionInGroup')", "booleanField('dropAppMessages')", 'openIdsField()', "settingsTextField('queueDir')", "settingsNumberField('maxAttempts')", "settingsNumberField('staleTimeoutMs')", "settingsTextField('autoReplyMode')", 'autoReplyOpenIdsField()', "settingsTextField('autoReplyCwd')", "settingsTextField('autoReplyPreamble')"]) {
+    for (const call of ["booleanField('enabled')", "booleanField('announceToAgent')", "settingsTextField('domain')", "booleanField('requireMentionInGroup')", "booleanField('dropAppMessages')", 'openIdsField()', "settingsTextField('queueDir')", "settingsNumberField('maxAttempts')", "settingsNumberField('staleTimeoutMs')", "settingsTextField('autoReplyMode')", 'autoReplyOpenIdsField()', "settingsTextField('autoReplyCwd')", "settingsTextField('autoReplyPreamble')", "settingsNumberField('retentionDays')"]) {
       expect(page).toContain(call)
     }
     // The secret is a write-only channel, never a path-write spec: a path write
