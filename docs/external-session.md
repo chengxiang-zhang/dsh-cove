@@ -153,12 +153,15 @@ external_session_stop(session_id)
 | `limit` | 会话记录数达到上限 |
 | `auth-required` | CLI 报未登录 / 缺少凭据 |
 | `provider-error` | CLI 起了但本轮没终帧 / 非零退出 / 事件流断裂（重试仍失败时请运营看宿主日志） |
+| `store-unavailable` | 宿主无法持久化会话记录（存储目录不可写或磁盘满）；重试无用，需要运营处理宿主存储 |
 
 `auth-required` 必须由适配器识别 CLI 的 `Not logged in · Please run /login` 文本后转出，并在消息里指明「本机 `~/.claude/settings.json` 的 `env` 缺少 `ANTHROPIC_BASE_URL` 或 `ANTHROPIC_AUTH_TOKEN`」，不把原始报错透给模型。
 
-错误码到 HTTP 状态的映射是穷尽 switch：`cwd-invalid` → 400、`session-unknown` → 404、`busy` → 429、`provider-missing` → 501、`provider-error` → 502，`auth-required`、`session-closed`、`session-unresumable`、`limit` → 409。
+错误码到 HTTP 状态的映射是穷尽 switch：`cwd-invalid` → 400、`session-unknown` → 404、`busy` → 429、`provider-missing` → 501、`provider-error` → 502、`store-unavailable` → 503，`auth-required`、`session-closed`、`session-unresumable`、`limit` → 409。
 
-面板用的这组路由不等本轮结束：`/api/external-session/continue` 在轮次一开始就返回 200 与整份会话列表，本轮成败要看列表里该轮的 `status`；`/cancel` 与 `/close` 同样回整份列表。工具本身是同步阻塞的（见本节开头）。
+记录写失败报的是 `store-unavailable`，不是 `session-unknown`：后一条会让调用方以为 id 错了、重试没用，而这里说明的是宿主存不下。
+
+面板用的这组路由不等本轮结束：`/api/external-session/continue` 在轮次一开始就返回 200 与整份会话列表，本轮成败要看列表里该轮的 `status`；`/cancel` 与 `/close` 同样回整份列表。它不等本轮跑完，但会等本轮的记录写进存储再回 200，所以存储不可写时它在返回前就报 `store-unavailable`（503），不会先 200 再静默失败。工具本身是同步阻塞的（见本节开头）。
 
 ## 8. 执行适配器
 
@@ -190,6 +193,7 @@ Codex：
 - 每会话 FIFO，同一时刻只跑一轮；全局并发上限默认 2，超出返回 `busy`，不静默排队。
 - 取消顺序：`SIGTERM` → 3 秒宽限 → `SIGKILL` 进程组；本轮记 `aborted`，会话仍可续轮。
 - 取消只作用于当前轮：进程组退出后会话回到 `idle`，`closed` 是 `external_session_stop` 产生的终态，之后不再接续轮。
+- 取消在轮次刚启动、进程还没起来时也有效：轮次照样记 `aborted`，不留残留进程，会话仍可续轮。
 - 失败不自动重试：本轮记 `failed`，会话保留，由调用方决定重试或关闭。
 - 会话记录上限 100，关闭的会话先保留，由面板手动删除。
 - 保留策略就是上限 100 加面板手动删除，不做按时间自动清理。改成按时间清理是 `store` 里一处策略函数的替换，记录格式与工具契约不动。
