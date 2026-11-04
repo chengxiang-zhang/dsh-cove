@@ -278,6 +278,39 @@ describe('live settings', () => {
     await dispose()
   })
 
+  it('changes the answer-path settings without rebuilding the socket', async () => {
+    const sdk = fakeSdk()
+    const createGateway = vi.fn((gatewayOptions: ConstructorParameters<typeof LarkGateway>[0]) => new LarkGateway(gatewayOptions))
+    const createStore = vi.fn(() => ({ append: vi.fn(() => 'appended' as const), close: vi.fn() }) as unknown as InboxStore)
+    bindFamilyConfig({ feishu: FEISHU, 'lark-inbox': { enabled: true, autoReplyMode: 'probe' } })
+    const { dispose } = await mountInbox({ sdk, createStore, createGateway })
+    expect(createGateway).toHaveBeenCalledTimes(1)
+
+    // Turning answering on, and choosing who it answers, are read live on every
+    // call. Rebuilding the gateway for them used to drop the bot's connection for
+    // a change that never touched it - and it is the very change an operator makes
+    // right after a restart.
+    bindFamilyConfig({
+      feishu: FEISHU,
+      'lark-inbox': {
+        enabled: true,
+        autoReplyMode: 'self',
+        autoReplyOpenIds: ['ou_owner'],
+        autoReplyCwd: '/tmp/elsewhere',
+        autoReplyPreamble: '另一段前言',
+      },
+    })
+    notifyFamilyConfigChange()
+    expect(createGateway).toHaveBeenCalledTimes(1)
+    expect(createStore).toHaveBeenCalledTimes(1)
+
+    // Gate rules are read per event for the same reason.
+    bindFamilyConfig({ feishu: FEISHU, 'lark-inbox': { enabled: true, allowedOpenIds: ['ou_a'], dropAppMessages: false } })
+    notifyFamilyConfigChange()
+    expect(createGateway).toHaveBeenCalledTimes(1)
+    await dispose()
+  })
+
   it('drops a running runtime when the feature is switched off', async () => {
     const sdk = fakeSdk()
     const createGateway = vi.fn((gatewayOptions: ConstructorParameters<typeof LarkGateway>[0]) => new LarkGateway(gatewayOptions))

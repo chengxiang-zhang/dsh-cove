@@ -281,8 +281,19 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
   const sync = (): void => {
     const active = effectiveConfig(current())
     const resolved = resolveCredentials()
+    // Only what the runtime is built around. Everything else in this namespace is
+    // read live at the point of use - the gate rules per event, the answer path on
+    // every call - and rebuilding the socket for those would drop messages for a
+    // setting that never needed the socket's attention. The answer-path fields are
+    // the ones an operator changes most (off/probe/self, who may be answered), and
+    // each of those changes used to tear down the connection.
     const key = JSON.stringify({
-      active,
+      enabled: active.enabled,
+      announceToAgent: active.announceToAgent,
+      queueDir: active.queueDir,
+      maxAttempts: active.maxAttempts,
+      staleTimeoutMs: active.staleTimeoutMs,
+      retentionDays: active.retentionDays,
       credentials: resolved.credentials ?? null,
       credentialsError: resolved.error ?? '',
     })
