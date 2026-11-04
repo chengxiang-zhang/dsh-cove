@@ -16,13 +16,17 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { registerNativePanels } from './native-panels.tsx'
 import { mountRightPane } from './right-pane.tsx'
+import { mountExternalSession } from '../external-session/index.ts'
 import './sidebar-header.module.css'
 
-/** 装配侧栏位置模块：原生面板 + 右栏。 */
+/** 装配侧栏位置模块：原生面板 + 右栏（含外援会话页签）。 */
 export function mountSidebar(ctx: ClientContext): () => void {
   const disposers = [
     registerNativePanels(ctx),
     mountRightPane(ctx),
+    // 外援会话：右栏页签由本位置模块挂载（位置模块是右栏槽位的唯一注入者），
+    // 它同时装上会话头部子智能体下拉的「外援」分组。
+    mountExternalSession(ctx),
   ]
   return () => { for (const dispose of disposers) dispose() }
 }

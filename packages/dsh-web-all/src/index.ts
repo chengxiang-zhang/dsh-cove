@@ -49,6 +49,8 @@ export interface Config extends Record<string, unknown> {
   worktree?: import('./host/services/worktree/index.ts').WorktreeServiceConfig
   /** Playwright sessions service options (profile overridable; `liveView` enables the agent-browser live view). */
   playwright?: import('./core/playwright-sessions/contracts.ts').PlaywrightSessionsConfig
+  /** External CLI session defaults: concurrency, retention, cancellation grace, binary overrides. */
+  externalSession?: import('./host/services/external-session/config.ts').ExternalSessionConfig
   /** 跳过 BrowserAuth token/cookie 检查；仅可信反向代理或局域网显式启用。 */
   noBrowserAuth?: boolean
 }
@@ -80,5 +82,6 @@ export function apply(ctx: Context, config?: Config): void {
     noBrowserAuth: config?.noBrowserAuth,
     worktree: config?.worktree,
     playwright: config?.playwright,
+    externalSession: config?.externalSession,
   }), 'web-all: host services')
 }

@@ -289,29 +289,29 @@
         toolName: subagent_fork
         backgroundMode: one-shot
 
-    # Product providers are host-plane singletons. Copy this preset, then
-    # remove `disabled` from either ordinary tool row to expose that product
-    # only to agents composed from the copy.
+    # External CLI delegation is served by this package's own external-session
+    # service, reachable through the `preset-tools` entry (one tool row per
+    # provider). The tool names keep the native spelling so prompts, skills and
+    # user habits carry over unchanged; these two rows are the only place those
+    # tools reach a session, and the native `@deepseek-ai/dsh-subagent-*` provider
+    # rows stay disabled because two paths to the same CLI invite the wrong pick.
+    #
+    # The codex row stays off until its adapter passes the codex acceptance run
+    # (docs/external-session.md P4); the claude row is on and is the gray-release
+    # path. Copy this preset and flip `disabled` to expose the other product only
+    # to agents composed from the copy.
     - id: tool-subagent-codex
-      name: '@deepseek-ai/dsh-tool-subagent'
+      name: '@dsh-cove/dsh-web-all/preset-tools'
       disabled: true
       config:
         provider: codex
         toolName: subagent_codex
-        # 0.2 replaced the pre-0.2 boolean background switch with the
-        # `backgroundMode` enum; the retired key is ignored by the schema, so an
-        # exposed product row would silently keep the deployment default.
-        backgroundMode: one-shot
-        maxDepth: provider-managed
 
     - id: tool-subagent-claude-code
-      name: '@deepseek-ai/dsh-tool-subagent'
-      disabled: true
+      name: '@dsh-cove/dsh-web-all/preset-tools'
       config:
-        provider: claude-code
+        provider: claude
         toolName: subagent_claude_code
-        backgroundMode: one-shot
-        maxDepth: provider-managed
 
     # 0.1.6-alpha.1 dropped @deepseek-ai/dsh-workflow-worker-thread from the
     # shipped CLI tree (last published was 0.1.5-rc.2). Stock presets now use

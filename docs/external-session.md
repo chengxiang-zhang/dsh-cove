@@ -63,9 +63,10 @@
 
 | 层 | 路径 | 职责 |
 | --- | --- | --- |
-| 共享类型 | `packages/dsh-web-all/src/core/external-session/` | 记录与视图类型、状态枚举、错误码 |
-| 服务域 | `packages/dsh-web-all/src/host/services/external-session/` | `engine.ts`、`store.ts`、`providers/claude.ts`、`providers/codex.ts`、`tools.ts`、`routes.ts`、`config.ts` |
-| 客户端 | `packages/dsh-web-all/src/client/external-session/` | 下拉分组增强与右侧面板 |
+| 共享类型 | `packages/dsh-web-all/src/core/external-session/` | `types.ts` 记录与视图类型、`errors.ts` 八个错误码、`schema.ts` 存储 schema 与校验、`lifecycle.ts` 状态迁移、`adapters.ts` 适配器契约、`gateway.ts` 服务接口、`views.ts` 视图投影 |
+| 预设入口 | `packages/dsh-web-all/src/preset-tools.ts` | 预设行挂载的工具入口，一行一个 provider（见 §7） |
+| 服务域 | `packages/dsh-web-all/src/host/services/external-session/` | `config.ts` 配置与默认值、`tools.ts` 四个工具的定义、`providers/` 下每个 CLI 一个适配器；引擎、存储、路由与 `register` 入口在同一目录内配套 |
+| 客户端 | `packages/dsh-web-all/src/client/external-session/` | 右侧面板、下拉分组与宿主 routes 的客户端 |
 
 复用的既有机制：`ctx.subprocess.spawn`（worktree 与 git-graph 已用）、JSON 原子写、host webserver routes、客户端 DOM 增强（`src/client/conversation/subagent-model-dom.ts` 是同类先例）。
 
@@ -135,6 +136,9 @@ external_session_stop(session_id)
 - 提供 `session_id`：在该会话上跑下一轮，内部使用 CLI 会话号续接。
 - 返回统一结构：`{ session_id, turn, status, result, usage, cost_usd, can_continue }`。
 - 工具为同步阻塞：本轮结束才返回。这样结果直接进入对话，不依赖任何未公开的消息注入通道。
+- 不做后台模式：一次调用占用当前轮，直到本轮结束。要改成后台派发，给工具加一个 `background` 参数即可，引擎与存储不动。
+
+这四个工具由预设行挂载，不是宿主无条件注册：`@dsh-cove/dsh-web-all/preset-tools` 是 agent-plane 入口，一个预设行注册一个 provider 的委派工具，并默认同时注册 `external_session_list` 与 `external_session_stop`（多行时用 `control: false` 让控制工具只声明一次）。宿主装配挂载引擎与存储而不挂工具，因为面板与工具共用同一份数据；引擎缺席时工具仍按预设声明出现在工具目录，调用返回 `provider-missing`，不让插件加载失败。
 
 错误码固定为一组，面向模型给出一句话就够的解释：
 
@@ -172,14 +176,17 @@ Codex：
 
 - 权限模式固定为 `auto`，与原生在 profile 里 pin 的值一致；`dontAsk` 会拒绝一切未预授权操作，不可用于无人值守。
 - 凭据来源仍只有一处：CLI 自己的原生设置（`~/.claude/settings.json`）。DSH 起子进程时使用 `scrubbedParentEnv()`，会删除名字含 `KEY`、`PASSWORD`、`SECRET`、`TOKEN` 的变量，因此适配器必须显式注入 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_AUTH_TOKEN`；读不到即返回 `auth-required`，不做猜测。
+- 可执行文件解析：配置项 `claudeBin` / `codexBin` 接受绝对路径或命令名，默认 `claude` / `codex`，由宿主装配经 `deps.externalSession` 传入服务域。绝对路径会被验证存在，裸命令名在清洗后的 `PATH` 上查找；两边都找不到时本轮返回 `provider-missing`，不去猜别处的安装位置。
 - 模型、MCP、hooks 与插件继续由 CLI 原生设置决定，本能力不覆盖。
 
 ## 10. 并发、资源与回收
 
 - 每会话 FIFO，同一时刻只跑一轮；全局并发上限默认 2，超出返回 `busy`，不静默排队。
 - 取消顺序：`SIGTERM` → 3 秒宽限 → `SIGKILL` 进程组；本轮记 `aborted`，会话仍可续轮。
+- 取消只作用于当前轮：进程组退出后会话回到 `idle`，`closed` 是 `external_session_stop` 产生的终态，之后不再接续轮。
 - 失败不自动重试：本轮记 `failed`，会话保留，由调用方决定重试或关闭。
 - 会话记录上限 100，关闭的会话先保留，由面板手动删除。
+- 保留策略就是上限 100 加面板手动删除，不做按时间自动清理。改成按时间清理是 `store` 里一处策略函数的替换，记录格式与工具契约不动。
 
 ## 11. 展示与交互
 
@@ -191,11 +198,13 @@ Codex：
 
 数据由服务域通过宿主 routes 提供给客户端，不写会话日志。
 
+面板入口固定在右侧栏。改挂到侧栏只需要改客户端的挂载点，服务域、路由与数据不动。
+
 ## 12. 与原生插件的关系
 
 | 对象 | 处置 |
 | --- | --- |
-| `tool-subagent-claude-code` / `tool-subagent-codex` 两个 profile 行（设置里的两个开关） | 关闭 |
+| `tool-subagent-claude-code` / `tool-subagent-codex` 两行 | 由本能力承担，指向本包的工具入口（接线见 §13） |
 | `@deepseek-ai/dsh-subagent` 服务、spawn/fork 本地子代理、Agent Team | 保留不动 |
 | `~/.claude/settings.json`、Codex 原生配置 | 保留，仍是唯一凭据与模型来源 |
 
@@ -203,15 +212,18 @@ Codex：
 
 ## 13. 迁移与回滚
 
-顺序：
+接线点只有预设 `code-vibe` 里的两个工具行。改接线只改 `packages/dsh-web-all/presets/code-vibe/agent.cordis.yml`，再跑 `node scripts/render-preset.mjs` 重新生成 `presets/code-vibe.patch.yml`；`node scripts/render-preset.mjs --check` 是漂移门，手改生成物会被它打红。
 
-1. 新增 `core/external-session` 与 `host/services/external-session`，含互斥检测；
-2. 预设 `code-vibe.patch.yml` 与 `code-vibe/agent.cordis.yml` 中两个工具行改指向本能力的工具实现，`toolName` 不变；
-3. 关闭 profile 里原生的两个外部 provider 行（先 claude）；
-4. 灰度期内 Claude Code 走新路径、Codex 仍走原生，两边互不干涉；
-5. Codex 适配器通过验收后再关闭其原生行。
+两行的现状：
 
-回滚：打开原生开关并删除本能力的 profile 行即可，两侧数据不互相写入。
+| 行 | `name` | `config.provider` | `config.toolName` | 状态 |
+| --- | --- | --- | --- | --- |
+| `tool-subagent-claude-code` | `@dsh-cove/dsh-web-all/preset-tools` | `claude` | `subagent_claude_code` | 启用，灰度期的新路径 |
+| `tool-subagent-codex` | `@dsh-cove/dsh-web-all/preset-tools` | `codex` | `subagent_codex` | `disabled: true`，Codex 适配器通过验收后放开 |
+
+原生的 `@deepseek-ai/dsh-subagent-claude-code` 与 `@deepseek-ai/dsh-subagent-codex` 两个 provider 包仍装在 profile 里供对照，但不进预设组合。
+
+回滚：把两行的 `name` 换回 `@deepseek-ai/dsh-tool-subagent`、`provider` 换回 `claude-code` / `codex`，重新生成 patch 并重启 DSH 生效。两侧数据文件不同（本能力写 `~/.dsh/dsh-external-session.json`，原生不写这个文件），回滚不迁移、不覆盖对方数据。
 
 ## 14. 验收判据
 
@@ -235,16 +247,18 @@ Codex：
 | P4 | Codex 适配器并关闭其原生行 | Codex 复跑 E1 至 E4 |
 | P5 | 收尾：上限、清理、文案、升级演练 | E5、E6 通过 |
 
-## 16. 风险与未决
+## 16. 已知限制与风险
+
+已知限制：
+
+- **生效需要重启**：预设与包的组合在 DSH 启动时装配，改动预设或本能力的代码后要重启 DSH 才生效。
+- **每轮一个进程**：续轮复用 CLI 的会话号而不是常驻进程，每轮都有冷启动延迟，长会话的总耗时包含这段延迟。
+- **成本是估值**：`cost_usd` 是 CLI 内置价表估算，不是网关账单；工具返回与面板都标注为估值。
+- **宿主需要有 `claude`**：解析规则见 §9；解析不到时本轮返回 `provider-missing`。
+- **同步阻塞**：工具在本轮结束才返回，长任务的对话卡片只显示运行中，实时进度只在面板可见。
 
 风险：
 
 - **版本漂移**：`session_id` 字段位置、事件形状与 CLI 参数都可能随 CLI 升级变化，适配层需要版本探测与降级路径。
-- **成本口径**：`cost_usd` 是 CLI 内置价表估算，不是网关账单，面板与返回都会标注为估值。
-- **长任务卡片不刷新**：同步工具在对话里只显示运行中，实时进度只在面板可见。
 
-未决：
-
-- 面板入口放在右侧栏还是侧栏。
-- 是否增加后台模式（派发后不占用当前轮）。
-- 会话记录的保留策略是否从「上限 100 + 手动删除」扩展为按时间自动清理。
+口径决定写在各自的家：后台模式见 §7，保留策略见 §10，面板入口见 §11，每节都写明了改回去要动哪里。

@@ -1,0 +1,382 @@
+/**
+ * 外援会话右侧面板与会话头部下拉分组的样式。
+ *
+ * 只在本模块内定义排版；颜色全部走 dsh 的 `--dsw-*` token，因此自动跟随明暗
+ * 主题与皮肤。右栏很窄，所以列表与详情是上下结构，长文本省略而不是换行溢出。
+ *
+ * 下拉分组（`.group*`）刻意复刻原生外部任务条目的外观：标题 + 外部任务标签，
+ * 不出现执行状态圆点、不出现 token/耗时（设计稿 §11.1）。
+ */
+
+/* --- panel shell --------------------------------------------------------------- */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-primary, inherit);
+  background: var(--dsw-alias-bg-layer-1, transparent);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2, rgb(0 0 0 / 10%));
+}
+
+.headText {
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary, inherit);
+}
+
+.intro {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary, #777);
+}
+
+/* --- buttons ------------------------------------------------------------------- */
+
+.primary {
+  flex: none;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary-foreground, #fff);
+  background: var(--dsw-alias-button-primary-fill, #2f6feb);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover, #2f6feb);
+}
+
+.secondary {
+  flex: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary, inherit);
+  background: var(--dsw-alias-button-tool-bar-fill, transparent);
+  border: 1px solid var(--dsw-alias-border-l2, rgb(0 0 0 / 12%));
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.secondary:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary, inherit);
+  background: var(--dsw-alias-interactive-bg-hover, rgb(0 0 0 / 6%));
+}
+
+.danger {
+  flex: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-danger, #c33);
+  background: transparent;
+  border: 1px solid var(--dsw-alias-border-danger, #d55);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.primary:disabled,
+.secondary:disabled,
+.danger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- session list -------------------------------------------------------------- */
+
+.list {
+  flex: none;
+  max-height: 45%;
+  margin: 0;
+  padding: 4px;
+  overflow: auto;
+  list-style: none;
+  border-bottom: 1px solid var(--dsw-alias-border-l2, rgb(0 0 0 / 10%));
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgb(0 0 0 / 6%));
+}
+
+.row[aria-current='true'] {
+  background: var(--dsw-alias-interactive-bg-active, rgb(0 0 0 / 9%));
+}
+
+.rowTitle {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary, #777);
+}
+
+.rowProvider,
+.rowTime {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary, inherit);
+  background: var(--dsw-alias-bg-layer-2, rgb(0 0 0 / 5%));
+}
+
+.pill[data-state='running'] {
+  color: var(--dsw-alias-state-business-primary, #2f6feb);
+}
+
+.pill[data-state='failed'] {
+  color: var(--dsw-alias-state-error-primary, #c33);
+}
+
+.pill[data-state='closed'] {
+  color: var(--dsw-alias-label-tertiary, #777);
+}
+
+/* --- detail / timeline --------------------------------------------------------- */
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  padding: 8px 10px 10px;
+  overflow: auto;
+}
+
+.detailHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.detailTitle {
+  margin: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--dsw-alias-border-l2, rgb(0 0 0 / 10%));
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2, transparent);
+}
+
+.turnHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary, #777);
+}
+
+.turnNumber {
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary, inherit);
+}
+
+.turnStatus {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-3, rgb(0 0 0 / 6%));
+}
+
+.turn[data-turn-status='completed'] .turnStatus {
+  color: var(--dsw-alias-state-success-primary, #276749);
+}
+
+.turn[data-turn-status='failed'] .turnStatus {
+  color: var(--dsw-alias-state-error-primary, #c33);
+}
+
+.turn[data-turn-status='aborted'] .turnStatus {
+  color: var(--dsw-alias-state-warn-primary, #a16207);
+}
+
+.turnMeta {
+  white-space: nowrap;
+}
+
+.turnBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.turnField {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary, #777);
+}
+
+.turnPrompt {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.turnResult {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.turnResultEmpty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary, #777);
+}
+
+/* --- continue form ------------------------------------------------------------- */
+
+.compose {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: inherit;
+  background: var(--dsw-alias-bg-layer-2, transparent);
+  border: 1px solid var(--dsw-alias-border-l2, rgb(0 0 0 / 12%));
+  border-radius: 6px;
+}
+
+.input:disabled {
+  opacity: 0.6;
+}
+
+.notice {
+  margin: 0;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary, #777);
+}
+
+.actionError {
+  margin: 0;
+  font-size: 11px;
+  color: var(--dsw-alias-label-danger, #c33);
+}
+
+/* --- subagent dropdown group --------------------------------------------------- */
+
+.groupHeader {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-tertiary, #777);
+  text-transform: none;
+}
+
+.groupRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.groupRow:hover,
+.groupRow:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover, rgb(0 0 0 / 6%));
+  outline: none;
+}
+
+.groupLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary, inherit);
+}
+
+.groupTag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--dsw-alias-label-secondary, inherit);
+  background: var(--dsw-alias-bg-layer-2, rgb(0 0 0 / 6%));
+}

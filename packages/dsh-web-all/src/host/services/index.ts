@@ -14,6 +14,7 @@ import * as noBrowserAuth from './no-browser-auth/index.ts'
 import * as webRender from './web-render/index.ts'
 import * as webSearchAnthropic from './web-search-anthropic/index.ts'
 import * as scheduleMode from './schedule-mode/index.ts'
+import * as externalSession from './external-session/index.ts'
 import { createServiceLifecycleOwner, type ServiceRegistrationDiagnostic } from './lifecycle.ts'
 
 export interface ServiceAssemblyDeps {
@@ -23,6 +24,8 @@ export interface ServiceAssemblyDeps {
   worktree?: import('./worktree/index.ts').WorktreeServiceConfig
   /** Playwright sessions options; `liveView` toggles the agent-browser live view. */
   playwright?: import('../../core/playwright-sessions/contracts.ts').PlaywrightSessionsConfig
+  /** External CLI session defaults (concurrency, retention, binary overrides). */
+  externalSession?: import('./external-session/config.ts').ExternalSessionConfig
   /** Structured registration/disposal diagnostics, primarily for tests. */
   onDiagnostic?: (diagnostic: ServiceRegistrationDiagnostic) => void
 }
@@ -78,6 +81,13 @@ export function assembleServices(ctx: Context, deps: ServiceAssemblyDeps = {}): 
   // MISSING/UNAVAILABLE selection rules.
   mount('web-search-anthropic', () => webSearchAnthropic.register(ctx))
   mount('schedule-mode', () => scheduleMode.register(ctx))
+  // External CLI sessions: the store, engine and panel data plane. The
+  // model-facing tools are NOT mounted here — a preset declares them through
+  // the `preset-tools` entry, which is what keeps its provider switches honest.
+  mount('external-session', () => externalSession.register(ctx, {
+    config: deps.externalSession,
+    dshHome: deps.dshHome,
+  }))
 
   owner.track('playwright-sessions', playwrightSessions.register(ctx, deps.playwright ?? {}, owner.signal))
   return owner.dispose

@@ -4,10 +4,15 @@
  * __ModuleLoader__). The node half is the one-and-only plugin row `web-all`;
  * all service domains live under src/host/services and are externalized the
  * same way the former per-plugin packages were.
+ *
+ * `src/preset-tools.ts` is the second node entry, not a second plugin row: it
+ * is the module a preset mounts when it wants the external-session tools, which
+ * keeps those tools scoped to the presets that declare them while the entity
+ * row stays alone.
  */
 import { clientBundle } from '../../shared/tsdown.client.ts'
 
-export default clientBundle('@dsh-cove/dsh-web-all', ['src/index.ts'], {
+export default clientBundle('@dsh-cove/dsh-web-all', ['src/index.ts', 'src/preset-tools.ts'], {
   libExternal: [
     '@deepseek-ai/dsh-client-connection',
     '@deepseek-ai/dsh-client-locale',

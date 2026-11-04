@@ -17,6 +17,10 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
+    "./preset-tools": {
+      "types": "./lib/types/preset-tools.d.ts",
+      "default": "./lib/preset-tools.js"
+    },
     "./src/*": "./src/*",
     "./package.json": "./package.json",
     "./presets/*": "./presets/*"
