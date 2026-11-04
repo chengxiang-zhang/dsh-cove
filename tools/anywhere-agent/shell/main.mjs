@@ -34,6 +34,7 @@ import * as Tabs from '../src/tabs.mjs';
 import { parseServices } from '../src/services.mjs';
 import { createClaimState, startAgentBridge } from '../src/agent-bridge.mjs';
 import { LINK_ROUTE, classifyLink, hostOfAddress } from '../src/link-routing.mjs';
+import { pacDataUrl, pacScript } from '../src/proxy-pac.mjs';
 import { isCloudZone } from '../src/netbird-names.mjs';
 import { CLOUD_DNS_DOMAIN, DSH_ZONES, OVERLAY_UPDATE_BASE_URL } from '../src/generated/fleetConfig.mjs';
 import { createPeerResolver, parsePeers, parseSelfStatus } from '../src/netbird-status.mjs';
@@ -580,25 +581,42 @@ function runInstallerInTerminal(command) {
 
 /** The proxy currently applied to the shell's session, so it is set once. */
 let appliedProxy = '';
+/** The exact PAC data URL in force, so a changed host list replaces it. */
+let appliedPac = '';
 
 /**
- * Points every window at the agent's loopback proxy the moment the agent offers one.
+ * Points the window's requests at the network that can answer them.
  *
- * Without this the shell has no way into the private network at all: a workspace
- * window would try the address directly, which either fails or - far worse - quietly
- * leaves the app-scoped path and rides whatever the machine's own network does.
+ * The client is a browser for two networks: the machine's own, and the fleet's private
+ * one, which only the agent's loopback proxy can reach. One Chromium session has one
+ * proxy setting, so the choice is made per request by a PAC script
+ * (`src/proxy-pac.mjs`): overlay names go to the agent, everything else goes direct. Both
+ * are this window's network - without the direct half, a sign-in provider or a public
+ * report link loads as a page error instead of a page.
+ *
+ * The script is rebuilt only when the facts inside it change (the proxy, the fleet's
+ * zones, the hosts the deployment published), because re-applying a proxy to a live
+ * session is a visible hiccup.
  */
 function applyAgentProxy(proxy) {
-  if (typeof proxy !== 'string' || proxy === '' || proxy === appliedProxy) {
+  if (typeof proxy !== 'string' || proxy === '') {
+    return;
+  }
+  const context = overlayContext();
+  const script = pacScript({ upstream: proxy, zones: context.zones, hosts: context.hosts });
+  const dataUrl = pacDataUrl(script);
+  if (dataUrl === '') {
+    process.stderr.write(`shell: the agent offered a proxy this shell cannot use (${proxy})\n`);
+    return;
+  }
+  if (proxy === appliedProxy && dataUrl === appliedPac) {
     return;
   }
   appliedProxy = proxy;
+  appliedPac = dataUrl;
   proxySession()
-    // Loopback is bypassed so this machine's own workspace keeps working while the
-    // fleet's proxy is installed: it is reached directly, and it is the one entry
-    // that must never depend on the private network being up.
-    .setProxy({ proxyRules: proxy, proxyBypassRules: '127.0.0.1,localhost,<local>' })
-    .then(() => process.stderr.write(`shell: session proxy ${proxy}\n`))
+    .setProxy({ pacScript: dataUrl })
+    .then(() => process.stderr.write(`shell: session proxy ${proxy} for ${context.zones.length} zone(s), ${context.hosts.length} host(s)\n`))
     .catch((error) => process.stderr.write(`shell: session proxy failed (${error?.message ?? error})\n`));
 }
 
@@ -614,6 +632,7 @@ function clearAgentProxy() {
     return;
   }
   appliedProxy = '';
+  appliedPac = '';
   proxySession()
     .setProxy({ mode: 'direct' })
     .then(() => process.stderr.write('shell: session proxy cleared; the fleet link is gone\n'))
@@ -1456,6 +1475,19 @@ const tabFailures = new Map();
 const agentClaims = createClaimState();
 let agentBridge = null;
 let tabsRestored = false;
+/**
+ * How long a restore may wait for the machine list before it gives up on the tabs that
+ * are not in it yet.
+ *
+ * The catalogue and the saved tabs are read at different moments: the tab strip exists
+ * before the first reading that carries a DNS map, and restoring against an empty
+ * catalogue drops every machine tab as "no longer offered". Waiting for the list is the
+ * difference between a restart that brings the tabs back and one that silently throws
+ * them away; the deadline keeps the wait from being forever, because a window with no
+ * other machines is a real state too.
+ */
+const RESTORE_WAIT_MS = 45_000;
+let restoreDeadline = 0;
 /** One native view per web-service tab; machines keep their own resident view. */
 const webViews = new Map();
 /** The catalogue file, read once: `<userData>/services.json`. */
@@ -2372,15 +2404,15 @@ function hostLabel(url) {
 }
 
 /**
- * What the deployment publishes as reachable inside this window.
+ * The names the overlay answers for: everything that must go through the agent.
  *
- * The fleet's zones decide which names the overlay answers for; the catalogue and the
+ * The fleet's zones decide which names the overlay's resolver owns; the catalogue and the
  * machine list decide which hosts were offered to the person; the channel document's own
  * overlay prefix is the one address a deployment declares outside both. A host that is
  * here is an overlay address by construction - nothing else could have published it - so
- * the link decision never has to guess at a deployment's naming scheme.
+ * the traffic decision never has to guess at a deployment's naming scheme.
  */
-function linkContext() {
+function overlayContext() {
   const zones = new Set(
     FLEET_ZONES.map((zone) => String(zone ?? '').trim().toLowerCase()).filter((zone) => zone !== ''),
   );
@@ -2390,7 +2422,7 @@ function linkContext() {
   }
   // Read the published hosts rather than the rendered catalogue: this answers "what did the
   // deployment name", and building the catalogue here would also rewrite the list the home
-  // page is drawn from as a side effect of routing one link.
+  // page is drawn from as a side effect of deciding one request's route.
   const hosts = [];
   for (const service of webServices()) {
     hosts.push(String(service.host ?? ''));
@@ -2407,17 +2439,6 @@ function linkContext() {
     hosts.push(overlayHost);
   }
   return { zones: [...zones], hosts };
-}
-
-/** Whether a navigation stays on the page's own origin. */
-function sameOrigin(left, right) {
-  try {
-    const a = new URL(left);
-    const b = new URL(right);
-    return a.protocol === b.protocol && a.host === b.host;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -2438,14 +2459,13 @@ async function handOffToBrowser(url) {
 /**
  * Routes one address a page asked to open, and records why.
  *
- * Two paths from a page arrive here: a popup request (`window.open`, `target=_blank`) and
- * a navigation that would replace the page with a different origin. Both end the same way
- * - an overlay address becomes a tab in this window, a public one is handed to the platform
- * browser - because the window's only network is the overlay, and a public page inside it
- * fails to load no matter which path asked for it.
+ * A page in this window has both networks behind it, so a link's address no longer decides
+ * whether it may open here: a web address becomes a tab (the tab strip stays the only
+ * place pages appear), a scheme another application owns is handed to the platform, and
+ * anything that is not an address at all is dropped.
  */
 function routePageLink(target) {
-  const decision = classifyLink(target, linkContext());
+  const decision = classifyLink(target);
   process.stderr.write(`shell: link ${decision.route} ${decision.url || target} (${decision.reason})\n`);
   if (decision.route === LINK_ROUTE.tab) {
     void openLinkTab(decision.url);
@@ -2456,17 +2476,16 @@ function routePageLink(target) {
 }
 
 /**
- * Keeps a page's links from leaving this window on their own.
+ * Keeps a page's popups as tabs, and its non-web links out of this window.
  *
  * A popup request is answered here rather than by Chromium: a raw second `BrowserWindow`
- * is a browser without the tab strip - no title, no close, no way back to the list - and a
- * public page inside it could not load anyway. The popup is always denied, and the address
- * is routed instead.
+ * is a browser without the tab strip - no title, no close, no way back to the list. The
+ * popup is always denied and the address opens as a tab instead.
  *
- * A navigation that stays on the page's own origin is the page's business (SPA routes,
- * query strings, form posts). Anything else is routed the same way and prevented, so a
- * public address can never take the page's place - before this, following one replaced the
- * machine's page with a dead page that had no way back.
+ * Navigations are the page's own business - a sign-in flow that redirects through an
+ * identity provider, an SPA route, a form post - so they are left alone whenever they are
+ * a web address. A scheme the operating system owns (`mailto:`, `tel:`) would otherwise
+ * navigate the page to nothing, so it is handed over and prevented.
  */
 function installPageLinkRouting(view) {
   view.webContents.setWindowOpenHandler(({ url }) => {
@@ -2474,7 +2493,7 @@ function installPageLinkRouting(view) {
     return { action: 'deny' };
   });
   view.webContents.on('will-navigate', (event, target) => {
-    if (sameOrigin(view.webContents.getURL(), target)) {
+    if (/^https?:\/\//i.test(target)) {
       return;
     }
     event.preventDefault();
@@ -2782,13 +2801,27 @@ async function restoreTabs() {
   if (tabsRestored) {
     return;
   }
-  tabsRestored = true;
   const saved = readTabsFile();
   if (!saved) {
+    tabsRestored = true;
     pushTabs();
     return;
   }
   const known = new Set(catalogOf(lastSnapshot).map((service) => service.id));
+  const savedServices = (Array.isArray(saved.items) ? saved.items : [])
+    .filter((item) => item && item.kind === 'service')
+    .map((item) => String(item.serviceId ?? ''));
+  const missing = savedServices.filter((id) => !known.has(id));
+  if (missing.length > 0 && Date.now() < restoreDeadline) {
+    // The list that can vouch for these tabs has not arrived yet. Each reading calls this
+    // again, so the restore lands as soon as the catalogue is complete.
+    process.stderr.write(`shell: waiting for ${missing.length} saved tab(s) to appear in the list\n`);
+    return;
+  }
+  if (missing.length > 0) {
+    process.stderr.write(`shell: dropping ${missing.length} saved tab(s) that never appeared (${missing.join(', ')})\n`);
+  }
+  tabsRestored = true;
   tabsState = Tabs.restore(saved.items, { known: (id) => known.has(id), activeId: saved.activeId });
   pushTabs();
   const active = tabsState.tabs.find((tab) => tab.id === tabsState.activeId);
@@ -3061,6 +3094,9 @@ app.whenReady().then(() => {
   if (!args.dir) {
     args.dir = app.getPath('userData');
   }
+  // The tab strip is restored against the machine list, which takes a moment to arrive
+  // after launch; the deadline bounds how long the restore waits for it.
+  restoreDeadline = Date.now() + RESTORE_WAIT_MS;
   // The theme is remembered across restarts; the window is themed before it is
   // shown so there is no flash of the wrong scheme.
   const stored = readSettings();

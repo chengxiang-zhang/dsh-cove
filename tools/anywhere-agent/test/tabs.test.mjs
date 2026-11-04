@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   activate,
@@ -180,4 +181,21 @@ test('link tabs survive a restart, and a broken one does not', () => {
 
   const broken = restore([{ kind: 'home' }, { kind: 'link', serviceId: 'javascript:alert(1)' }, { kind: 'link', serviceId: '' }]);
   assert.deepEqual(broken.tabs.map((tab) => tab.id), ['home']);
+});
+
+// The restore runs against two facts that arrive at different moments: the saved strip
+// and the machine list. Dropping tabs because the list has not arrived yet is silent data
+// loss, so the order of the two steps is pinned here.
+test('a restore waits for the machine list instead of dropping tabs it cannot vouch for', () => {
+  const shellSource = readFileSync(new URL('../shell/main.mjs', import.meta.url), 'utf8');
+  assert.match(shellSource, /const RESTORE_WAIT_MS = /, 'the wait must be bounded');
+  assert.match(shellSource, /waiting for \$\{missing\.length\} saved tab\(s\)/, 'a deferred restore says so in the log');
+  const start = shellSource.indexOf('async function restoreTabs(');
+  assert.ok(start !== -1, 'restoreTabs must exist');
+  const guard = shellSource.indexOf('missing.length > 0 && Date.now() < restoreDeadline', start);
+  const restored = shellSource.indexOf('tabsRestored = true;\n  tabsState = Tabs.restore', start);
+  assert.ok(guard !== -1, 'the deadline guard must exist');
+  assert.ok(restored !== -1, 'the restore must mark itself done');
+  assert.ok(guard < restored, 'the guard must run before the tabs are declared restored');
+  assert.match(shellSource, /restoreDeadline = Date\.now\(\) \+ RESTORE_WAIT_MS/, 'the deadline starts when the app is ready');
 });
