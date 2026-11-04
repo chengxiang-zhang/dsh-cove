@@ -1,6 +1,6 @@
 # 链接去向契约：内网开页签、公网交给系统浏览器（2026-11-04）
 
-> 状态：已实现，源码检出内真实 Electron 窗口验收 19 条全绿（修前同一脚本 10 条失败，见第四节）。**打包产物未重新构建**：`/Applications/Anywhere Work.app` 里还是旧壳，需重新打包并重启应用后生效；本机没有用旧包跑 `--packaged`。
+> 状态：已实现，源码检出内真实 Electron 窗口验收 19 条全绿（修前同一脚本 10 条失败，见第四节）；本机重新打包的 `Anywhere Work.app`（0.7.1，CFBundleVersion 90-dirty）用 `--packaged` 复验同样 19 条全绿。**`/Applications/Anywhere Work.app` 还是 0.6.2（build 45）的旧壳，未安装覆盖**：需要安装新包并重启应用后，这段行为才在正在运行的应用里生效。
 > 适用范围：`tools/anywhere-agent/shell`（桌面客户端壳）与 `tools/anywhere-agent/src`。DSH Web 页面本身不需要任何改动。
 
 ## 一、报告的现象与根因
@@ -80,6 +80,7 @@ a plain navigation to a public page does not replace the page on screen
 
 ```sh
 node tools/anywhere-agent/poc/link-routing.mjs --electron /path/to/Electron
+node tools/anywhere-agent/poc/link-routing.mjs --packaged --electron "/path/to/Anywhere Work.app/Contents/MacOS/Electron"
 node --test tools/anywhere-agent/test/link-routing.test.mjs tools/anywhere-agent/test/tabs.test.mjs
 node --test tools/anywhere-agent/test/*.test.mjs
 ```
@@ -130,6 +131,8 @@ handed to the platform browser:
 
 单测：`test/link-routing.test.mjs` + `test/tabs.test.mjs` 26 条全绿；`node --test tools/anywhere-agent/test/*.test.mjs` 为 268 passed / 1 failed，唯一失败是 `make-dmg.test.mjs`——本机受限文件沙箱下 `hdiutil create` 被拒（`hdiutil: create failed - 操作不被允许`），与本次改动无关，见第六节。
 
+打包产物：`ELECTRON_DIST=... bash tools/anywhere-agent/scripts/package-mac.sh` 建出 `tools/anywhere-agent/build/Anywhere Work.app`（0.7.1，CFBundleVersion 90-dirty）；payload 的 `app/src` 里带着 `src/link-routing.mjs`，打包脚本自带的"每个相对 import 都解析得到"检查通过，`--packaged` 跑同一份脚本 19 条全绿。本机构建时 `render-icon.cjs` 的 Electron 进程被沙箱杀掉（`Trace/BPT trap: 5`），所以这一份本地包沿用运行时自带图标——与链接路由无关，真实发布在 macOS runner 上构建。
+
 ## 五、为什么边界画在地址上
 
 - **窗口没有自己的网络**：壳的 partition 代理是 agent 的 loopback 端口，只走 NetBird userspace 栈。公网地址不是"懒得支持"，是在这个进程里**不可能**加载成功。把它留在这里，用户看到的永远是失败页，而同一个地址在系统浏览器里是可用的——这就是把边界放在地址上的理由。
@@ -142,7 +145,7 @@ handed to the platform browser:
 
 | 项 | 说明 |
 | --- | --- |
-| 打包产物 | **未重新打包**。源码检出验收通过；`/Applications/Anywhere Work.app` 里是旧壳，需要在 `main` 上重新打包（`.github/workflows/desktop-release.yml` 或本机 `scripts/package-mac.sh`）并重启应用后才生效 |
+| 安装覆盖 | 本机已建出新包并用 `--packaged` 验过，但**没有装到 `/Applications`**：那里的 `Anywhere Work.app` 还是 0.6.2（build 45），运行中的进程更是那个旧包。装上新包并重启 App 后，这段行为才在正在使用的应用里生效 |
 | Windows | 无 Windows 机器；判定与路由都是平台无关的，但真实窗口行为未在该平台验证 |
 | `mailto:` / `tel:` | 单测覆盖判定；验收运行只把"交给系统"记录成日志，没有真的唤起邮件客户端 |
 | DSH 侧栏浏览器模式 | DSH 客户端设置里若把链接改为在侧栏浏览器页签打开（`linkOpening = 'sidebar'`），链接不经过壳，本契约不适用；该模式本次未改、未验证 |
