@@ -30,9 +30,10 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import { gateEvent, type GateInput, type GatingConfig } from '../../../core/lark-inbox/gating.ts'
 import { toEnvelope, type LarkInboxEnvelope } from '../../../core/lark-inbox/queue.ts'
 import { FEISHU_SETTINGS_NAMESPACE, currentFeishuCredentials, createFeishuTextSender, describeFeishuCredentials, type FeishuCredentials } from '../feishu/index.ts'
-import { Config, LARK_INBOX_SETTINGS_NAMESPACE, effectiveConfig, resolveQueueDir, type LarkInboxConfig } from './config.ts'
+import { Config, LARK_INBOX_SETTINGS_NAMESPACE, autoReplyConfig, effectiveConfig, resolveQueueDir, type LarkInboxConfig } from './config.ts'
 import { LarkGateway, type GatewayHealth, type GatewaySdk } from './gateway.ts'
 import { InboxStore } from './inbox-store.ts'
+import { ReplyResponder, type ReplyEnginePorts } from './responder.ts'
 import { makeLarkWizardRoutes } from './host-routes.ts'
 import { accessTrustOf } from '../access-trust/index.ts'
 import { registerInboxTools, type InboxReplyCapability, type InboxReplySender } from './tools.ts'
@@ -68,6 +69,43 @@ function readSenderType(event: unknown): string {
   const sender = inner.sender
   const type = typeof sender === 'object' && sender !== null ? (sender as Record<string, unknown>).sender_type : undefined
   return typeof type === 'string' && type.length > 0 ? type : 'user'
+}
+
+/**
+ * The slice of the engine's session controller this domain drives.
+ *
+ * Declared locally rather than imported so the answer path stays testable with a
+ * fake and so a version drift in the SDK shows up as a missing capability here
+ * instead of as a silently changed call elsewhere. `schedule-mode` keeps the same
+ * shape for the same reason.
+ */
+interface SessionControllerFace {
+  create(request: { sessionId?: string; cwd?: string; agentPreset?: string }): Promise<{ sessionId?: unknown }>
+  prompt(
+    request: {
+      requestId: string
+      sessionId: string
+      mode: 'queue' | 'steer'
+      content: readonly { type: 'text'; text: string }[]
+    },
+    signal: AbortSignal,
+  ): Promise<{ accepted?: unknown }>
+  cancel(request: { sessionId: string }): unknown
+}
+
+/**
+ * Read an optional engine service without throwing.
+ *
+ * A profile that does not provide the session controller must degrade to "the
+ * answer path stays off", not to a failed plugin load, because the inbox half is
+ * useful on its own.
+ */
+function optionalService<T>(ctx: Context, name: string): T | undefined {
+  try {
+    return (ctx.get as unknown as (id: string, strict?: boolean) => unknown)(name, false) as T | undefined
+  } catch {
+    return undefined
+  }
 }
 
 function gatingConfig(config: Required<LarkInboxConfig>): GatingConfig {
@@ -121,6 +159,67 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
   const current = (): LarkInboxConfig => liveConfig(base)
 
   /**
+   * The answer path of the runtime currently mounted, if it has one.
+   *
+   * Held here rather than inside `InboxRuntime` because two readers need it: the
+   * gateway's event handler (to admit a stored message) and the one long-lived
+   * `session/event` subscription (to settle a finished turn). The subscription is
+   * registered once per domain, while the responder is rebuilt with the runtime,
+   * so the subscription reads this field instead of capturing an instance.
+   */
+  let activeResponder: ReplyResponder | undefined
+
+  /**
+   * Build the three engine calls the answer path needs.
+   *
+   * A missing session controller is reported per call rather than at mount: the
+   * queue, the tools and the wizard all still work without it, and failing the
+   * whole domain because one optional engine service is absent would take those
+   * away for no reason.
+   * @returns the engine port set, which throws on first use when unavailable.
+   */
+  const enginePorts = (): ReplyEnginePorts => {
+    const controller = (): SessionControllerFace => {
+      const face = optionalService<SessionControllerFace>(ctx, 'sessionController')
+      if (face === undefined) throw new Error('会话控制器不可用：当前 profile 没有加载 sessionController 服务')
+      return face
+    }
+    return {
+      async ensureSession({ sessionId, cwd }): Promise<void> {
+        // An explicit id makes the session deterministic, so a restart reattaches
+        // to the conversation's existing session instead of starting another one
+        // with no memory of what was already discussed.
+        const created = await controller().create({
+          sessionId,
+          ...(cwd.trim() === '' ? {} : { cwd: cwd.trim() }),
+        })
+        const returned = typeof created?.sessionId === 'string' ? created.sessionId : ''
+        if (returned !== sessionId) {
+          throw new Error(`会话创建返回了意外的 id（期望 ${sessionId}，得到 ${returned === '' ? '空' : returned}）`)
+        }
+      },
+      async prompt({ requestId, sessionId, text }): Promise<void> {
+        // A fresh signal per call: this call has no cancellation of its own - the
+        // turn is cancelled through `cancel` below - and a shared signal would let
+        // one cancellation poison every later prompt.
+        const signal = new AbortController().signal
+        const accepted = await controller().prompt(
+          { requestId, sessionId, mode: 'queue', content: [{ type: 'text', text }] },
+          signal,
+        )
+        if (accepted?.accepted !== true) throw new Error('引擎未接受这次 prompt')
+      },
+      cancel(sessionId): void {
+        try {
+          controller().cancel({ sessionId })
+        } catch (error) {
+          log.warn('dsh-lark-inbox: 取消回合失败：%s', error instanceof Error ? error.message : String(error))
+        }
+      },
+    }
+  }
+
+  /**
    * Drop the running runtime.
    *
    * Detach it from every read path synchronously, then close asynchronously:
@@ -134,6 +233,12 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
     if (activeStore === stopping.store) activeStore = undefined
     replyCapability = { error: 'dsh-lark-inbox 正在重启网关' }
     gatewayHealth = { status: 'connecting' }
+    // Stop accepting new answers immediately, then let the in-flight turn be
+    // resolved by whichever process runs next: this one cannot know how long it
+    // sat, and `recoverInflight` is what turns that into a sensible outcome.
+    const stoppingResponder = activeResponder
+    activeResponder = undefined
+    stoppingResponder?.dispose()
     // Serialize teardowns: a rebuild during a rebuild must not close the new
     // socket with the old teardown's store handle.
     const previous = pendingTeardown
@@ -233,7 +338,11 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
         }
         const decision = gateEvent(input, gatingConfig(config))
         if (!decision.accept) { log.warn('dsh-lark-inbox: 丢弃飞书事件 %s：%s', envelope.eventId, decision.reason); return }
-        store.append(envelope)
+        const stored = store.append(envelope)
+        // Only a message this call actually stored is admitted: a redelivery has
+        // already been considered once, and re-running admission on it could open
+        // a second batch for one question.
+        if (stored === 'appended') activeResponder?.kick(envelope)
       },
     }
     let gateway: ReturnType<NonNullable<LarkInboxServiceDeps['createGateway']>>
@@ -249,9 +358,32 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
       store,
       gateway,
       stop: async () => {
+        const responder = activeResponder
+        activeResponder = undefined
+        responder?.dispose()
         try { await gateway.stop() } finally { store.close() }
       },
     }
+    const responder = new ReplyResponder(store, {
+      engine: enginePorts(),
+      sender: () => replyCapability.sender,
+      config: () => {
+        const resolved = autoReplyConfig(effectiveConfig(current()))
+        // An empty working directory means "the host's own", which is what keeps a
+        // fresh installation useful without asking the operator for a path first.
+        return { ...resolved, cwd: resolved.cwd === '' ? process.cwd() : resolved.cwd }
+      },
+      now: () => Date.now(),
+      log: {
+        info: message => log.info(message),
+        warn: message => log.warn(message),
+        error: message => log.error(message),
+      },
+      setInterval: (run, ms) => setInterval(run, ms),
+      clearInterval: handle => { clearInterval(handle as ReturnType<typeof setInterval>) },
+    })
+    activeResponder = responder
+    responder.start()
     log.info('dsh-lark-inbox: 使用飞书应用 %s', describeFeishuCredentials(credentials))
     void gateway.start().catch(error => log.error('dsh-lark-inbox: 网关启动失败：%s', error instanceof Error ? error.message : String(error)))
     if (active.announceToAgent) {
@@ -263,6 +395,18 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
     own(registerInboxTools(ctx, () => activeStore, {
       gatewayStatus: () => gatewayHealth,
       reply: () => replyCapability,
+    }))
+    // One subscription for the domain, not one per runtime: the responder is
+    // rebuilt whenever settings or credentials change, and a per-runtime listener
+    // would leak a handler on every rebuild.
+    own(ctx.on('session/event', (session: unknown, event: unknown) => {
+      const responder = activeResponder
+      if (responder === undefined) return
+      const sessionId = typeof session === 'object' && session !== null
+        ? (session as { id?: unknown }).id
+        : undefined
+      if (typeof sessionId !== 'string' || sessionId === '') return
+      responder.handleSessionEvent(sessionId, event)
     }))
     own(() => { disposeSection?.(); disposeSection = undefined })
     // An async disposer: `registerResources` records it like any other release and
@@ -307,3 +451,5 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
 }
 
 export { Config, LARK_INBOX_SETTINGS_NAMESPACE, InboxStore, LarkGateway, LarkWizard, makeLarkWizardRoutes }
+export { ReplyStore } from './reply-store.ts'
+export { ReplyResponder } from './responder.ts'

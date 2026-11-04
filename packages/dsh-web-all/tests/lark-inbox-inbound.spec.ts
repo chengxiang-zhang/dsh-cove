@@ -91,6 +91,9 @@ function context() {
     tools: { register: (definition: { name: string; execute: Function }) => { definitions.push(definition as never); return vi.fn() } },
     systemPrompt: { section: () => vi.fn() },
     webServer: { register: () => vi.fn() },
+    // The answer path subscribes to session events; a fake context without `on`
+    // would fail this domain's whole registration.
+    on: () => vi.fn(),
   }
   return { ctx, definitions, warn, info, error }
 }
@@ -392,7 +395,7 @@ describe('queue reliability', () => {
     const threshold = Date.now() + 5
     while (Date.now() < threshold) { /* wait out the stale window */ }
     expect(store.recoverStale()).toBe(1)
-    expect(store.stats()).toEqual({ pending: 1, processing: 0, done: 0, dead: 0, total: 1 })
+    expect(store.stats()).toEqual({ pending: 1, processing: 0, routed: 0, done: 0, dead: 0, total: 1 })
     store.close()
   })
 

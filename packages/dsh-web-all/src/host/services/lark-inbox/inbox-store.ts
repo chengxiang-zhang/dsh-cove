@@ -25,12 +25,18 @@
  *   both receive one message.
  * - `recoverStale()` sends an exhausted row to `dead`, never back to `pending`:
  *   a message that poisoned every attempt must not loop forever.
+ * - `routed` is the one status this file never writes: the reply ledger owns a
+ *   message once an agent turn is responsible for answering it, and no claim path
+ *   here selects that status. It exists so `pop()` cannot hand an in-progress
+ *   turn's message to a tool halfway through, which the stale-claim sweep would
+ *   otherwise do after `staleTimeoutMs`.
  */
 
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { envelopeToLine, inboxFilePath, type LarkInboxEnvelope } from '../../../core/lark-inbox/queue.ts'
+import { ReplyStore } from './reply-store.ts'
 
 const DEFAULT_MAX_ATTEMPTS = 5
 const DEFAULT_STALE_TIMEOUT_MS = 300_000
@@ -54,6 +60,8 @@ export type InboxSettleStatus = 'done' | 'pending' | 'dead' | 'not-found'
 export interface InboxStoreStats {
   pending: number
   processing: number
+  /** Messages an agent turn is currently responsible for answering. */
+  routed: number
   done: number
   dead: number
   total: number
@@ -74,11 +82,23 @@ export class InboxStore {
   private readonly staleTimeoutMs: number
   private closed = false
 
+  /**
+   * The reply ledger, on this store's connection.
+   *
+   * Attaching a message to an agent turn and creating that turn must commit
+   * together; a second connection to the same file could interleave and leave a
+   * `routed` message belonging to no job, which no consumer would ever see again.
+   * The handle therefore stays private to this file and the ledger is handed the
+   * same one at construction.
+   */
+  readonly reply: ReplyStore
+
   private constructor(db: DatabaseSync, options: InboxStoreOptions) {
     this.db = db
     this.rootDir = options.rootDir
     this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     this.staleTimeoutMs = options.staleTimeoutMs ?? DEFAULT_STALE_TIMEOUT_MS
+    this.reply = new ReplyStore(db)
   }
 
   static open(options: InboxStoreOptions): InboxStore {
@@ -276,12 +296,15 @@ export class InboxStore {
   stats(): InboxStoreStats {
     const rows = this.db.prepare('SELECT status, COUNT(*) AS cnt FROM inbox_events GROUP BY status')
       .all() as unknown as Array<{ status: string | number | bigint | Uint8Array | null; cnt: number | bigint }>
-    const counts = { pending: 0, processing: 0, done: 0, dead: 0 }
+    const counts = { pending: 0, processing: 0, routed: 0, done: 0, dead: 0 }
     for (const row of rows) {
       const status = String(row.status)
       if (status in counts) counts[status as keyof typeof counts] = Number(row.cnt)
     }
-    return { ...counts, total: counts.pending + counts.processing + counts.done + counts.dead }
+    return {
+      ...counts,
+      total: counts.pending + counts.processing + counts.routed + counts.done + counts.dead,
+    }
   }
 
   close(): void {

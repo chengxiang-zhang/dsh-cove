@@ -64,6 +64,10 @@ export const LARK_INBOX_FIELDS = [
   'queueDir',
   'maxAttempts',
   'staleTimeoutMs',
+  'autoReplyMode',
+  'autoReplyOpenIds',
+  'autoReplyCwd',
+  'autoReplyPreamble',
 ] as const
 
 export type LarkInboxField = (typeof LARK_INBOX_FIELDS)[number]
@@ -90,6 +94,10 @@ export interface LarkInboxSettings {
   queueDir?: string
   maxAttempts?: number
   staleTimeoutMs?: number
+  autoReplyMode?: 'off' | 'probe' | 'self'
+  autoReplyOpenIds?: string[]
+  autoReplyCwd?: string
+  autoReplyPreamble?: string
 }
 
 /** 共享 `feishu` 命名空间的字段子集。 */
@@ -116,6 +124,25 @@ function booleanField(field: string): SettingsFieldSpec {
 function openIdsField(): SettingsFieldSpec {
   return {
     field: 'allowedOpenIds',
+    format: value => Array.isArray(value) ? value.join('\n') : '',
+    parse: (text) => {
+      const trimmed = text.trim()
+      if (trimmed === '') return { kind: 'clear' }
+      return { kind: 'set', value: trimmed.split(/[\n,;]+/u).map(item => item.trim()).filter(Boolean) }
+    },
+  }
+}
+
+/**
+ * 自动回话的允许名单：一行一个，也接受逗号/分号分隔。
+ *
+ * 与 `allowedOpenIds` 分开，因为两者是两件事：那个决定"谁能进入队列、供 agent
+ * 读取"，这个决定"谁能得到一个回合的回复"。合成一个会让收紧收件箱时顺手改掉
+ * 回话范围，反之亦然。
+ */
+function autoReplyOpenIdsField(): SettingsFieldSpec {
+  return {
+    field: 'autoReplyOpenIds',
     format: value => Array.isArray(value) ? value.join('\n') : '',
     parse: (text) => {
       const trimmed = text.trim()
@@ -169,6 +196,10 @@ export class LarkSettingsController {
       settingsTextField('queueDir'),
       settingsNumberField('maxAttempts'),
       settingsNumberField('staleTimeoutMs'),
+      settingsTextField('autoReplyMode'),
+      autoReplyOpenIdsField(),
+      settingsTextField('autoReplyCwd'),
+      settingsTextField('autoReplyPreamble'),
     ])
     this.credentialForm = new SettingsFormModel<FeishuCredentialSettings>(scopes.credentials, [
       settingsTextField('appId'),
@@ -357,6 +388,54 @@ export function LarkSettingsPage(props: LarkPageProps): ReactNode {
           {...state.staleTimeoutMs}
           onEdit={(text) => { props.edit('staleTimeoutMs', text) }}
           onReset={() => { props.resetField('staleTimeoutMs') }}
+        />
+        <SettingsValueField
+          id="lark-auto-reply-mode"
+          label={t('settings.autoReplyMode')}
+          hint={t('settings.autoReplyModeHint')}
+          overriddenLabel={t('settings.overridden')}
+          resetLabel={t('settings.reset')}
+          invalidLabel={t('settings.invalid')}
+          disabled={disabled}
+          {...state.autoReplyMode}
+          onEdit={(text) => { props.edit('autoReplyMode', text) }}
+          onReset={() => { props.resetField('autoReplyMode') }}
+        />
+        <SettingsValueField
+          id="lark-auto-reply-open-ids"
+          label={t('settings.autoReplyOpenIds')}
+          hint={t('settings.autoReplyOpenIdsHint')}
+          overriddenLabel={t('settings.overridden')}
+          resetLabel={t('settings.reset')}
+          invalidLabel={t('settings.invalid')}
+          disabled={disabled}
+          {...state.autoReplyOpenIds}
+          onEdit={(text) => { props.edit('autoReplyOpenIds', text) }}
+          onReset={() => { props.resetField('autoReplyOpenIds') }}
+        />
+        <SettingsValueField
+          id="lark-auto-reply-cwd"
+          label={t('settings.autoReplyCwd')}
+          hint={t('settings.autoReplyCwdHint')}
+          overriddenLabel={t('settings.overridden')}
+          resetLabel={t('settings.reset')}
+          invalidLabel={t('settings.invalid')}
+          disabled={disabled}
+          {...state.autoReplyCwd}
+          onEdit={(text) => { props.edit('autoReplyCwd', text) }}
+          onReset={() => { props.resetField('autoReplyCwd') }}
+        />
+        <SettingsValueField
+          id="lark-auto-reply-preamble"
+          label={t('settings.autoReplyPreamble')}
+          hint={t('settings.autoReplyPreambleHint')}
+          overriddenLabel={t('settings.overridden')}
+          resetLabel={t('settings.reset')}
+          invalidLabel={t('settings.invalid')}
+          disabled={disabled}
+          {...state.autoReplyPreamble}
+          onEdit={(text) => { props.edit('autoReplyPreamble', text) }}
+          onReset={() => { props.resetField('autoReplyPreamble') }}
         />
       </SettingsForm>
       <h4 className={css.title}>{t('settings.credentialsTitle')}</h4>

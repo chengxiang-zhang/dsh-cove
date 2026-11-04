@@ -62,7 +62,7 @@ export interface InboxReplySender {
     to: string,
     text: string,
     target?: { replyToMessageId?: string; idempotencyKey?: string },
-  ): Promise<{ ok: boolean; error?: string; messageId?: string }>
+  ): Promise<{ ok: boolean; error?: string; messageId?: string; retryable?: boolean }>
 }
 
 /** Whether replying is currently possible, and why not when it is not. */

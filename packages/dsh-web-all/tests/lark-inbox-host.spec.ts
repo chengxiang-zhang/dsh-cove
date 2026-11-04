@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { gateEvent } from '../src/core/lark-inbox/gating.ts'
 import { toEnvelope } from '../src/core/lark-inbox/queue.ts'
 import { Config, LARK_INBOX_GUIDANCE, register } from '../src/host/services/lark-inbox/index.ts'
+import { DEFAULT_REPLY_PREAMBLE } from '../src/host/services/lark-inbox/config.ts'
 import { bindFamilyConfig } from '../src/host/services/family-config.ts'
 import { LarkGateway, type GatewaySdk } from '../src/host/services/lark-inbox/gateway.ts'
 import { makeLarkWizardRoutes } from '../src/host/services/lark-inbox/host-routes.ts'
@@ -65,6 +66,10 @@ describe('lark inbox config and wizard route contracts', () => {
       enabled: true, announceToAgent: false, appId: '', appSecret: '', domain: 'feishu',
       requireMentionInGroup: true, allowedOpenIds: [], dropAppMessages: true,
       queueDir: '', maxAttempts: 5, staleTimeoutMs: 300_000,
+      // The answer path ships off: nothing may start speaking to a person until
+      // an operator has said who may be answered. Timing knobs are constants in
+      // config.ts, not settings, so they do not appear here.
+      autoReplyMode: 'off', autoReplyOpenIds: [], autoReplyCwd: '', autoReplyPreamble: DEFAULT_REPLY_PREAMBLE,
     })
   })
 
@@ -143,7 +148,7 @@ describe('JSONL + SQLite queue and tools', () => {
     await tools.lark_inbox_pop.execute({}, exec)
     // Second claim already used the last attempt, so the retry retires the message.
     await expect(tools.lark_inbox_ack.execute({ event_id: 'evt-1', ok: false }, exec)).resolves.toEqual({ status: 'dead' })
-    expect(store.stats()).toEqual({ pending: 0, processing: 0, done: 0, dead: 1, total: 1 })
+    expect(store.stats()).toEqual({ pending: 0, processing: 0, routed: 0, done: 0, dead: 1, total: 1 })
     // Settling something the queue never claimed is reported, not silently accepted.
     await expect(tools.lark_inbox_ack.execute({ event_id: 'missing', ok: true }, exec)).resolves.toEqual({ status: 'not-found' })
     await expect(tools.lark_inbox_ack.execute({ event_id: 'evt-1', ok: true }, exec)).resolves.toEqual({ status: 'not-found' })
@@ -239,6 +244,9 @@ describe('runtime settings and optional announcement', () => {
       tools: { register: (definition: { name: string; execute: Function }) => { definitions.push(definition); return vi.fn() } },
       systemPrompt: { section: (section: { name: string; order: number; text: string }) => { sections.push(section); return vi.fn() } },
       webServer: { register: (route: { path: string }) => { routes.push(route.path); return vi.fn() } },
+      // This domain subscribes to session events to settle a finished turn, so a
+      // context without `on` is not a context this domain can run in.
+      on: () => vi.fn(),
     }
     return { ctx, definitions, sections, routes }
   }
