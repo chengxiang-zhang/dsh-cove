@@ -6,8 +6,24 @@
  * claimed by two batches, and a closed batch with nothing to say.
  */
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
-import { dedupePromiseDays, evaluateJobs, readInboxProfile } from './lark-autoreply-check.mjs'
+import {
+  dedupePromiseDays,
+  evaluateJobs,
+  profileCandidates,
+  readAckReadings,
+  readInboxProfile,
+  readLiveProfile,
+  readSteerReadings,
+} from './lark-autoreply-check.mjs'
+
+const SCRIPT = fileURLToPath(new URL('./lark-autoreply-check.mjs', import.meta.url))
 
 const NOW = 1_700_000_000_000
 const STUCK = 10 * 60_000
@@ -183,6 +199,7 @@ test('reads the inbox block without a YAML parser', () => {
   assert.deepEqual(readInboxProfile(PROFILE), {
     mode: 'probe',
     openIds: ['ou_395f', 'ou_abc'],
+    hasOpenIdsKey: true,
     cwd: '/Users/leo/code/dsh-web',
   })
 })
@@ -198,12 +215,14 @@ test('reports an absent block as unknown rather than as a default', () => {
   assert.equal(readInboxProfile(''), undefined)
   // A block that exists but declares nothing is still readable: it means "no
   // settings here", which the caller reports as an empty allowlist, not as unknown.
-  assert.deepEqual(readInboxProfile('    lark-inbox:'), { openIds: [] })
+  // `hasOpenIdsKey` is what lets it say that without also claiming the setting was
+  // configured and left empty.
+  assert.deepEqual(readInboxProfile('    lark-inbox:'), { openIds: [], hasOpenIdsKey: false })
 })
 
 test('an empty allowlist reads as no restriction', () => {
   const parsed = readInboxProfile('  lark-inbox:\n    autoReplyMode: self\n')
-  assert.deepEqual(parsed, { mode: 'self', openIds: [] })
+  assert.deepEqual(parsed, { mode: 'self', openIds: [], hasOpenIdsKey: false })
 })
 
 test('a sender outside the allowlist fails the criterion', () => {
@@ -220,9 +239,48 @@ test('a sender outside the allowlist fails the criterion', () => {
   assert.match(criteria.allowlist.detail, /ou_stranger/)
 })
 
-test('an unreadable profile is unknown, not a pass', () => {
+test('an unreadable profile fails the allowlist criterion instead of shrugging', () => {
+  // SKIP here was the defect: a run that could not look at the allowlist read the
+  // same as a run that found nothing wrong with it.
   const criteria = byId(evaluateJobs({ jobs: [], messages: [], now: NOW, stuckMs: STUCK }))
-  assert.equal(criteria.allowlist.ok, null)
+  assert.equal(criteria.allowlist.ok, false)
+  assert.match(criteria.allowlist.detail, /读不到/)
+})
+
+test('a missing profile names the reason it could not be read', () => {
+  const criteria = byId(evaluateJobs({
+    jobs: [],
+    messages: [],
+    profileProblem: '找不到 profile（试过 /nowhere/cordis.patch.yml）',
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  assert.equal(criteria.allowlist.ok, false)
+  assert.match(criteria.allowlist.detail, /\/nowhere\/cordis\.patch\.yml/)
+})
+
+test('a block with no allowlist key says so rather than claiming coverage', () => {
+  const criteria = byId(evaluateJobs({
+    jobs: [],
+    messages: [],
+    liveConfig: { mode: 'self', openIds: [], hasOpenIdsKey: false },
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  assert.equal(criteria.allowlist.ok, true)
+  assert.match(criteria.allowlist.detail, /没有配置 autoReplyOpenIds/)
+})
+
+test('an allowlist that was configured and left empty reads differently', () => {
+  const criteria = byId(evaluateJobs({
+    jobs: [],
+    messages: [],
+    liveConfig: { mode: 'self', openIds: [], hasOpenIdsKey: true },
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  assert.equal(criteria.allowlist.ok, true)
+  assert.match(criteria.allowlist.detail, /白名单为空/)
 })
 
 
@@ -285,4 +343,209 @@ test('a trailing comment does not turn a retention number into a promise of fore
 test('an inline array and quoted keys are read, not ignored', () => {
   const parsed = readInboxProfile('  "lark-inbox":\n    autoReplyOpenIds: [ou_a, "ou_b"]\n')
   assert.deepEqual(parsed.openIds, ['ou_a', 'ou_b'])
+})
+
+
+const PROFILE_WITH_ALLOWLIST = '- id: web-all\n  config:\n    lark-inbox:\n      autoReplyMode: self\n      autoReplyOpenIds:\n        - ou_owner\n'
+const PROFILE_WITHOUT_BLOCK = '- id: web-all\n  config:\n    feishu:\n      appId: cli_x\n'
+
+test('an explicit profile path is the only path tried', () => {
+  // Naming a file and getting a clean reading from a different one is worse than an
+  // error: the caller believes the named file was checked.
+  const candidates = profileCandidates({ explicit: '/tmp/only-this.yml', home: '/home/x', db: '/home/x/.dsh/lark-inbox/inbox.sqlite' })
+  assert.deepEqual(candidates, ['/tmp/only-this.yml'])
+})
+
+test('the profile is looked for independently of where the ledger sits', () => {
+  // This is the defect: the path used to be derived from the ledger alone, so an
+  // audit of a copied ledger lost the allowlist evidence entirely.
+  const candidates = profileCandidates({ home: '/home/x', db: '/elsewhere/lark-inbox/inbox.sqlite' })
+  assert.ok(candidates.includes('/home/x/.dsh/profiles/web/cordis.patch.yml'))
+  assert.ok(candidates.includes('/elsewhere/profiles/web/cordis.patch.yml'))
+  const withHome = profileCandidates({ dshHome: '/custom', home: '/home/x', db: '/elsewhere/lark-inbox/inbox.sqlite' })
+  assert.equal(withHome[0], '/custom/profiles/web/cordis.patch.yml')
+})
+
+test('reads the live profile, and says why when it cannot', () => {
+  const root = mkdtempSync(join(tmpdir(), 'lark-profile-'))
+  try {
+    const good = join(root, 'good.yml')
+    writeFileSync(good, PROFILE_WITH_ALLOWLIST)
+    const read = readLiveProfile({ explicit: good, home: root, db: join(root, 'lark-inbox', 'inbox.sqlite') })
+    assert.deepEqual(read.config.openIds, ['ou_owner'])
+    assert.equal(read.config.hasOpenIdsKey, true)
+
+    // Negative control: the file exists, the block inside it does not.
+    const missingBlock = join(root, 'noblk.yml')
+    writeFileSync(missingBlock, PROFILE_WITHOUT_BLOCK)
+    const noBlock = readLiveProfile({ explicit: missingBlock, home: root, db: join(root, 'lark-inbox', 'inbox.sqlite') })
+    assert.equal(noBlock.config, undefined)
+    assert.match(noBlock.problem, /没有 lark-inbox 段/)
+
+    const gone = readLiveProfile({ explicit: join(root, 'nope.yml'), home: root, db: join(root, 'lark-inbox', 'inbox.sqlite') })
+    assert.equal(gone.config, undefined)
+    assert.match(gone.problem, /找不到 profile/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+
+/**
+ * A ledger the CLI can open, built with the columns this build writes.
+ *
+ * The readings and the exit codes are only meaningful against a real file, so the
+ * cases below run the CLI rather than calling its internals: an exit code is the
+ * contract a caller actually depends on.
+ */
+function makeLedger({ withColumns = true, jobs = [], messages = [], steerStates = [], carried = 0, via = [], vetoed = 0 } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'lark-ledger-'))
+  const dir = join(root, 'lark-inbox')
+  mkdirSync(dir, { recursive: true })
+  const db = new DatabaseSync(join(dir, 'inbox.sqlite'))
+  const extraJob = withColumns ? ", carry_until INTEGER, reply_via TEXT NOT NULL DEFAULT 'text'" : ''
+  const extraMember = withColumns ? ", steer_state TEXT NOT NULL DEFAULT 'none'" : ''
+  db.exec('CREATE TABLE inbox_events (event_id TEXT PRIMARY KEY, received_at INTEGER NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL)')
+  db.exec('CREATE TABLE conv_bindings (conv_key TEXT PRIMARY KEY)')
+  db.exec(`CREATE TABLE reply_jobs (job_id TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'request', state TEXT NOT NULL,
+    outcome TEXT, reply_to_message_id TEXT NOT NULL DEFAULT '', reply_text TEXT, reply_message_id TEXT,
+    end_reason TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL${extraJob})`)
+  db.exec(`CREATE TABLE reply_job_messages (message_id TEXT NOT NULL, job_id TEXT NOT NULL${extraMember})`)
+
+  for (const row of jobs) {
+    db.prepare(`INSERT INTO reply_jobs (job_id, kind, state, outcome, reply_text, reply_message_id, end_reason, created_at, updated_at${withColumns ? ', carry_until' : ''})
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${withColumns ? ', ?' : ''})`).run(
+      row.jobId, row.kind ?? 'request', row.state, row.outcome ?? 'answer', row.replyText ?? '在的',
+      row.replyMessageId ?? 'om_sent', row.endReason ?? null, row.createdAt ?? Date.now() - 60_000,
+      row.updatedAt ?? Date.now() - 30_000, ...(withColumns ? [row.carryUntil ?? null] : []),
+    )
+  }
+  for (const row of messages) {
+    db.prepare(`INSERT INTO reply_job_messages (message_id, job_id${withColumns ? ', steer_state' : ''}) VALUES (?, ?${withColumns ? ', ?' : ''})`)
+      .run(row.messageId, row.jobId, ...(withColumns ? [row.steerState ?? 'none'] : []))
+  }
+  for (const state of steerStates) {
+    if (withColumns) db.prepare("INSERT INTO reply_job_messages (message_id, job_id, steer_state) VALUES (?, 'fj_1', ?)").run(`om_${state}_${Math.random()}`, state)
+  }
+  for (const row of via) {
+    if (withColumns) db.prepare('UPDATE reply_jobs SET reply_via = ? WHERE job_id = ?').run(row.replyVia, row.jobId)
+  }
+  for (let index = 0; index < carried; index += 1) {
+    if (withColumns) db.prepare('UPDATE reply_jobs SET carry_until = ? WHERE job_id = ?').run(Date.now() + 15_000, jobs[index]?.jobId ?? 'fj_1')
+  }
+  db.close()
+  writeFileSync(join(dir, 'responder.json'), JSON.stringify({
+    startedAt: Date.now() - 60_000, sweptAt: Date.now() - 1000, mode: 'self',
+    answered: 0, open: 0, failed: 0, steer: 'on', router: 'on',
+  }))
+  const profile = join(root, 'profile.yml')
+  writeFileSync(profile, PROFILE_WITH_ALLOWLIST)
+  return { root, db: join(dir, 'inbox.sqlite'), profile, cleanup: () => rmSync(root, { recursive: true, force: true }) }
+}
+
+/** A passing ledger: one answered turn, one member, nothing open. */
+function passingLedger(options = {}) {
+  return makeLedger({
+    jobs: [{ jobId: 'fj_1', state: 'replied', outcome: 'answer' }],
+    messages: [{ messageId: 'om_1', jobId: 'fj_1' }],
+    ...options,
+  })
+}
+
+/** Run the CLI the way a caller does, with a profile pinned so nothing leaks in. */
+function runCheck(ledger, extra = []) {
+  return spawnSync(process.execPath, [SCRIPT, '--db', ledger.db, '--profile', ledger.profile, ...extra], { encoding: 'utf8' })
+}
+
+test('the readings are printed even though they are not part of the verdict', () => {
+  const ledger = passingLedger({ steerStates: ['consumed'], carried: 1, via: [{ jobId: 'fj_1', replyVia: 'reaction' }], vetoed: 0 })
+  try {
+    const run = runCheck(ledger)
+    assert.equal(run.status, 0, run.stdout + run.stderr)
+    assert.match(run.stdout, /读数 steer/)
+    assert.match(run.stdout, /consume 1/)
+    assert.match(run.stdout, /carried 1/)
+    assert.match(run.stdout, /读数 ack/)
+    assert.match(run.stdout, /表情 1/)
+  } finally {
+    ledger.cleanup()
+  }
+})
+
+test('a host that never used either feature still passes', () => {
+  // Both readings at zero is a healthy installation, which is why they are readings
+  // and not criteria.
+  const ledger = passingLedger()
+  try {
+    const run = runCheck(ledger)
+    assert.equal(run.status, 0, run.stdout + run.stderr)
+    assert.match(run.stdout, /consume 0/)
+  } finally {
+    ledger.cleanup()
+  }
+})
+
+test('--require-steer turns "no evidence" into a distinct exit code', () => {
+  const quiet = passingLedger()
+  try {
+    const run = runCheck(quiet, ['--require-steer'])
+    // Exit 3, not 1: nothing failed, nothing was proven.
+    assert.equal(run.status, 3, run.stdout + run.stderr)
+    assert.match(run.stdout, /没有可判定的插话证据/)
+  } finally {
+    quiet.cleanup()
+  }
+
+  const used = passingLedger({ steerStates: ['consumed'] })
+  try {
+    const run = runCheck(used, ['--require-steer'])
+    assert.equal(run.status, 0, run.stdout + run.stderr)
+  } finally {
+    used.cleanup()
+  }
+})
+
+test('a ledger from before the feature reports the missing columns, not zeros', () => {
+  const ledger = makeLedger({
+    withColumns: false,
+    jobs: [{ jobId: 'fj_1', state: 'replied', outcome: 'answer' }],
+    messages: [{ messageId: 'om_1', jobId: 'fj_1' }],
+  })
+  try {
+    const run = runCheck(ledger)
+    // Default verdict is unaffected: the readings are not criteria.
+    assert.equal(run.status, 0, run.stdout + run.stderr)
+    assert.match(run.stdout, /账本里没有插话列/)
+    // And with the requirement on, no columns is the same answer as no evidence.
+    const required = runCheck(ledger, ['--require-steer'])
+    assert.equal(required.status, 3, required.stdout + required.stderr)
+  } finally {
+    ledger.cleanup()
+  }
+})
+
+test('a profile without the block fails the run, and says where it looked', () => {
+  // The negative control for the whole slice: delete the segment and the check must
+  // stop being green.
+  const ledger = passingLedger()
+  try {
+    writeFileSync(ledger.profile, PROFILE_WITHOUT_BLOCK)
+    const run = runCheck(ledger)
+    assert.equal(run.status, 1, run.stdout + run.stderr)
+    assert.match(run.stdout, /FAIL {2}allowlist/)
+    assert.match(run.stdout, /没有 lark-inbox 段/)
+  } finally {
+    ledger.cleanup()
+  }
+})
+
+test('a profile path that does not exist fails instead of falling back', () => {
+  const ledger = passingLedger()
+  try {
+    const run = spawnSync(process.execPath, [SCRIPT, '--db', ledger.db, '--profile', join(ledger.root, 'absent.yml')], { encoding: 'utf8' })
+    assert.equal(run.status, 1, run.stdout + run.stderr)
+    assert.match(run.stdout, /找不到 profile/)
+  } finally {
+    ledger.cleanup()
+  }
 })

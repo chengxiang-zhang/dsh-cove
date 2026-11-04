@@ -28,8 +28,20 @@
  *
  * Usage:
  *   node scripts/lark-autoreply-check.mjs [--db <path>] [--since-hours <n>] [--stuck-minutes <n>]
+ *                                        [--profile <path>] [--require-steer]
  *
- * Exit: 0 all applicable criteria hold, 1 something failed, 2 usage or IO error.
+ * Two readings are printed after the criteria and are not part of the verdict:
+ * `steer` (how many messages were folded into a running turn, held for the turn that
+ * would consume them, or stranded) and `ack` (how many answers went out as a text, as
+ * a reaction, or were vetoed back into words). They are readings because a host that
+ * has never used either feature is healthy, not failing. `--require-steer` is for the
+ * caller who is specifically asking "did folding in actually happen": with that flag,
+ * a ledger that shows none of it exits 3 - the same "no evidence" answer the criteria
+ * give - instead of 0.
+ *
+ * Exit: 0 all applicable criteria hold, 1 something failed, 2 usage or IO error,
+ *       3 no failure but a criterion or (with --require-steer) the steer reading
+ *         produced no evidence.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -45,6 +57,8 @@ import { pathToFileURL } from 'node:url'
  * @property {number} answered
  * @property {number} open
  * @property {number} failed
+ * @property {string} [steer] - the steer switch in force when the file was written
+ * @property {string} [router] - the router switch in force when the file was written
  */
 
 /**
@@ -57,7 +71,7 @@ import { pathToFileURL } from 'node:url'
  * the caller reports "cannot tell" instead of a pass - a config check that
  * silently misreads is worse than no check.
  * @param {string} text - profile patch contents.
- * @returns {{mode?: string, openIds: string[], cwd?: string, receipt?: boolean} | undefined}
+ * @returns {{mode?: string, openIds: string[], hasOpenIdsKey: boolean, cwd?: string, receipt?: boolean, retentionDays?: number} | undefined}
  */
 export function readInboxProfile(text) {
   const lines = text.split('\n')
@@ -65,8 +79,15 @@ export function readInboxProfile(text) {
   const start = stripped.findIndex(line => /^\s*["']?lark-inbox["']?:\s*$/u.test(line))
   if (start === -1) return undefined
   const baseIndent = lines[start].search(/\S/u)
-  /** @type {{mode?: string, openIds: string[], cwd?: string, receipt?: boolean}} */
-  const result = { openIds: [] }
+  /**
+   * `hasOpenIdsKey` distinguishes "this block never configured an allowlist" from
+   * "this block configures one and it is empty". Both read as an empty list in the
+   * schema, but only the first one means the parser had nothing to find - and a
+   * reading that cannot tell those apart reports a healthy install as unreadable, or
+   * the reverse.
+   * @type {{mode?: string, openIds: string[], hasOpenIdsKey: boolean, cwd?: string, receipt?: boolean, retentionDays?: number}}
+   */
+  const result = { openIds: [], hasOpenIdsKey: false }
   let listOwner = ''
   for (let index = start + 1; index < stripped.length; index += 1) {
     const raw = stripped[index]
@@ -85,9 +106,12 @@ export function readInboxProfile(text) {
     const scalar = trimQuotes(value)
     // Inline arrays are legal YAML and were read as an empty list, which reported
     // "no allowlist" for a profile that had one.
-    if (key === 'autoReplyOpenIds' && value.startsWith('[')) {
-      result.openIds = value.replace(/^\[|\]$/gu, '').split(',').map(item => trimQuotes(item)).filter(item => item !== '')
-      listOwner = ''
+    if (key === 'autoReplyOpenIds') {
+      result.hasOpenIdsKey = true
+      if (value.startsWith('[')) {
+        result.openIds = value.replace(/^\[|\]$/gu, '').split(',').map(item => trimQuotes(item)).filter(item => item !== '')
+        listOwner = ''
+      }
       continue
     }
     if (key === 'autoReplyMode' && scalar !== '') result.mode = scalar
@@ -96,6 +120,62 @@ export function readInboxProfile(text) {
     if (key === 'retentionDays' && scalar !== '') result.retentionDays = Number(scalar)
   }
   return result
+}
+
+/**
+ * Every path worth trying for the profile that configures this installation.
+ *
+ * The single derived path - ledger's grandparent - was the whole reason this check
+ * lost its evidence: passing `--db` at anything but the default layout pointed the
+ * profile lookup somewhere that does not exist, and the allowlist criterion answered
+ * "cannot tell" for a host whose profile was right there. The ledger's location is
+ * not the profile's location; it is only one hint among several.
+ * @param {object} input - what the caller knows.
+ * @param {string} [input.explicit] - `--profile`, which wins outright.
+ * @param {string} [input.dshHome] - `$DSH_HOME`, when the caller exports one.
+ * @param {string} input.home - the user's home directory.
+ * @param {string} input.db - the ledger being read.
+ * @returns {string[]} candidate paths, most specific first, without duplicates.
+ */
+export function profileCandidates({ explicit, dshHome, home, db }) {
+  // An explicit path is the whole answer. Falling back from it would report a clean
+  // result for a file the caller named and that does not exist - the opposite of what
+  // naming it asked for.
+  if (explicit !== undefined && explicit !== '') return [explicit]
+  const list = []
+  if (dshHome !== undefined && dshHome !== '') list.push(join(dshHome, 'profiles', 'web', 'cordis.patch.yml'))
+  list.push(join(home, '.dsh', 'profiles', 'web', 'cordis.patch.yml'))
+  // A ledger audited from somewhere else still describes the home it came from.
+  list.push(join(dirname(dirname(db)), 'profiles', 'web', 'cordis.patch.yml'))
+  return [...new Set(list)]
+}
+
+/**
+ * Read the profile that is actually in force, or say precisely why not.
+ *
+ * "Cannot read it" is a finding, never a pass: a check that silently reports nothing
+ * about the allowlist is the check that let a wrong open id look healthy. The reason
+ * is therefore carried out of here rather than collapsed into undefined.
+ * @param {object} input - same shape as {@link profileCandidates}, plus the environment.
+ * @returns {{path?: string, config?: ReturnType<typeof readInboxProfile>, tried: string[], problem?: string}}
+ */
+export function readLiveProfile({ explicit, dshHome, home, db }) {
+  const tried = profileCandidates({ explicit, dshHome, home, db })
+  const found = tried.find(candidate => existsSync(candidate))
+  if (found === undefined) {
+    return { tried, problem: `找不到 profile（试过 ${tried.join('、')}）` }
+  }
+  let text
+  try {
+    text = readFileSync(found, 'utf8')
+  } catch (error) {
+    return { tried, path: found, problem: `读不了 ${found}：${error instanceof Error ? error.message : String(error)}` }
+  }
+  const config = readInboxProfile(text)
+  if (config === undefined) {
+    return { tried, path: found, problem: `${found} 里没有 lark-inbox 段` }
+  }
+  return { tried, path: found, config }
 }
 
 /**
@@ -175,12 +255,13 @@ const CLOSED_STATES = new Set(['replied', 'failed', 'cancelled', 'reply_uncertai
  * @param {Array<{eventId: string, receivedAt: number, senderOpenId?: string}>} [input.waiting] - inbound messages still pending.
  * @param {ResponderHeartbeat} [input.heartbeat] - what the live process last wrote about itself.
  * @param {string} [input.heartbeatPath] - where that file lives, for the report.
- * @param {{mode?: string, openIds: string[]}} [input.liveConfig] - the profile's inbox settings, when readable.
+ * @param {{mode?: string, openIds: string[], hasOpenIdsKey?: boolean}} [input.liveConfig] - the profile's inbox settings, when readable.
+ * @param {string} [input.profileProblem] - why the profile could not be read, when it could not.
  * @param {number} input.now - current epoch milliseconds.
  * @param {number} input.stuckMs - how long an open job, or an unanswered message, may sit.
  * @returns {Array<{id: string, label: string, ok: boolean|null, detail: string, sql: string}>} criteria in report order.
  */
-export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbeatPath, liveConfig, now, stuckMs }) {
+export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbeatPath, liveConfig, profileProblem, now, stuckMs }) {
   // A delivery is only a delivery if the platform gave back a message id. Without
   // that check, a probe run - which records the answer and sends nothing - satisfies
   // "at least one reply really went out". This was the review's sharpest finding.
@@ -240,7 +321,7 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
         : !beatPlausible
           ? `心跳时间在未来（${Math.round((beatAge ?? 0) / 60000)} 分钟），不可作为证据`
           : beatAge < stuckMs
-          ? `最后心跳 ${Math.round((beatAge ?? 0) / 1000)} 秒前，mode=${beat.mode}，已回复 ${beat.answered}，进行中 ${beat.open}`
+          ? `最后心跳 ${Math.round((beatAge ?? 0) / 1000)} 秒前，mode=${beat.mode}，已回复 ${beat.answered}，进行中 ${beat.open}；开关 steer=${beat.steer ?? '未上报'} router=${beat.router ?? '未上报'}`
           : `心跳停在 ${Math.round((beatAge ?? 0) / 60000)} 分钟前，mode=${beat.mode}：链路还在，但已经不动了`,
       sql: `select * from json_each(readfile('${heartbeatPath ?? 'responder.json'}'))`,
     },
@@ -256,11 +337,17 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
     {
       id: 'allowlist',
       label: '在等的人都在白名单里',
-      ok: profile === undefined ? null : straySenders.length === 0,
+      // No profile is a failure, not a shrug: the whole point of this criterion is
+      // that a wrong open id is invisible until someone is refused, and "I could not
+      // look" leaves exactly that risk unmeasured. It used to report SKIP here, which
+      // made a run of nothing-but-skips look like a run of nothing-wrong.
+      ok: profile === undefined ? false : straySenders.length === 0,
       detail: profile === undefined
-        ? '读不到 profile 里的 lark-inbox 段，无法核对（不当作通过）'
+        ? `读不到 profile 里的 lark-inbox 段，无法核对白名单：${profileProblem ?? '原因未知'}`
         : profile.openIds.length === 0
-          ? '白名单为空：任何能给机器人发消息的人都会被回答'
+          ? (profile.hasOpenIdsKey === false
+            ? '这段没有配置 autoReplyOpenIds，等同空名单：任何能给机器人发消息的人都会被回答'
+            : '白名单为空：任何能给机器人发消息的人都会被回答')
           : straySenders.length === 0
             ? `白名单 ${profile.openIds.length} 项覆盖了当前所有待答消息的发送者`
             : `${straySenders.join(', ')} 不在白名单里——这些消息会被拒绝`,
@@ -310,6 +397,57 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
 }
 
 /**
+ * Read how folding a message into a running turn actually went.
+ *
+ * Five of the six numbers are the member rows' own state; `carried` is a job count,
+ * because a hold is a property of the turn that ended rather than of a message. An
+ * installation whose ledger predates the feature has no such columns, and saying so
+ * is the honest answer - zeros for a column that does not exist would read as "the
+ * feature ran and did nothing".
+ * @param {DatabaseSync} handle - the ledger, read-only.
+ * @returns {{hasColumns: boolean, consumed: number, carried: number, stranded: number, returned: number, pending: number, none: number}}
+ */
+export function readSteerReadings(handle) {
+  const columns = name => new Set(handle.prepare(`PRAGMA table_info(${name})`).all().map(row => String(row.name)))
+  const messageColumns = columns('reply_job_messages')
+  const jobColumns = columns('reply_jobs')
+  const hasState = messageColumns.has('steer_state')
+  const hasCarry = jobColumns.has('carry_until')
+  const counts = { none: 0, pending: 0, consumed: 0, returned: 0, stranded: 0 }
+  if (hasState) {
+    for (const row of handle.prepare('SELECT steer_state AS state, COUNT(*) AS n FROM reply_job_messages GROUP BY 1').all()) {
+      const key = String(row.state)
+      if (key in counts) counts[key] = Number(row.n)
+    }
+  }
+  const carried = hasCarry
+    ? Number(handle.prepare('SELECT COUNT(*) AS n FROM reply_jobs WHERE carry_until IS NOT NULL').get().n)
+    : 0
+  return { hasColumns: hasState && hasCarry, ...counts, carried }
+}
+
+/**
+ * Read how the answer reached people: text, reaction, or a vetoed reaction.
+ * @param {DatabaseSync} handle - the ledger, read-only.
+ * @returns {{hasColumns: boolean, reaction: number, text: number, vetoed: number}}
+ */
+export function readAckReadings(handle) {
+  const jobColumns = new Set(handle.prepare('PRAGMA table_info(reply_jobs)').all().map(row => String(row.name)))
+  const hasVia = jobColumns.has('reply_via')
+  const byVia = { reaction: 0, text: 0 }
+  if (hasVia) {
+    for (const row of handle.prepare('SELECT reply_via AS via, COUNT(*) AS n FROM reply_jobs GROUP BY 1').all()) {
+      const key = String(row.via)
+      if (key in byVia) byVia[key] = Number(row.n)
+    }
+  }
+  // `end_reason` has always existed, so a veto can be counted even on a ledger that
+  // predates the column that records the reaction.
+  const vetoed = Number(handle.prepare("SELECT COUNT(*) AS n FROM reply_jobs WHERE end_reason = 'ack-vetoed'").get().n)
+  return { hasColumns: hasVia, ...byVia, vetoed }
+}
+
+/**
  * Open the ledger read-only.
  *
  * Read-only matters: this tool must never be able to create a table, migrate a
@@ -334,12 +472,14 @@ function readArgs(argv) {
     db: args.get('db') ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'lark-inbox', 'inbox.sqlite'),
     sinceHours: Number(args.get('since-hours') ?? 24),
     stuckMinutes: Number(args.get('stuck-minutes') ?? 10),
+    profile: args.get('profile'),
+    requireSteer: args.has('require-steer'),
   }
 }
 
 /** CLI entry. */
 function main(argv) {
-  const { db, sinceHours, stuckMinutes } = readArgs(argv.slice(2))
+  const { db, sinceHours, stuckMinutes, profile, requireSteer } = readArgs(argv.slice(2))
   if (!Number.isFinite(sinceHours) || sinceHours <= 0) {
     process.stderr.write('lark-autoreply-check: --since-hours must be a positive number\n')
     process.exit(2)
@@ -368,6 +508,8 @@ function main(argv) {
   let heartbeat
   let heartbeatPath
   let liveConfig
+  let steerReadings
+  let ackReadings
   try {
     const tables = handle.prepare("select name from sqlite_master where type='table'").all()
     const names = new Set(tables.map(row => String(row.name)))
@@ -425,32 +567,35 @@ function main(argv) {
         } catch { senderOpenId = '' }
         return { eventId: String(row.event_id), receivedAt: Number(row.received_at), senderOpenId }
       })
+    // The two readings are independent of the seven criteria, but they need the same
+    // open handle, so they are taken here rather than after it is closed.
+    steerReadings = readSteerReadings(handle)
+    ackReadings = readAckReadings(handle)
   } finally {
     handle.close()
   }
 
-  // Same home as the ledger, so a `--db` on another installation is not matched
-  // against this one's profile.
-  const profilePath = join(dirname(dirname(db)), 'profiles', 'web', 'cordis.patch.yml')
-  if (existsSync(profilePath)) {
-    try {
-      liveConfig = readInboxProfile(readFileSync(profilePath, 'utf8'))
-    } catch {
-      liveConfig = undefined
-    }
-  }
+  const live = readLiveProfile({
+    ...(profile === undefined ? {} : { explicit: profile }),
+    dshHome: process.env.DSH_HOME,
+    home: homedir(),
+    db,
+  })
+  liveConfig = live.config
   const promise = dedupePromiseDays(liveConfig?.retentionDays)
   const criteria = evaluateJobs({
     jobs,
     messages,
     waiting,
     ...(liveConfig === undefined ? {} : { liveConfig }),
+    ...(live.problem === undefined ? {} : { profileProblem: live.problem }),
     ...(heartbeat === undefined ? {} : { heartbeat }),
     ...(heartbeatPath === undefined ? {} : { heartbeatPath }),
     now: Date.now(),
     stuckMs: stuckMinutes * 60_000,
   })
   process.stdout.write(`账本 ${db}（最近 ${sinceHours} 小时：${jobs.length} 个作业 / ${messages.length} 条消息）\n`)
+  if (live.path !== undefined) process.stdout.write(`profile ${live.path}\n`)
   process.stdout.write(promise === 0
     ? '去重承诺：永久（终态记录不清理，任何重投都只会回一条）\n\n'
     : `去重承诺：${promise} 天 —— 超过这个期限的重投不再保证只回一条\n\n`)
@@ -462,11 +607,32 @@ function main(argv) {
     process.stdout.write(`      ${criterion.detail}\n`)
     process.stdout.write(`      ${criterion.sql}\n\n`)
   }
+  // Readings, not criteria: a host that never used either feature is healthy. They
+  // are printed so that "the switch is on" and "it is doing something" can be told
+  // apart from the same terminal, which is the one thing this host had no way to do
+  // while its plugin logs did not reach disk.
+  const steerLine = steerReadings.hasColumns
+    ? `consume ${steerReadings.consumed} / carried ${steerReadings.carried} / stranded ${steerReadings.stranded} / returned ${steerReadings.returned} / pending ${steerReadings.pending} / none ${steerReadings.none}`
+    : '账本里没有插话列（早于该特性）：无法判定'
+  const ackLine = ackReadings.hasColumns
+    ? `表情 ${ackReadings.reaction} / 文字 ${ackReadings.text} / 被否决 ${ackReadings.vetoed}`
+    : `账本里没有 reply_via 列；被否决 ${ackReadings.vetoed}`
+  process.stdout.write(`读数 steer       ${steerLine}\n`)
+  process.stdout.write(`读数 ack         ${ackLine}\n\n`)
   if (failed > 0) {
     process.stdout.write(`${failed} 条判据未通过。\n`)
     process.exit(1)
   }
   const skipped = criteria.filter(criterion => criterion.ok === null).map(criterion => criterion.id)
+  const steerEvidence = steerReadings.consumed + steerReadings.carried + steerReadings.stranded
+  if (requireSteer && steerEvidence === 0) {
+    // The caller asked specifically whether folding a message into a running turn
+    // happened. An empty ledger answers "not observed", which is not "it works".
+    process.stdout.write(
+      `--require-steer：没有可判定的插话证据（consume+carried+stranded=0${steerReadings.hasColumns ? '' : '，且账本缺列'}）。\n`,
+    )
+    process.exit(3)
+  }
   if (skipped.length > 0) {
     // No evidence is not the same as evidence of health. Exit 3 lets a caller tell
     // "nothing failed" from "nothing was proven" instead of treating both as green.

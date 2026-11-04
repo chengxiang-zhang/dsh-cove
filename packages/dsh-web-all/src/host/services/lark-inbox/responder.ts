@@ -53,6 +53,8 @@ import {
   steerRequestId,
   type ReplyMode,
   type ReplyOutcome,
+  type RouterMode,
+  type SteerMode,
   type SteerVerdict,
 } from '../../../core/lark-inbox/reply-machine.ts'
 import type { AutoReplyConfig } from './config.ts'
@@ -196,6 +198,17 @@ export interface ResponderHeartbeat {
   readonly answered: number
   readonly open: number
   readonly failed: number
+  /**
+   * The steer switch in force, read from live configuration at write time.
+   *
+   * Here because the alternative is an operator changing a profile and having no way
+   * to tell whether the process picked it up. A log line would do it on a host whose
+   * logs reach disk; on one where they do not, this file is the only reading, so the
+   * switch itself belongs in it.
+   */
+  readonly steer: SteerMode
+  /** The router switch in force, on the same terms as {@link steer}. */
+  readonly router: RouterMode
 }
 
 /** How often the heartbeat is refreshed at most, to keep a 2s sweep off the disk. */
@@ -290,13 +303,20 @@ export class ReplyResponder {
     if (!force && now - this.lastHeartbeatAt < HEARTBEAT_INTERVAL_MS) return
     this.lastHeartbeatAt = now
     try {
+      // Read once per write, from live configuration: a settings change has to show
+      // up on the next beat without the responder being rebuilt, or this file would
+      // report the switches the process started with rather than the ones in force.
+      const config = this.ports.config()
+      const stats = this.store.reply.stats()
       sink({
         startedAt: this.startedAt,
         sweptAt: now,
-        mode: this.ports.config().mode,
-        answered: this.ports.config().mode === 'off' ? 0 : this.store.reply.answeredCount(),
-        open: this.store.reply.stats().collecting + this.store.reply.stats().submitting + this.store.reply.stats().running + this.store.reply.stats().replying,
-        failed: this.store.reply.stats().failed,
+        mode: config.mode,
+        answered: config.mode === 'off' ? 0 : this.store.reply.answeredCount(),
+        open: stats.collecting + stats.submitting + stats.running + stats.replying,
+        failed: stats.failed,
+        steer: config.steer,
+        router: config.router,
       })
     } catch (error) {
       this.ports.log.warn(`lark-inbox: 心跳写入失败：${describeError(error)}`)

@@ -116,6 +116,11 @@ function harness(overrides: Partial<AutoReplyConfig> = {}, startClock = 1_700_00
     maxSubmitAttempts: 3,
     receipt: false,
     proactive: false,
+    // The two answer-path switches, spelled out rather than left undefined: the
+    // heartbeat publishes them, so a fixture without them would report a switch the
+    // process can never actually be in.
+    steer: 'off',
+    router: 'off',
     ...overrides,
   }
   const ports: ConstructorParameters<typeof ReplyResponder>[1] = {
@@ -866,6 +871,29 @@ describe('heartbeat', () => {
     await harnessed.flush()
     // A read-only home is not a reason to stop answering people.
     expect(harnessed.prompts).toHaveLength(1)
+  })
+
+  it('reports which switches are in force, and follows a settings change', async () => {
+    const harnessed = harness({ steer: 'shadow', router: 'off' })
+    harnessed.responder.start()
+    // The file is the only reading an operator has on a host whose logs do not reach
+    // disk: "I edited the profile" and "the process uses it" are different facts.
+    expect(harnessed.heartbeats.at(-1)).toMatchObject({ steer: 'shadow', router: 'off' })
+
+    harnessed.config.steer = 'on'
+    harnessed.config.router = 'on'
+    // One throttle window, then the next sweep: no rebuild, no restart.
+    harnessed.advance(30_000)
+    harnessed.responder.tick()
+    expect(harnessed.heartbeats.at(-1)).toMatchObject({ steer: 'on', router: 'on' })
+  })
+
+  it('does not report a switch that is off as if it were on', async () => {
+    const harnessed = harness()
+    harnessed.responder.start()
+    // The default is off for both: a heartbeat that said otherwise would be the
+    // reason someone believed a feature was live when it was not.
+    expect(harnessed.heartbeats.at(-1)).toMatchObject({ steer: 'off', router: 'off' })
   })
 })
 
