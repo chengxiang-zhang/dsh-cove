@@ -296,13 +296,11 @@
     # tools reach a session, and the native `@deepseek-ai/dsh-subagent-*` provider
     # rows stay disabled because two paths to the same CLI invite the wrong pick.
     #
-    # Both rows route through this entry. The codex row stays off until its
-    # adapter is registered on the host-assembly path and passes E4' there; the
-    # claude row is on. To expose one product only to agents composed from a copy
-    # of this preset, flip that row's `disabled`.
+    # Both rows are on. To hide one product from agents composed from a copy of
+    # this preset, add `disabled: true` to its row; the row is the per-session
+    # switch.
     - id: tool-subagent-codex
       name: '@dsh-cove/dsh-web-all/preset-tools'
-      disabled: true
       config:
         provider: codex
         toolName: subagent_codex
