@@ -390,6 +390,10 @@ export class ReplyStore {
       // Ownership moves to the ledger; no claim path selects `routed`.
       this.db.prepare("UPDATE inbox_events SET status = 'routed', updated_at = ? WHERE event_id = ?")
         .run(input.now, input.eventId)
+      // Touch the conversation: `latestDirectBinding()` answers "which chat is this
+      // person actually using", and a binding created once and never updated would
+      // point at whichever chat happened to be new first.
+      this.db.prepare('UPDATE conv_bindings SET updated_at = ? WHERE conv_key = ?').run(input.now, input.convKey)
       return { jobId, opened, attached: true }
     })
   }

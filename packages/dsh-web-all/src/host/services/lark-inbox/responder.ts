@@ -58,6 +58,18 @@ export const REPLY_RECEIPT_EMOJI = 'SMILE'
 /** How long a sweep waits before assuming an in-flight send is not coming back. */
 export const SEND_GRACE_MS = 30_000
 
+/** Backoff once the fast attempts are spent but the failure still looks temporary. */
+export const SEND_SLOW_RETRY_MS = 30 * 60_000
+
+/**
+ * How long a reply keeps trying before it is treated as undeliverable.
+ *
+ * Giving up is a real outcome and has to exist: a bot that retries a dead chat
+ * forever is a bot that never forgets. A day is long enough that a bad afternoon
+ * still ends with the person hearing back.
+ */
+export const SEND_GIVE_UP_MS = 24 * 3_600_000
+
 /** What the model says when an unprompted message is not worth sending. */
 export const SILENT_REPLY_TOKEN = 'SILENT'
 
@@ -753,6 +765,19 @@ export class ReplyResponder {
       // first attempt may have delivered before the error surfaced.
       this.store.reply.deferSend(job.jobId, detail, this.ports.now() + Math.min(30_000, 2 ** attempts * 1000), this.ports.now())
       return
+    }
+    if (attempt.retryable === true) {
+      // Fast attempts are spent but the failure is still described as temporary - a
+      // dead mobile network is the ordinary case. Falling to permanent silence here
+      // would mean the person never hears back from a hiccup, so the retry slows down
+      // instead of stopping, and stops only when the answer has clearly gone stale.
+      const age = this.ports.now() - job.createdAt
+      if (age < SEND_GIVE_UP_MS) {
+        this.store.reply.deferSend(job.jobId, detail, this.ports.now() + SEND_SLOW_RETRY_MS, this.ports.now())
+        this.ports.log.warn(`lark-inbox: 回复 ${job.jobId} 暂发不出（${detail}），${Math.round(SEND_SLOW_RETRY_MS / 60000)} 分钟后重试`)
+        return
+      }
+      this.ports.log.error(`lark-inbox: 回复 ${job.jobId} 已尝试 ${Math.round(age / 3_600_000)} 小时仍发不出，放弃`)
     }
     this.store.reply.markSendFailed(job.jobId, detail, this.ports.now())
     this.beat(true)

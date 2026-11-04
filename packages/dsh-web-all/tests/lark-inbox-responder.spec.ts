@@ -730,6 +730,25 @@ describe('status tool', () => {
   })
 })
 
+describe('conversation freshness', () => {
+  it('remembers the chat the person is actually using', async () => {
+    const harnessed = harness()
+    const olderSession = replySessionId('oc_older', 1)
+    harnessed.store.reply.ensureBinding({
+      convKey: 'oc_older',
+      chatId: 'oc_older',
+      chatType: 'p2p',
+      sessionId: olderSession,
+      now: 1_700_000_000_000,
+    })
+    harnessed.advance(60_000)
+    // Activity in the second chat must make it the current one: a notice has no
+    // message behind it to name a target, so it relies on this being right.
+    harnessed.deliver(message(1, '你好', { chatId: CHAT }))
+    expect(harnessed.store.reply.latestDirectBinding()?.convKey).toBe(CHAT)
+  })
+})
+
 describe('proactive notice', () => {
   /** Establish the direct conversation a notice could be sent into. */
   function seedConversation(harnessed: Harness): string {
@@ -1002,6 +1021,46 @@ describe('send failures', () => {
     expect(harnessed.sent).toHaveLength(2)
     expect(harnessed.sent[1].target?.idempotencyKey).toBe(harnessed.sent[0].target?.idempotencyKey)
     expect(harnessed.store.reply.job('fj_om_1')?.state).toBe('replied')
+  })
+
+  it('keeps retrying slowly while the failure still looks temporary', async () => {
+    const harnessed = harness({ maxSendAttempts: 1 })
+    harnessed.sendResult.ok = false
+    harnessed.sendResult.error = 'network down'
+    harnessed.sendResult.retryable = true
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    runTurn(harnessed, 1, { text: '在的' })
+    await harnessed.flush()
+    // The fast budget is spent; a dead network must not become permanent silence.
+    expect(harnessed.store.reply.job('fj_om_1')?.state).toBe('replying')
+
+    harnessed.sendResult.ok = true
+    harnessed.advance(31 * 60_000)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    expect(harnessed.store.reply.job('fj_om_1')?.state).toBe('replied')
+    expect(harnessed.sent.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('gives up once the answer has clearly gone stale', async () => {
+    const harnessed = harness({ maxSendAttempts: 1 })
+    harnessed.sendResult.ok = false
+    harnessed.sendResult.error = 'network down'
+    harnessed.sendResult.retryable = true
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    runTurn(harnessed, 1, { text: '在的' })
+    await harnessed.flush()
+    // A day later the news is no longer worth delivering.
+    harnessed.advance(25 * 3_600_000)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    expect(harnessed.store.reply.job('fj_om_1')?.state).toBe('failed')
   })
 
   it('stops retrying a permanent failure and retires the message', async () => {
