@@ -10,10 +10,17 @@
  * Four criteria, each with the reading behind it:
  *
  *   answered    at least one turn produced text and was delivered
+ *   consuming   no inbound message is waiting past the deadline for anything
  *   no-silence  nothing is sitting in a non-terminal state past its deadline
  *   no-duplicate one message belongs to exactly one batch
  *   explained   every closed batch has something to send, so a failure is a
  *               sentence rather than a gap
+ *
+ * `consuming` is the one criterion that reads the queue rather than the ledger,
+ * and it exists because the silent failure this feature was built to remove looks
+ * exactly like an idle one from the ledger's side: zero jobs, zero errors. A
+ * message that has waited past the deadline with nobody attached is the symptom,
+ * so it is measured directly.
  *
  * `answered` reports "no data" instead of failing when the ledger is empty: an
  * installation nobody has messaged yet has not failed, it has not started.
@@ -55,11 +62,12 @@ const CLOSED_STATES = new Set(['replied', 'failed', 'cancelled', 'reply_uncertai
  * @param {object} input
  * @param {JobFacts[]} input.jobs - every job in the window.
  * @param {Array<{messageId: string, jobId: string}>} input.messages - batch members.
+ * @param {Array<{eventId: string, receivedAt: number}>} [input.waiting] - inbound messages still pending.
  * @param {number} input.now - current epoch milliseconds.
- * @param {number} input.stuckMs - how long an open job may sit before it counts as silent.
+ * @param {number} input.stuckMs - how long an open job, or an unanswered message, may sit.
  * @returns {Array<{id: string, label: string, ok: boolean|null, detail: string, sql: string}>} criteria in report order.
  */
-export function evaluateJobs({ jobs, messages, now, stuckMs }) {
+export function evaluateJobs({ jobs, messages, waiting = [], now, stuckMs }) {
   const answered = jobs.filter(job => job.state === 'replied' && job.outcome === 'answer')
 
   const stuck = jobs.filter(job => OPEN_STATES.has(job.state) && now - job.updatedAt > stuckMs)
@@ -76,6 +84,8 @@ export function evaluateJobs({ jobs, messages, now, stuckMs }) {
     && (CLOSED_STATES.has(job.state) || job.state === 'replied')
     && (job.replyText ?? '').trim() === '')
 
+  const waitingTooLong = waiting.filter(item => now - item.receivedAt > stuckMs)
+
   return [
     {
       id: 'answered',
@@ -85,6 +95,17 @@ export function evaluateJobs({ jobs, messages, now, stuckMs }) {
         ? '账本为空：还没有人发消息，或 responder 没有运行'
         : `${answered.length} 条已回复（共 ${jobs.length} 个作业）`,
       sql: "select count(*) from reply_jobs where state='replied' and outcome='answer'",
+    },
+    {
+      id: 'consuming',
+      label: '没有入站消息在无人接管地等',
+      ok: waitingTooLong.length === 0,
+      detail: waitingTooLong.length === 0
+        ? `${waiting.length} 条待处理消息都还在时限内`
+        : `${waitingTooLong.length} 条消息等超过 ${Math.round(stuckMs / 60000)} 分钟仍没人接：${waitingTooLong
+          .map(item => `${item.eventId}(${Math.round((now - item.receivedAt) / 60000)}min)`)
+          .join(', ')}`,
+      sql: "select event_id, received_at from inbox_events where status='pending'",
     },
     {
       id: 'no-silence',
@@ -171,6 +192,7 @@ function main(argv) {
   const since = Date.now() - sinceHours * 3_600_000
   let jobs = []
   let messages = []
+  let waiting = []
   try {
     const tables = handle.prepare("select name from sqlite_master where type='table'").all()
     const names = new Set(tables.map(row => String(row.name)))
@@ -197,11 +219,15 @@ function main(argv) {
       messageId: String(row.message_id),
       jobId: String(row.job_id),
     }))
+    // Inbound messages nothing is attached to. Not filtered by `since`: a message
+    // that has been waiting for days is the finding, not an old record.
+    waiting = handle.prepare("SELECT event_id, received_at FROM inbox_events WHERE status = 'pending'")
+      .all().map(row => ({ eventId: String(row.event_id), receivedAt: Number(row.received_at) }))
   } finally {
     handle.close()
   }
 
-  const criteria = evaluateJobs({ jobs, messages, now: Date.now(), stuckMs: stuckMinutes * 60_000 })
+  const criteria = evaluateJobs({ jobs, messages, waiting, now: Date.now(), stuckMs: stuckMinutes * 60_000 })
   process.stdout.write(`账本 ${db}（最近 ${sinceHours} 小时：${jobs.length} 个作业 / ${messages.length} 条消息）\n\n`)
   let failed = 0
   for (const criterion of criteria) {

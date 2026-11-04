@@ -39,6 +39,31 @@ test('an empty ledger skips the answered criterion instead of claiming a pass', 
   assert.equal(criteria.explained.ok, true)
 })
 
+test('a message waiting past the deadline fails the consuming criterion', () => {
+  const criteria = byId(evaluateJobs({
+    jobs: [],
+    messages: [],
+    // Zero jobs and zero errors is what an idle installation also looks like; the
+    // waiting message is the difference.
+    waiting: [{ eventId: 'om_x', receivedAt: NOW - STUCK - 60_000 }],
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  assert.equal(criteria.consuming.ok, false)
+  assert.match(criteria.consuming.detail, /om_x/)
+})
+
+test('a message that just arrived is not yet a finding', () => {
+  const criteria = byId(evaluateJobs({
+    jobs: [],
+    messages: [],
+    waiting: [{ eventId: 'om_y', receivedAt: NOW - 1000 }],
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  assert.equal(criteria.consuming.ok, true)
+})
+
 test('one answered turn satisfies every criterion', () => {
   const criteria = byId(evaluateJobs({
     jobs: [job()],
