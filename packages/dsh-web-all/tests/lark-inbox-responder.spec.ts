@@ -73,6 +73,8 @@ interface Harness {
   sendResult: { ok: boolean; error?: string; retryable?: boolean }
   /** Knobs for the races a real engine can produce. */
   engineHooks: EngineHooks
+  /** The live config object; mutating it is what a settings change looks like. */
+  config: AutoReplyConfig
   /** A second responder over the same ledger, as a settings-driven rebuild makes. */
   rebuild(): ReplyResponder
   advance(ms: number): void
@@ -140,6 +142,7 @@ function harness(overrides: Partial<AutoReplyConfig> = {}): Harness {
     sent,
     sendResult,
     engineHooks: hooks,
+    config,
     rebuild: () => new ReplyResponder(store, { ...ports, setInterval: () => 0 }),
     advance: ms => { clock += ms },
     // The submit half is async by design; one macrotask turn drains it.
@@ -681,6 +684,32 @@ describe('status tool', () => {
   it('reports the not-running reason instead of an empty ledger', async () => {
     const tool = createAutoReplyStatusTool(() => undefined)
     await expect(tool.execute({})).resolves.toMatchObject({ error: expect.stringContaining('未运行') })
+  })
+})
+
+describe('live settings', () => {
+  it('starts sending when the mode is changed to self, without a rebuild', async () => {
+    const harnessed = harness({ mode: 'probe' })
+    harnessed.deliver(message(1, '你好'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    runTurn(harnessed, 1, { text: '在的' })
+    await harnessed.flush()
+    expect(harnessed.sent).toHaveLength(0)
+
+    // An operator flipping probe to self in the settings page is a config write,
+    // not a rebuild: the same running responder must pick it up on its next turn.
+    harnessed.config.mode = 'self'
+    harnessed.deliver(message(2, '再来一句'))
+    harnessed.advance(1500)
+    harnessed.responder.tick()
+    await harnessed.flush()
+    expect(harnessed.prompts).toHaveLength(2)
+    runTurn(harnessed, 2, { text: '这次真发了' })
+    await harnessed.flush()
+    expect(harnessed.sent).toHaveLength(1)
+    expect(harnessed.sent[0].text).toBe('这次真发了')
   })
 })
 
