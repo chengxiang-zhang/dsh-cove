@@ -600,24 +600,30 @@ let appliedPac = '';
  */
 function applyAgentProxy(proxy) {
   if (typeof proxy !== 'string' || proxy === '') {
-    return;
+    return Promise.resolve(false);
   }
   const context = overlayContext();
   const script = pacScript({ upstream: proxy, zones: context.zones, hosts: context.hosts });
   const dataUrl = pacDataUrl(script);
   if (dataUrl === '') {
     process.stderr.write(`shell: the agent offered a proxy this shell cannot use (${proxy})\n`);
-    return;
+    return Promise.resolve(false);
   }
   if (proxy === appliedProxy && dataUrl === appliedPac) {
-    return;
+    return Promise.resolve(true);
   }
   appliedProxy = proxy;
   appliedPac = dataUrl;
-  proxySession()
+  return proxySession()
     .setProxy({ pacScript: dataUrl })
-    .then(() => process.stderr.write(`shell: session proxy ${proxy} for ${context.zones.length} zone(s), ${context.hosts.length} host(s)\n`))
-    .catch((error) => process.stderr.write(`shell: session proxy failed (${error?.message ?? error})\n`));
+    .then(() => {
+      process.stderr.write(`shell: session proxy ${proxy} for ${context.zones.length} zone(s), ${context.hosts.length} host(s)\n`);
+      return true;
+    })
+    .catch((error) => {
+      process.stderr.write(`shell: session proxy failed (${error?.message ?? error})\n`);
+      return false;
+    });
 }
 
 /**
@@ -1192,7 +1198,7 @@ function publish(snapshot) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('snapshot', { ...snapshot, ...tabsPayload() });
   }
-  applyAgentProxy(snapshot.proxy);
+  const proxyInForce = applyAgentProxy(snapshot.proxy);
   // The proxy belongs to the engine: a reading that offers none means the engine that
   // owned it is gone, and leaving the rule in place would send every request into a dead
   // loopback port. The window would look broken instead of disconnected.
@@ -1200,9 +1206,12 @@ function publish(snapshot) {
     clearAgentProxy();
   }
   // The previous session's tabs come back once there is something to restore them
-  // against: the catalogue only exists after the first usable reading.
+  // against: the catalogue only exists after the first usable reading. The restore also
+  // waits for the proxy, because activating a machine tab loads its page immediately -
+  // a page that starts loading while the session is still direct resolves nothing and
+  // comes up as an error for no reason.
   if (!tabsRestored && (snapshot.state === 'ready' || snapshot.state === 'local')) {
-    void restoreTabs();
+    void proxyInForce.then(() => restoreTabs());
   }
   void startBridgeOnce();
   // A machine that leaves the list keeps its page for a while: a probe that timed out is
