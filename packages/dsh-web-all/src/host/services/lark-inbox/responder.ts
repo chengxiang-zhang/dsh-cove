@@ -461,12 +461,12 @@ export class ReplyResponder {
     if (job.state === 'collecting' && this.store.reply.inflightJob(job.convKey) !== undefined) return
     const binding = this.store.reply.binding(job.convKey)
     if (binding === undefined) {
-      this.store.reply.markSendFailed(job.jobId, '会话绑定丢失', now)
+      this.failBeforeRun(job, '会话绑定丢失', now)
       return
     }
     const messages = this.store.reply.messagesOf(job.jobId)
     if (messages.length === 0) {
-      this.store.reply.markSendFailed(job.jobId, '批次内没有消息', now)
+      this.failBeforeRun(job, '批次内没有消息', now)
       return
     }
     if (!this.store.reply.claimSubmit(job.jobId, binding.sessionId, now, now + config.turnTimeoutMs)) return
@@ -553,6 +553,24 @@ export class ReplyResponder {
   }
 
   /**
+   * Fail a batch that never reached the engine, and say so.
+   *
+   * Retiring it silently is the one thing this path must not do: the person sent a
+   * message and is waiting. Every pre-turn failure therefore ends in the same
+   * sentence a failed turn does, through the same send.
+   * @param job - the batch that cannot run.
+   * @param detail - what went wrong, short enough to show.
+   * @param now - current time.
+   */
+  private failBeforeRun(job: ReplyJob, detail: string, now: number): void {
+    const text = fallbackReplyText('error', detail)
+    if (!this.store.reply.failPreTurn(job.jobId, 'error', text, now)) return
+    this.ports.log.warn(`lark-inbox: ${job.jobId} 未能开跑（${detail}），已回说明`)
+    const closed = this.store.reply.job(job.jobId)
+    if (closed !== undefined) void this.deliver(closed, now)
+  }
+
+  /**
    * Close a submission that never produced a turn.
    *
    * A pending engine call leaves the job in `submitting` with no bound turn. It is
@@ -604,11 +622,11 @@ export class ReplyResponder {
    */
   private async deliver(job: ReplyJob, now: number): Promise<void> {
     const config = this.ports.config()
-    const body = (job.replyText ?? '').trim()
-    if (body === '') {
-      this.store.reply.markSendFailed(job.jobId, '没有可发送的正文', now)
-      return
-    }
+    // An empty body is a bug in this file, not a reason to go quiet: the person is
+    // still waiting for an answer to a message they sent.
+    const body = (job.replyText ?? '').trim() === ''
+      ? fallbackReplyText('error', '没有可发送的正文')
+      : (job.replyText ?? '').trim()
     if (config.mode === 'probe') {
       // Probe mode exists so the seam can be read without speaking to a person:
       // the ledger records what would have been sent, and nothing leaves the host.
