@@ -549,3 +549,88 @@ test('a profile path that does not exist fails instead of falling back', () => {
     ledger.cleanup()
   }
 })
+
+test('--require-ack accepts a ledger that shows a reaction', () => {
+  const ledger = passingLedger({ via: [{ jobId: 'fj_1', replyVia: 'reaction' }] })
+  try {
+    const run = runCheck(ledger, ['--require-ack'])
+    assert.equal(run.status, 0, run.stdout + run.stderr)
+  } finally {
+    ledger.cleanup()
+  }
+})
+
+test('--require-ack refuses a ledger with no reaction at all', () => {
+  // Every answer went out as text, so "does an acknowledgement work" is unproven -
+  // which is not the same as "it works".
+  const ledger = passingLedger()
+  try {
+    const run = runCheck(ledger, ['--require-ack'])
+    assert.equal(run.status, 3, run.stdout + run.stderr)
+    assert.match(run.stdout, /没有可判定的表情证据/)
+  } finally {
+    ledger.cleanup()
+  }
+})
+
+test('--require-ack calls a ledger without the column unreadable, not empty', () => {
+  const ledger = makeLedger({
+    withColumns: false,
+    jobs: [{ jobId: 'fj_1', state: 'replied', outcome: 'answer' }],
+    messages: [{ messageId: 'om_1', jobId: 'fj_1' }],
+  })
+  try {
+    const run = runCheck(ledger, ['--require-ack'])
+    assert.equal(run.status, 3, run.stdout + run.stderr)
+    assert.match(run.stdout, /账本缺 reply_via 列/)
+    // The distinction that matters: not "zero reactions", but "cannot tell".
+    assert.doesNotMatch(run.stdout, /没有可判定的表情证据/)
+  } finally {
+    ledger.cleanup()
+  }
+})
+
+test('both requirements given means both must hold', () => {
+  const both = passingLedger({ steerStates: ['consumed'], via: [{ jobId: 'fj_1', replyVia: 'reaction' }] })
+  try {
+    const run = runCheck(both, ['--require-steer', '--require-ack'])
+    assert.equal(run.status, 0, run.stdout + run.stderr)
+  } finally {
+    both.cleanup()
+  }
+
+  // Steer satisfied, acknowledgement absent: still not a green run.
+  const half = passingLedger({ steerStates: ['consumed'] })
+  try {
+    const run = runCheck(half, ['--require-steer', '--require-ack'])
+    assert.equal(run.status, 3, run.stdout + run.stderr)
+    assert.match(run.stdout, /--require-ack/)
+    assert.doesNotMatch(run.stdout, /--require-steer/)
+  } finally {
+    half.cleanup()
+  }
+
+  // Neither: both reasons are reported, so one run explains everything missing.
+  const neither = passingLedger()
+  try {
+    const run = runCheck(neither, ['--require-steer', '--require-ack'])
+    assert.equal(run.status, 3, run.stdout + run.stderr)
+    assert.match(run.stdout, /--require-steer/)
+    assert.match(run.stdout, /--require-ack/)
+  } finally {
+    neither.cleanup()
+  }
+})
+
+test('a failed criterion outranks a missing reading', () => {
+  // Exit 1 says "something is wrong"; exit 3 says "nothing is wrong, nothing was
+  // proven". When both are true, the first is the one an operator must act on.
+  const ledger = passingLedger({ via: [{ jobId: 'fj_1', replyVia: 'reaction' }] })
+  try {
+    writeFileSync(ledger.profile, PROFILE_WITHOUT_BLOCK)
+    const run = runCheck(ledger, ['--require-ack'])
+    assert.equal(run.status, 1, run.stdout + run.stderr)
+  } finally {
+    ledger.cleanup()
+  }
+})

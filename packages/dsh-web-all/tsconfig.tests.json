@@ -1,0 +1,37 @@
+{
+  // Test program: type-checks the fixtures as well as the source they exercise.
+  //
+  // The build program (`tsconfig.host.json`) has `rootDir: "src"`, so nothing under
+  // `tests/` is in any ts.Program - `tsc -b` staying green therefore says nothing
+  // about the fixtures. That gap became visible when a required field was added to
+  // `AutoReplyConfig` and the fixtures that build one kept compiling.
+  //
+  // Emits nothing: this exists to be checked, not to be built. It deliberately does
+  // not set `composite`, because a composite program must emit declarations.
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    // Both halves are checked here, so this program needs the browser globals the
+    // client fixtures use. Without them every `for (const x of querySelectorAll(...))`
+    // is reported as a missing iterator - a fact about this config, not about the
+    // fixture, and exactly the kind of noise that makes a gate look expensive.
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["node"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "tests/**/*.ts",
+    "tests/**/*.tsx"
+  ]
+}

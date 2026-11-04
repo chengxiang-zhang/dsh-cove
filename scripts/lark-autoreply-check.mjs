@@ -28,7 +28,7 @@
  *
  * Usage:
  *   node scripts/lark-autoreply-check.mjs [--db <path>] [--since-hours <n>] [--stuck-minutes <n>]
- *                                        [--profile <path>] [--require-steer]
+ *                                        [--profile <path>] [--require-steer] [--require-ack]
  *
  * Two readings are printed after the criteria and are not part of the verdict:
  * `steer` (how many messages were folded into a running turn, held for the turn that
@@ -37,11 +37,11 @@
  * has never used either feature is healthy, not failing. `--require-steer` is for the
  * caller who is specifically asking "did folding in actually happen": with that flag,
  * a ledger that shows none of it exits 3 - the same "no evidence" answer the criteria
- * give - instead of 0.
+ * give - instead of 0. `--require-ack` is the symmetric demand for the other reading:
+ * at least one answer actually went out as a reaction. Given both, both must hold.
  *
  * Exit: 0 all applicable criteria hold, 1 something failed, 2 usage or IO error,
- *       3 no failure but a criterion or (with --require-steer) the steer reading
- *         produced no evidence.
+ *       3 no failure but a criterion, or a demanded reading, produced no evidence.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -474,12 +474,13 @@ function readArgs(argv) {
     stuckMinutes: Number(args.get('stuck-minutes') ?? 10),
     profile: args.get('profile'),
     requireSteer: args.has('require-steer'),
+    requireAck: args.has('require-ack'),
   }
 }
 
 /** CLI entry. */
 function main(argv) {
-  const { db, sinceHours, stuckMinutes, profile, requireSteer } = readArgs(argv.slice(2))
+  const { db, sinceHours, stuckMinutes, profile, requireSteer, requireAck } = readArgs(argv.slice(2))
   if (!Number.isFinite(sinceHours) || sinceHours <= 0) {
     process.stderr.write('lark-autoreply-check: --since-hours must be a positive number\n')
     process.exit(2)
@@ -624,13 +625,30 @@ function main(argv) {
     process.exit(1)
   }
   const skipped = criteria.filter(criterion => criterion.ok === null).map(criterion => criterion.id)
-  const steerEvidence = steerReadings.consumed + steerReadings.carried + steerReadings.stranded
-  if (requireSteer && steerEvidence === 0) {
-    // The caller asked specifically whether folding a message into a running turn
-    // happened. An empty ledger answers "not observed", which is not "it works".
-    process.stdout.write(
-      `--require-steer：没有可判定的插话证据（consume+carried+stranded=0${steerReadings.hasColumns ? '' : '，且账本缺列'}）。\n`,
-    )
+  // Each requirement is a question the caller asked, and an unanswered question is
+  // exit 3 - never 0. They are collected rather than short-circuited so that asking
+  // both reports both, and so that "both must hold" needs no extra logic: any
+  // shortfall fails the whole run.
+  const shortfalls = []
+  if (requireSteer) {
+    const steerEvidence = steerReadings.consumed + steerReadings.carried + steerReadings.stranded
+    if (steerEvidence === 0) {
+      shortfalls.push(
+        `--require-steer：没有可判定的插话证据（consume+carried+stranded=0${steerReadings.hasColumns ? '' : '，且账本缺列'}）`,
+      )
+    }
+  }
+  if (requireAck) {
+    if (!ackReadings.hasColumns) {
+      // Zeros from a column that does not exist would read as "the feature ran and
+      // did nothing", which is the one thing this must not say.
+      shortfalls.push('--require-ack：账本缺 reply_via 列（早于该特性），无法判定表情证据')
+    } else if (ackReadings.reaction === 0) {
+      shortfalls.push('--require-ack：没有可判定的表情证据（reply_via=reaction 的行数为 0）')
+    }
+  }
+  if (shortfalls.length > 0) {
+    for (const line of shortfalls) process.stdout.write(`${line}\n`)
     process.exit(3)
   }
   if (skipped.length > 0) {

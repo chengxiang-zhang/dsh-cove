@@ -38,7 +38,11 @@ describe('GitService guarded operations', () => {
     const runner = new MockRunner(argv => {
       if (argv[0] === 'rev-parse' && argv[1] === '--show-toplevel') return ok('/repo\n')
       if (argv[0] === 'rev-parse' && argv[1] === '--abbrev-ref') return ok('dev\n')
-      if (argv[0] === 'log') return ok('abcdef123456\0\0Ada\01700000000\0\0one\x1e')
+      // `\017…` is an octal escape and a syntax error in a type-checked program; the
+      // hexadecimal spelling is the same bytes, so the fixture still describes the
+      // same output. Whether the fixture *meant* NUL followed by a timestamp is a
+      // separate question this change deliberately leaves alone.
+      if (argv[0] === 'log') return ok('abcdef123456\0\0Ada\x0f00000000\0\0one\x1e')
       return ok()
     })
     const service = new GitService(runner, async () => ({ ok: true, canonical: '/repo' }))
