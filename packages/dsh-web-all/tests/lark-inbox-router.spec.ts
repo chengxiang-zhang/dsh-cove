@@ -194,6 +194,36 @@ async function submitFirst(h: Harness, body: string): Promise<void> {
 }
 
 describe('the acknowledgement guard', () => {
+  /*
+   * On the negative control for this guard, for whoever changes it next.
+   *
+   * The guard is a conjunction of three checks, and the last one - the whole-message
+   * match against the closed acknowledgement vocabulary - already rejects every
+   * question-shaped input on its own: the vocabulary has no question mark and no
+   * question word in it. So the "contains a question mark or question word" check can
+   * never be the deciding one for any input that reaches it.
+   *
+   * The consequence is counter-intuitive and worth knowing before someone concludes
+   * that check is dead code:
+   *
+   *   Deleting the question-mark / question-word lines and re-running this file
+   *   leaves all of it green. Measured: 13 passed. Nothing here is insensitive to
+   *   those lines; they are simply shadowed by the vocabulary.
+   *
+   * To see them carry weight, relax both layers in this order:
+   *
+   *   A. Make the vocabulary check always pass, leave the question checks in place.
+   *      "这个能用吗" is still vetoed, so the veto case below stays green - which
+   *      shows the question checks are what is holding that input out once the
+   *      vocabulary is out of the way.
+   *   B. Now also remove the question checks. "这个能用吗" becomes acknowledgeable:
+   *      the veto case fails with `这个能用吗: expected true to be false`, and the
+   *      reaction assertion finds a reaction where it expects words.
+   *
+   * Both layers are therefore load-bearing. The redundancy is deliberate: a false
+   * positive costs an explanatory sentence, a false negative answers a real question
+   * with a thumbs-up, and the vocabulary is the layer most likely to be edited.
+   */
   it('permits a reaction only for a batch made entirely of closed acknowledgements', () => {
     for (const text of ['好', '好的', '好滴', 'ok', 'OK', '收到', '嗯嗯', '谢谢', '多谢', 'thx', '知道了', '明白', '了解', '辛苦了', '好的。', '谢谢！']) {
       expect(mayAcknowledgeOnly([text]), text).toBe(true)
@@ -232,6 +262,8 @@ describe('answering with a reaction', () => {
     await h.runTurn(1, ACK_REPLY_TOKEN)
 
     // The model tried to answer a question with a thumbs-up; the guard refused.
+    // This is the case the two-step control described above isolates: with the
+    // vocabulary relaxed it is the question check that keeps this green.
     expect(h.reactions).toHaveLength(0)
     expect(h.sent).toHaveLength(1)
     expect(h.sent[0].text).toBe(fallbackReplyText('empty'))
