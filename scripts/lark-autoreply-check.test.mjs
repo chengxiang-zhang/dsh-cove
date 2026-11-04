@@ -16,10 +16,14 @@ const STUCK = 10 * 60_000
 function job(overrides) {
   return {
     jobId: 'fj_1',
+    kind: 'request',
     state: 'replied',
     outcome: 'answer',
     replyToMessageId: 'om_1',
     replyText: '在的',
+    // A delivery needs the platform's own message id. Without it the same row is
+    // what a probe run leaves behind - recorded, never sent.
+    replyMessageId: 'om_sent_1',
     createdAt: NOW - 60_000,
     updatedAt: NOW - 30_000,
     ...overrides,
@@ -234,4 +238,51 @@ test('the dedupe promise is the retention window, not "forever"', () => {
 test('retentionDays is read from the profile like every other setting', () => {
   const parsed = readInboxProfile('  lark-inbox:\n    retentionDays: 7\n')
   assert.equal(parsed.retentionDays, 7)
+})
+
+
+test('a probe run does not count as a delivered answer', () => {
+  const criteria = byId(evaluateJobs({
+    jobs: [job({ replyMessageId: undefined })],
+    messages: [{ messageId: 'om_1', jobId: 'fj_1' }],
+    heartbeat: { startedAt: NOW - 60_000, sweptAt: NOW - 1000, mode: 'probe', answered: 1, open: 0, failed: 0 },
+    liveConfig: { mode: 'probe', openIds: ['ou_1'] },
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  // Recorded without a message id means nothing left the host.
+  assert.equal(criteria.answered.ok, false)
+})
+
+test('an unprompted notice that chose silence is not an unexplained gap', () => {
+  const criteria = byId(evaluateJobs({
+    jobs: [job({ kind: 'proactive', outcome: 'empty', replyText: undefined, replyMessageId: undefined, endReason: 'silent' })],
+    messages: [],
+    heartbeat: { startedAt: NOW - 60_000, sweptAt: NOW - 1000, mode: 'self', answered: 0, open: 0, failed: 0 },
+    liveConfig: { mode: 'self', openIds: ['ou_1'] },
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  assert.equal(criteria.explained.ok, true)
+})
+
+test('a heartbeat from the future is not evidence', () => {
+  const criteria = byId(evaluateJobs({
+    jobs: [],
+    messages: [],
+    heartbeat: { startedAt: NOW, sweptAt: NOW + 3_600_000, mode: 'self', answered: 0, open: 0, failed: 0 },
+    now: NOW,
+    stuckMs: STUCK,
+  }))
+  assert.equal(criteria.alive.ok, false)
+})
+
+test('a trailing comment does not turn a retention number into a promise of forever', () => {
+  const parsed = readInboxProfile('  lark-inbox:\n    retentionDays: 30 # days\n')
+  assert.equal(parsed.retentionDays, 30)
+})
+
+test('an inline array and quoted keys are read, not ignored', () => {
+  const parsed = readInboxProfile('  "lark-inbox":\n    autoReplyOpenIds: [ou_a, "ou_b"]\n')
+  assert.deepEqual(parsed.openIds, ['ou_a', 'ou_b'])
 })

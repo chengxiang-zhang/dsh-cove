@@ -61,27 +61,35 @@ import { pathToFileURL } from 'node:url'
  */
 export function readInboxProfile(text) {
   const lines = text.split('\n')
-  const start = lines.findIndex(line => /^\s*lark-inbox:\s*$/u.test(line))
+  const stripped = lines.map(line => stripComment(line))
+  const start = stripped.findIndex(line => /^\s*["']?lark-inbox["']?:\s*$/u.test(line))
   if (start === -1) return undefined
   const baseIndent = lines[start].search(/\S/u)
   /** @type {{mode?: string, openIds: string[], cwd?: string, receipt?: boolean}} */
   const result = { openIds: [] }
   let listOwner = ''
-  for (let index = start + 1; index < lines.length; index += 1) {
-    const raw = lines[index]
+  for (let index = start + 1; index < stripped.length; index += 1) {
+    const raw = stripped[index]
     if (raw.trim() === '' || raw.trim().startsWith('#')) continue
     const indent = raw.search(/\S/u)
     if (indent <= baseIndent) break
     const item = /^\s*-\s*(.+?)\s*$/u.exec(raw)
     if (item !== null) {
-      if (listOwner === 'autoReplyOpenIds') result.openIds.push(item[1].replace(/^['"]|['"]$/gu, ''))
+      if (listOwner === 'autoReplyOpenIds') result.openIds.push(trimQuotes(item[1]))
       continue
     }
-    const pair = /^\s*([A-Za-z][A-Za-z0-9_]*):\s*(.*?)\s*$/u.exec(raw)
+    const pair = /^\s*["']?([A-Za-z][A-Za-z0-9_]*)["']?:\s*(.*?)\s*$/u.exec(raw)
     if (pair === null) continue
     const [, key, value] = pair
     listOwner = value === '' ? key : ''
-    const scalar = value.replace(/^['"]|['"]$/gu, '')
+    const scalar = trimQuotes(value)
+    // Inline arrays are legal YAML and were read as an empty list, which reported
+    // "no allowlist" for a profile that had one.
+    if (key === 'autoReplyOpenIds' && value.startsWith('[')) {
+      result.openIds = value.replace(/^\[|\]$/gu, '').split(',').map(item => trimQuotes(item)).filter(item => item !== '')
+      listOwner = ''
+      continue
+    }
     if (key === 'autoReplyMode' && scalar !== '') result.mode = scalar
     if (key === 'autoReplyCwd' && scalar !== '') result.cwd = scalar
     if (key === 'autoReplyReceipt') result.receipt = scalar === 'true'
@@ -105,6 +113,37 @@ export function dedupePromiseDays(retentionDays) {
   if (retentionDays === undefined) return 30
   if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0
   return retentionDays
+}
+
+/**
+ * Drop a trailing `#` comment that is not inside quotes.
+ *
+ * Without this, `retentionDays: 30 # days` parsed as NaN and was then printed as a
+ * promise of "forever" - a wrong reading produced by a legal comment.
+ * @param {string} line - one profile line.
+ * @returns the line without its comment.
+ */
+export function stripComment(line) {
+  let quote = ''
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]
+    if (quote !== '') {
+      if (char === quote) quote = ''
+      continue
+    }
+    if (char === '"' || char === "'") { quote = char; continue }
+    if (char === '#') return line.slice(0, index)
+  }
+  return line
+}
+
+/**
+ * Remove surrounding quotes and trim, as the settings schema does.
+ * @param {string} value - raw scalar.
+ * @returns the value a running process would see.
+ */
+export function trimQuotes(value) {
+  return String(value ?? '').trim().replace(/^['"]|['"]$/gu, '').trim()
 }
 
 /** Non-terminal states; a job here should be moving. */
@@ -142,7 +181,14 @@ const CLOSED_STATES = new Set(['replied', 'failed', 'cancelled', 'reply_uncertai
  * @returns {Array<{id: string, label: string, ok: boolean|null, detail: string, sql: string}>} criteria in report order.
  */
 export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbeatPath, liveConfig, now, stuckMs }) {
-  const answered = jobs.filter(job => job.state === 'replied' && job.outcome === 'answer')
+  // A delivery is only a delivery if the platform gave back a message id. Without
+  // that check, a probe run - which records the answer and sends nothing - satisfies
+  // "at least one reply really went out". This was the review's sharpest finding.
+  const answered = jobs.filter(job =>
+    job.kind !== 'proactive'
+    && job.state === 'replied'
+    && job.outcome === 'answer'
+    && (job.replyMessageId ?? '') !== '')
 
   const stuck = jobs.filter(job => OPEN_STATES.has(job.state) && now - job.updatedAt > stuckMs)
 
@@ -153,10 +199,14 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
   // `cancelled` is the one closed state with nothing to send: the person asked to
   // stop, or an operator turned the path off before the batch ran. Counting it as
   // an unexplained silence would be wrong.
+  // An unprompted notice that chose silence is a delivered outcome, not a gap; the
+  // ledger marks it with `silent` so it can be told apart from a turn that broke.
+  const choseSilence = job => job.kind === 'proactive' && job.outcome === 'empty' && (job.endReason ?? '') === 'silent'
   const unexplained = jobs.filter(job =>
     job.state !== 'cancelled'
     && (CLOSED_STATES.has(job.state) || job.state === 'replied')
-    && (job.replyText ?? '').trim() === '')
+    && (job.replyText ?? '').trim() === ''
+    && !choseSilence(job))
 
   const waitingTooLong = waiting.filter(item => now - item.receivedAt > stuckMs)
 
@@ -175,16 +225,21 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
   // whose answer path is not mounted at all - that is exactly how a dead bot looked
   // like an idle one.
   const beat = heartbeat ?? undefined
+  // A future timestamp means a clock jump or a forged file; either way it is not
+  // evidence that a sweep happened, and a negative age would sail through `< stuckMs`.
   const beatAge = beat === undefined ? undefined : now - beat.sweptAt
+  const beatPlausible = beatAge !== undefined && beatAge > -60_000
 
   return [
     {
       id: 'alive',
       label: '回话链路在跑（有心跳）',
-      ok: beatAge === undefined ? false : beatAge < stuckMs,
+      ok: beatAge === undefined ? false : beatPlausible && beatAge < stuckMs,
       detail: beat === undefined
         ? '没有心跳文件：自动回话从未在本进程挂起来（或插件加载的是旧代码）'
-        : beatAge < stuckMs
+        : !beatPlausible
+          ? `心跳时间在未来（${Math.round((beatAge ?? 0) / 60000)} 分钟），不可作为证据`
+          : beatAge < stuckMs
           ? `最后心跳 ${Math.round((beatAge ?? 0) / 1000)} 秒前，mode=${beat.mode}，已回复 ${beat.answered}，进行中 ${beat.open}`
           : `心跳停在 ${Math.round((beatAge ?? 0) / 60000)} 分钟前，mode=${beat.mode}：链路还在，但已经不动了`,
       sql: `select * from json_each(readfile('${heartbeatPath ?? 'responder.json'}'))`,
@@ -233,10 +288,12 @@ export function evaluateJobs({ jobs, messages, waiting = [], heartbeat, heartbea
     },
     {
       id: 'no-duplicate',
-      label: '一条消息只属于一个批次',
+      label: '账本里一条消息只有一个归属',
       ok: repeated.length === 0,
+      // Named for what it measures. It cannot prove the platform saw exactly one
+      // send: the schema already makes a duplicate membership impossible.
       detail: repeated.length === 0
-        ? `${messages.length} 条消息，无重复归属`
+        ? `${messages.length} 条消息，无重复归属（这是账本约束，不等于平台只收到一次）`
         : `${repeated.length} 条消息被多个批次引用：${repeated.map(([id, count]) => `${id}(${count})`).join(', ')}`,
       sql: 'select message_id, count(*) from reply_job_messages group by 1 having count(*) > 1',
     },
@@ -314,7 +371,7 @@ function main(argv) {
   try {
     const tables = handle.prepare("select name from sqlite_master where type='table'").all()
     const names = new Set(tables.map(row => String(row.name)))
-    const missing = ['reply_jobs', 'reply_job_messages', 'conv_bindings'].filter(name => !names.has(name))
+    const missing = ['reply_jobs', 'reply_job_messages', 'conv_bindings', 'inbox_events'].filter(name => !names.has(name))
     if (missing.length > 0) {
       // The answer path has never run in this process. Say so plainly rather than
       // reporting four empty criteria as if they were passes.
@@ -322,16 +379,26 @@ function main(argv) {
       process.stdout.write('这通常意味着插件加载的是旧代码，或 responder 没有挂起来。\n')
       process.exit(1)
     }
-    jobs = handle.prepare(`SELECT job_id, state, outcome, reply_to_message_id, reply_text, created_at, updated_at
-      FROM reply_jobs WHERE created_at >= ? ORDER BY created_at ASC`).all(since).map(row => ({
+    const shapeJob = row => ({
       jobId: String(row.job_id),
+      kind: String(row.kind ?? 'request'),
       state: String(row.state),
       ...(row.outcome === null ? {} : { outcome: String(row.outcome) }),
-      replyToMessageId: String(row.reply_to_message_id),
-      ...(row.reply_text === null ? {} : { replyText: String(row.reply_text) }),
+      replyToMessageId: String(row.reply_to_message_id ?? ''),
+      ...(row.reply_text === null || row.reply_text === '' ? {} : { replyText: String(row.reply_text) }),
+      ...(row.reply_message_id === null || row.reply_message_id === '' ? {} : { replyMessageId: String(row.reply_message_id) }),
+      ...(row.end_reason === null ? {} : { endReason: String(row.end_reason) }),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
-    }))
+    })
+    const columns = `job_id, kind, state, outcome, reply_to_message_id, reply_text, reply_message_id, end_reason, created_at, updated_at`
+    // Open jobs are read without the window: a job stuck for two days is exactly the
+    // failure worth catching, and filtering it out hid it behind any recent success.
+    const openStates = "'collecting','submitting','running','replying'"
+    const open = handle.prepare(`SELECT ${columns} FROM reply_jobs WHERE state IN (${openStates})`).all()
+    const finished = handle.prepare(`SELECT ${columns} FROM reply_jobs
+      WHERE created_at >= ? AND state NOT IN (${openStates}) ORDER BY created_at ASC`).all(since)
+    jobs = [...finished, ...open].map(shapeJob)
     messages = handle.prepare(`SELECT m.message_id, m.job_id FROM reply_job_messages m
       JOIN reply_jobs j ON j.job_id = m.job_id WHERE j.created_at >= ?`).all(since).map(row => ({
       messageId: String(row.message_id),
@@ -362,7 +429,9 @@ function main(argv) {
     handle.close()
   }
 
-  const profilePath = join(homedir(), '.dsh', 'profiles', 'web', 'cordis.patch.yml')
+  // Same home as the ledger, so a `--db` on another installation is not matched
+  // against this one's profile.
+  const profilePath = join(dirname(dirname(db)), 'profiles', 'web', 'cordis.patch.yml')
   if (existsSync(profilePath)) {
     try {
       liveConfig = readInboxProfile(readFileSync(profilePath, 'utf8'))
@@ -397,8 +466,14 @@ function main(argv) {
     process.stdout.write(`${failed} 条判据未通过。\n`)
     process.exit(1)
   }
-  const skipped = criteria.some(criterion => criterion.ok === null)
-  process.stdout.write(skipped ? '可适用的判据全部通过；answered 无数据（还没有人发消息）。\n' : '四条判据全部通过。\n')
+  const skipped = criteria.filter(criterion => criterion.ok === null).map(criterion => criterion.id)
+  if (skipped.length > 0) {
+    // No evidence is not the same as evidence of health. Exit 3 lets a caller tell
+    // "nothing failed" from "nothing was proven" instead of treating both as green.
+    process.stdout.write(`未发现故障，但有 ${skipped.length} 条判据无证据：${skipped.join('、')}。\n`)
+    process.exit(3)
+  }
+  process.stdout.write('七条判据全部通过。\n')
   process.exit(0)
 }
 
