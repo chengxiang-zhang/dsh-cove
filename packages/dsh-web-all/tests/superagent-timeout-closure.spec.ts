@@ -128,11 +128,12 @@ interface ExecRig {
   seatRoot: string
 }
 
-function execRig(profiles: readonly Profile[] = PROFILES): ExecRig {
+function execRig(profiles: readonly Profile[] = PROFILES, wrap?: (inner: FakeController) => FakeController): ExecRig {
   const t = openTestLedger()
   const seatRoot = mkdtempSync(join(tmpdir(), 'sa-t31-'))
   dirs.push(seatRoot)
-  const controller = createFakeController()
+  const inner = createFakeController()
+  const controller = wrap === undefined ? inner : wrap(inner)
   const world = createWorldRegistry({ read: t.ledger.read, clock: t.clock, defaults: DEFAULT_TABLE })
   t.ledger.open(tx => {
     world.registerParty(tx, { party_id: 'ou_owner', union_id: 'on_owner', class: 'owner', source: 'config' })
@@ -248,6 +249,41 @@ describe('T31 timeout closure and bounded retries', () => {
     expect(brief).toContain('steer 6')
     expect(brief).toContain(inputMarker('req-6'))
     expect(brief.match(/steer 6/g) ?? []).toHaveLength(1)
+  })
+
+  it('5. a commitment closed during dispatch leaves no running attempt behind (03 I3 = 0)', async () => {
+    let commitmentId = ''
+    let closed = false
+    const r = execRig(PROFILES, (inner) => {
+      const createOnce = inner.create.bind(inner)
+      return Object.assign({}, inner, {
+        async create(req: Parameters<FakeController['create']>[0]) {
+          const created = await createOnce(req)
+          if (!closed) {
+            // Another path (release) closes the commitment inside the create await.
+            closed = true
+            r.t.ledger.open(tx => tx.transition(commitmentId, 'released', { ball: 'me' }), { module: 'kernel' })
+          }
+          return created
+        },
+      }) as FakeController
+    })
+    const { c } = commit(r)
+    commitmentId = c.commitment_id
+
+    expect(await r.ex.dispatch(c.commitment_id))
+      .toEqual({ failed: `commitment ${c.commitment_id} closed during dispatch` })
+
+    // I3 reading: no running attempt may hang on a terminal commitment.
+    const running = r.t.db.prepare(
+      `SELECT count(*) AS n FROM sa_attempt a JOIN sa_commitment c ON c.commitment_id = a.commitment_id
+        WHERE a.state = 'running' AND c.state IN ('fulfilled', 'unverified', 'broken', 'released', 'withdrawn', 'orphaned')`,
+    ).get() as { n: number }
+    expect(running.n).toBe(0)
+    expect(rows(r, 'SELECT state, end_reason, cancel_origin FROM sa_attempt')).toEqual([
+      { state: 'ended', end_reason: 'aborted', cancel_origin: 'dispatch' },
+    ])
+    expect(r.controller.calls.filter(entry => entry.method === 'cancel')).toHaveLength(1)
   })
 
   it('4. three failed session creates explain once, keep the batch, and stop looping', async () => {

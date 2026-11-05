@@ -240,6 +240,27 @@ export function createExecutors(deps: ExecutorDeps): Executors {
     return { failed: reason }
   }
 
+  /**
+   * I3: a running attempt must never hang on a commitment that already closed.
+   * `dispatch` spans two awaits (session create, first prompt); release, escalation
+   * or reconciliation can close the commitment inside either of them, so the state
+   * is re-read on both sides of every await and the attempt is cancelled the moment
+   * it is no longer dispatchable.
+   */
+  const commitmentOpen = (commitmentId: string): boolean => {
+    const row = commitmentById(commitmentId)
+    return row !== undefined && (row.state === 'open' || row.state === 'at_risk')
+  }
+
+  async function stillDispatchable(commitmentId: string, attemptId: string): Promise<boolean> {
+    if (commitmentOpen(commitmentId)) return true
+    if (attemptById(attemptId)?.state !== 'ended') {
+      log.warn(`executors: commitment ${commitmentId} closed while dispatching ${attemptId}; cancelling`)
+      await cancel(attemptId, 'dispatch')
+    }
+    return false
+  }
+
   async function dispatch(commitmentId: string): Promise<{ attemptId: string; sessionId: string } | { failed: string }> {
     const c = commitmentById(commitmentId)
     if (!c || !['open', 'at_risk'].includes(c.state)) return { failed: `commitment ${commitmentId} is not open` }
@@ -255,14 +276,19 @@ export function createExecutors(deps: ExecutorDeps): Executors {
       const cwd = prepareCwd(c, a, profile)
       write(tx => tx.updateAttempt(a.attempt_id, { session_id: sessionId, cwd, provider: profile.provider ?? null,
         model: profile.model ?? null, effort: profile.effort ?? null, branch: profile.lifetime === 'durable' ? branchOf(c.commitment_id) : null }))
+      const closedDuring = (): { failed: string } => ({ failed: `commitment ${commitmentId} closed during dispatch` })
+      if (!(await stillDispatchable(commitmentId, a.attempt_id))) return closedDuring()
       const created = await deps.controller().create({ sessionId, cwd, agentPreset: profile.preset })
+      if (!(await stillDispatchable(commitmentId, a.attempt_id))) return closedDuring()
       // Record what the host reports, not what was asked (S2: the default preset is reported too).
       const reported = created as { sessionId?: unknown; agentPreset?: unknown }
       write(tx => tx.append(c.commitment_id, { actor: 'executors', kind: 'state', body: {
         dispatched: a.attempt_id, session_id: typeof reported.sessionId === 'string' ? reported.sessionId : sessionId,
         agentPreset: typeof reported.agentPreset === 'string' ? reported.agentPreset : null } }))
+      if (!(await stillDispatchable(commitmentId, a.attempt_id))) return closedDuring()
       await deps.controller().prompt({ requestId: `dispatch:${a.attempt_id}`, sessionId, mode: 'queue',
         content: [{ type: 'text', text: briefText(c) }] }, AbortSignal.timeout(PROMPT_TIMEOUT_MS))
+      if (!(await stillDispatchable(commitmentId, a.attempt_id))) return closedDuring()
       const now = attemptById(a.attempt_id)
       if (now?.state !== 'pending') {
         deps.controller().cancel({ sessionId })
