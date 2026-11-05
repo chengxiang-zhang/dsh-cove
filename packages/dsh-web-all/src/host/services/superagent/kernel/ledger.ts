@@ -22,6 +22,7 @@ import {
 
 export type LedgerErrorCode = 'ILLEGAL_TRANSITION' | 'LEDGER_ASYNC_TX' | 'LEDGER_NESTED_TX' | 'SHADOW_NO_WRITE'
   | 'TABLE_NOT_OWNED' | 'HOST_PROPOSE_KIND' | 'THREAD_BUSY' | 'ALREADY_DISPOSED' | 'MISSING' | 'BAD_COLUMN'
+  | 'MULTI_STATEMENT'
 
 export class LedgerError extends Error {
   readonly code: LedgerErrorCode
@@ -84,7 +85,12 @@ export interface KernelTx extends LedgerTx {
   recordOutbox(row: NewOutbox): OutboxRow
   /** T12 passthrough: input_seq + 1 on the thread's live subscription; returns the new value. */
   advanceSubscription(threadKey: string): number
+  /** Non-state commitment fields only (Lead ruling): slot, used_wall_ms, used_turns, extended, budget_wall_ms, budget_turns. */
+  patchCommitment(id: string, patch: CommitmentPatch): CommitmentRow
 }
+
+export const PATCHABLE_COMMITMENT_COLUMNS = ['slot', 'used_wall_ms', 'used_turns', 'extended', 'budget_wall_ms', 'budget_turns'] as const
+export type CommitmentPatch = Partial<Pick<CommitmentRow, (typeof PATCHABLE_COMMITMENT_COLUMNS)[number]>>
 
 export interface Ledger {
   open<T>(fn: (tx: KernelTx) => T, opts?: { module?: OwnerModule; shadow?: boolean }): T
@@ -115,8 +121,18 @@ const normalized = (sql: string): string => sql.trim().replace(/\s+/g, ' ').repl
 const READ_ONLY = /^\s*(?:SELECT|WITH)\b/i
 const WRITE_WORD = /\b(?:INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER|CREATE)\b/i
 
+/**
+ * node:sqlite compiles only the first statement of a string and silently drops the
+ * rest, so any `;` before the end is refused. A `;` inside a string literal is refused
+ * too: rejecting is safer than parsing SQL here.
+ */
+function assertSingle(sql: string): void {
+  if (sql.trim().replace(/;\s*$/, '').includes(';')) throw new LedgerError('MULTI_STATEMENT', `one statement per call: ${sql.slice(0, 60)}`)
+}
+
 /** Which table a write statement targets; throws TABLE_NOT_OWNED unless the module owns it. */
 function assertOwned(sql: string, module: OwnerModule): void {
+  assertSingle(sql)
   const target = WRITE_TARGET.exec(sql)?.[1]
   if (!target) throw new LedgerError('TABLE_NOT_OWNED', `tx.run accepts INSERT/UPDATE/DELETE only: ${sql.slice(0, 60)}`)
   if (TABLE_OWNERS[target] === module) return
@@ -126,6 +142,7 @@ function assertOwned(sql: string, module: OwnerModule): void {
 }
 
 function assertRead(sql: string): void {
+  assertSingle(sql)
   if (!READ_ONLY.test(sql) || WRITE_WORD.test(sql)) throw new LedgerError('TABLE_NOT_OWNED', `read accepts SELECT only: ${sql.slice(0, 60)}`)
 }
 
@@ -347,6 +364,18 @@ export function createLedger(db: DatabaseSync, clock: LedgerClock): Ledger {
           now, r.ops, r.tool_errors, r.tokens, parseEndReason(r.end_reason), JSON.stringify(r.rule_trace ?? null),
           r.pub_hash ?? null, r.dossier_hash ?? null, r.audience_class ?? null, r.dossier_tokens ?? null, r.window_id ?? null, now, deliberationId)
         if (changed === 0) throw new LedgerError('MISSING', `open deliberation ${deliberationId}`)
+      },
+
+      patchCommitment(id, patch) {
+        live()
+        const current = commitmentById(id)
+        if (TERMINAL.has(current.state)) throw new LedgerError('ILLEGAL_TRANSITION', `patch on ${current.state} ${id}`, 'patch_closed')
+        const allowed: readonly string[] = PATCHABLE_COMMITMENT_COLUMNS
+        for (const key of Object.keys(patch)) if (!allowed.includes(key)) throw new LedgerError('BAD_COLUMN', `${C}.${key} is not patchable`)
+        const next = { ...current, ...patch }
+        checkCommitment(next)
+        updateRow(C, 'commitment_id', id, { ...patch, updated_at: now })
+        return commitmentById(id)
       },
 
       touch(commitmentId, nextLookAt) {

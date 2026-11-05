@@ -31,6 +31,7 @@ const C = PHYSICAL.commitment
 const J = PHYSICAL.journal
 const MAX_ATTEMPTS = 3
 const PROMPT_TIMEOUT_MS = 60_000
+const SLOT = '1'
 
 /** The narrow world surface executors use (T15). */
 export interface ExecutorWorld {
@@ -125,11 +126,20 @@ export function createExecutors(deps: ExecutorDeps): Executors {
     ].join('\n')
   }
 
-  /** Durable full deliver holds the single slot while another such attempt runs (D3, N2). */
-  function slotTaken(c: CommitmentRow): boolean {
-    return ledger.read.get(`SELECT 1 FROM ${A} a JOIN ${C} c ON c.commitment_id = a.commitment_id
-      WHERE a.state = 'running' AND a.lifetime = 'durable' AND c.kind = 'deliver' AND c.state IN ('open', 'at_risk')
-      AND c.commitment_id <> ?`, c.commitment_id) !== undefined
+  /**
+   * Durable full deliver takes the single slot (D3, N2) by writing `slot='1'`; the
+   * partial unique index ux_sa_commit_slot refuses a second holder among open and
+   * at_risk commitments, so the check and the claim are one write.
+   */
+  function claimSlot(c: CommitmentRow): boolean {
+    if (c.slot === SLOT) return true
+    try {
+      write(tx => tx.patchCommitment(c.commitment_id, { slot: SLOT }))
+      return true
+    } catch (error) {
+      if (error instanceof Error && /UNIQUE/.test(error.message)) return false
+      throw error
+    }
   }
 
   function prepareCwd(c: CommitmentRow, a: AttemptRow, profile: Profile): string {
@@ -222,7 +232,7 @@ export function createExecutors(deps: ExecutorDeps): Executors {
     if (!a) return { failed: `no pending attempt on ${commitmentId}` }
     const profile = profiles.get(a.executor)
     if (!profile) return onDispatchFailure(a, profiles.all()[0], new Error(`unknown executor profile ${a.executor}`))
-    if (profile.lifetime === 'durable' && profile.tools === 'full' && c.kind === 'deliver' && slotTaken(c)) {
+    if (profile.lifetime === 'durable' && profile.tools === 'full' && c.kind === 'deliver' && !claimSlot(c)) {
       return { failed: 'SLOT_FULL' }   // stays pending; the agenda retries
     }
     const sessionId = sessionIdOf(c.commitment_id, a.n)
@@ -349,11 +359,11 @@ export function createExecutors(deps: ExecutorDeps): Executors {
       const line = lineOf(c, a)
       const verdict = line === undefined ? 'ok' : judgeBudget({ now, startedAt: a.started_at ?? a.created_at, turns: a.turns, line,
         alreadyExtended: c.extended === 1, lastToolAt: a.last_tool_at, repeatCount: a.repeat_count })
-      if (verdict === 'extend' && line && c.state === 'open') {
-        // 02: at_risk is the "stop-loss line reached / self-healing" state; the extension rides on it.
+      if (verdict === 'extend' && line) {
+        // Once per commitment, at most +50% of the original line; the state is left alone.
         const wider = extended(line)
         write(tx => {
-          tx.transition(c.commitment_id, 'at_risk', { extended: 1, budget_wall_ms: wider.wall_ms, budget_turns: wider.turns, ball: 'me' })
+          tx.patchCommitment(c.commitment_id, { extended: 1, budget_wall_ms: wider.wall_ms, budget_turns: wider.turns })
           tx.append(c.commitment_id, { actor: 'executors', kind: 'state', body: { budget_extended: a.attempt_id, from: line, to: wider } })
         })
         actions.push({ attemptId: a.attempt_id, action: 'extend' })

@@ -1,0 +1,28 @@
+# Bundled `superagent-desk` preset: the secretary desk session.
+#
+# Composition copied verbatim from presets/superagent-desk/agent.cordis.yml and
+# the roster metadata from presets/superagent-desk/preset.yml. AGENT-PLANE list:
+# the only row is the persona; the host applies the tool face.
+- insert:
+    - id: preset-superagent-desk
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: superagent-desk
+        name: "秘书桌"
+        description: "superagent 桌子会话专用预设：只装秘书人格与规则摘要，不装编码技能、工具或子代理；工具面由宿主机械约束为九个桌面工具。"
+        order: 50
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              suffix: 你只能使用宿主提供的九个桌面工具；看不到的工具就是不存在。
+              prefix: |-
+                你是老板的秘书，坐在一张对话桌前，由 {{model}} 模型驱动。你不写代码、不执行命令；活由执行体去做，你负责判断、承诺、跟进和说话。
+
+                规则摘要：
+                1. 本批每条消息恰好处置一次：先 judge，再按处置行动。
+                2. 接活就 commit，同一回合 say(ack) 只说"接了、预计多久"，不说"已派出"。
+                3. 每件承诺必须有可检查的完成判据；判不了就问，只问一个具体问题，并给默认做法。
+                4. 不可逆的事必须问；可逆的事声明你的假设后直接做。
+                5. 对外只说经宿主出口允许的话；不确定能不能说的记忆不说。
+                6. 不替执行体判结案；执行体的自述不是证据。
