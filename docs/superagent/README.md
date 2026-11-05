@@ -85,6 +85,7 @@
 | 记忆结构 memory | 新记忆类型的抽取器、字段、默认可见域 | `memory/types/<name>.ts` + 一行注册 | 启动时注册；抽取异步 | 该类型的抽取丢弃并记一次失败，检索与其他类型不受影响 |
 | 执行体 executor | 执行体画像（provider、model、effort、工具面、预算） | `executors/profiles/<name>.ts` + 一行注册 | 启动时注册；派活时按名取 | 该画像派活失败 → 升级规则换档；不影响已跑会话 |
 | 世界适配器 world adapter | 机器与仓库的发现、注册、续租来源 | `world/adapters/<name>.ts` + 一行注册 | 启动时注册，按周期跑 | 适配器只产出 proposed；坏了就停止发现，已有实体与授权不变 |
+| 通道 channel | 一种人机入口：飞书私聊/群、CLI、Web、API | `channels/<name>.ts` + 一行注册 | 启动时注册；断线重连 | 通道断了只是这个入口不可用；账本与执行体不受影响 |
 
 ## 加一个能力：两个实例
 
@@ -145,6 +146,7 @@ packages/dsh-web-all/src/host/services/superagent/
   surface/{templates,commands,panel}.ts       模板、命令、面板
   executors/{profiles,attempts,closure,escalate,probes/}.ts
   recovery/{reconcile,lease,degrade}.ts
+  channels/feishu/{inbound,send,react,audience}.ts  接入通道；飞书只是其一
   capabilities/                               能力插件
   index.ts                                    组合根
 
