@@ -226,7 +226,13 @@ try {
   check('the refresh control is visible', control.visible, true);
   check('the refresh control is enabled on a live page', control.disabled === false, String(control.disabled));
 
-  process.stdout.write('\nthe control is the command, and it reloads the page on screen\n');
+  process.stdout.write('\nthe control reloads the page and asks for nothing else\n');
+  await page.evaluate(() => {
+    window.__awPushesAfterRefresh = 0;
+    window.anywhere.onSnapshot?.(() => {
+      window.__awPushesAfterRefresh += 1;
+    });
+  });
   const stripBefore = await page.evaluate(() => ({
     tabs: [...document.querySelectorAll('.tab')].map((tab) => tab.dataset.tabId),
     active: document.querySelector('.tab[data-active="true"]')?.dataset.tabId ?? null,
@@ -234,6 +240,13 @@ try {
   await page.click('#refresh');
   await sleep(900);
   check('the control reloaded the page', countOf('/b') === 2, String(countOf('/b')));
+  // The reload is the whole command: the machine list is not re-read here (the heartbeat
+  // owns that), which is what keeps the press instant on a network with a dead machine.
+  check(
+    'the refresh asked for no reading of the machine list',
+    (await page.evaluate(() => window.__awPushesAfterRefresh)) === 0,
+    String(await page.evaluate(() => window.__awPushesAfterRefresh)),
+  );
   const b1 = await viewOf();
   check('refresh kept the page identity', b1 !== null && b1.id === b0.id, JSON.stringify(b1));
   // Refreshing a page is not a reason to rebuild the strip around it, and the reading a
@@ -245,15 +258,22 @@ try {
   check('the strip is unchanged by a refresh', JSON.stringify(stripAfter), JSON.stringify(stripBefore));
   check('the active tab survives a refresh', stripAfter.active, 'svc:machine:dsh.b.netbird');
 
-  process.stdout.write('\nthe keyboard asks for the same command\n');
-  // Focus is where a shortcut is pressed from here: this document's keydown, and the
-  // page behind a native view is the other layer that gets its own keystrokes.
-  await page.evaluate(() => document.getElementById('refresh').focus());
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+R' : 'Control+R');
+  // The key is answered on the layer that receives it. Playwright's keyboard goes to a
+  // page's renderer and cannot produce a native key equivalent, so each wired layer is
+  // driven where Electron itself would deliver the event: the window's own webContents
+  // (the chrome), then the page's (a page that has focus).
+  process.stdout.write('\nthe chrome answers the shortcut\n');
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].webContents.emit(
+      'before-input-event',
+      { preventDefault() {} },
+      { type: 'keyDown', key: 'r', code: 'KeyR', meta: true, control: false, shift: false, alt: false },
+    );
+  });
   await sleep(900);
-  check('the shortcut reloaded the page once', countOf('/b') === 3, String(countOf('/b')));
+  check('the chrome layer reloaded the page once', countOf('/b') === 3, String(countOf('/b')));
   const b2 = await viewOf();
-  check('the shortcut kept the page identity', b2 !== null && b2.id === b0.id, JSON.stringify(b2));
+  check('the chrome layer kept the page identity', b2 !== null && b2.id === b0.id, JSON.stringify(b2));
 
   // The page itself is the layer that usually has focus, and a key pressed there never
   // reaches the View menu: ⌘R has to be answered below the page's own renderer. The

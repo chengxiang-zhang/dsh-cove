@@ -135,16 +135,10 @@ function activeTab(tabs) {
 }
 
 /**
- * The window's refresh command.
+ * The window's refresh command: reload the page that is on screen.
  *
- * One command for the control and the keyboard, and it only asks: the main process owns
- * every page, and it replaces the page on screen before it re-reads anything, so the
- * answer to this call is not what makes the screen move. Whether a page is reloaded, and
- * which one, is decided there (`refreshScreen`).
- *
- * The answer is deliberately not assigned back to `snapshot`: that reading is the agent's
- * half, and the strip's own state is pushed separately. Replacing what this file holds
- * with it dropped the tabs off the screen until the next push put them back.
+ * It only asks. The main process owns every page, so it does the reload; the answer is
+ * not a reading and nothing here is re-applied.
  */
 async function refreshScreen() {
   if (typeof api.refresh !== 'function') {
@@ -153,8 +147,6 @@ async function refreshScreen() {
   try {
     await api.refresh();
   } catch (error) {
-    // The main process already reports the read's own failure; a rejected IPC call here
-    // must not also become an unhandled rejection in the window.
     console.error('refresh failed', error);
   }
 }
@@ -178,13 +170,6 @@ function apply() {
   const services = servicesOf(snapshot, model);
   const tabs = tabsOf(snapshot);
   const tab = activeTab(tabs);
-
-  // While this machine is still being prepared, a press re-runs that preparation instead
-  // of re-reading the screen; the states that means are named once, in view.js, so the
-  // control and the keydown cannot drift apart. The View menu's item is deliberately not
-  // gated by it - the banner's own retry is the way forward in those states, and the menu
-  // exists to work while a page has focus.
-  el.refresh.disabled = (window.AWView?.REFRESH_LOCKED ?? []).includes(model.state);
 
   renderTabs(tabs, services);
   renderBanner();
@@ -1060,15 +1045,6 @@ document.addEventListener('keydown', (event) => {
     call('openHome');
     return;
   }
-  if (meta && !event.shiftKey && !event.altKey && key.toLowerCase() === 'r') {
-    event.preventDefault();
-    // The same lock the control carries, read from the same place: while this machine is
-    // being prepared, a press would re-run the preparation rather than re-read.
-    if (!el.refresh.disabled) {
-      void refreshScreen();
-    }
-    return;
-  }
   if (meta && key.toLowerCase() === 'w') {
     event.preventDefault();
     call('close', tabsOf(snapshot).activeId);
@@ -1115,14 +1091,6 @@ async function start() {
     api.onMenu('open-server-field', showServerField);
     api.onMenu('new-tab', () => call('openHome'));
     api.onMenu('close-tab', () => call('close', tabsOf(snapshot).activeId));
-    // The native layers (the View menu, the tray, a key pressed while a page has focus)
-    // only say that the person asked; the command and its lock are this window's, so a
-    // locked control cannot be bypassed by pressing the same key from somewhere else.
-    api.onMenu('refresh-key', () => {
-      if (!el.refresh.disabled) {
-        void refreshScreen();
-      }
-    });
   }
   if (typeof api.onSnapshot === 'function') {
     api.onSnapshot((next) => {

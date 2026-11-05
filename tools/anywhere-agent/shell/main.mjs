@@ -1849,61 +1849,28 @@ function reloadActiveWorkspace() {
 }
 
 /**
- * How close together two refresh commands may be before the second is a duplicate.
+ * The one refresh command: reload the page that is on screen, now.
  *
- * The command has more than one entry point on purpose (control, window keydown, a page's
- * own key layer, the View menu, the tray), and two of them can answer one keystroke: the
- * accelerator is AppKit's, the key layer is ours. Collapsing that pair here is what keeps
- * "one press, one reload" true whichever layer got there first, and it also absorbs a
- * double click on the control.
+ * It is the browser's reload and nothing else. It does not re-read the machine list and
+ * it does not touch the agent: the list has its own freshness (the heartbeat, and the
+ * events that change it), and making a page reload wait for a probe that can take
+ * seconds is what made the control look dead. With no page on screen (the home or the
+ * settings tab) it does nothing, which is what a reload means there.
+ *
+ * @returns {boolean} whether a page was reloaded
  */
-const SCREEN_REFRESH_DEBOUNCE_MS = 400;
-let lastScreenRefreshAt = 0;
-
-/**
- * The one refresh command: replace the page now, bring the reading up to date after.
- *
- * The order is the whole point. `refreshAgent` probes this machine's host, its kernel and
- * every machine in the list; on a network where one machine does not answer that takes
- * seconds, and it can fail outright. A refresh is pressed because the screen already looks
- * stuck, so waiting for that read before replacing the page made the control look dead -
- * and a rejected read meant `then` never ran, so nothing happened at all. The page is
- * replaced first, synchronously; the read follows in the background, its result arrives
- * through the same snapshot push as every other read, and its failure is reported to
- * stderr instead of cancelling the thing the person asked for.
- *
- * @returns {Promise<{reloaded: boolean, snapshot: object|null, error: string, skipped: boolean}>}
- */
-async function refreshScreen() {
-  const now = Date.now();
-  if (now - lastScreenRefreshAt < SCREEN_REFRESH_DEBOUNCE_MS) {
-    return { reloaded: false, snapshot: null, error: '', skipped: true };
-  }
-  lastScreenRefreshAt = now;
-  const reloaded = reloadActiveWorkspace();
-  let snapshot = null;
-  let error = '';
-  try {
-    snapshot = await refreshAgent();
-  } catch (failure) {
-    error = String(failure?.message ?? failure);
-    process.stderr.write(`shell: the refresh read failed (${error}); the page was still replaced\n`);
-  }
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('refreshed');
-  }
-  return { reloaded, snapshot, error, skipped: false };
+function refreshScreen() {
+  return reloadActiveWorkspace();
 }
 
 /**
  * ⌘R on the layer that actually receives it.
  *
- * The View menu carries the shortcut, but a page drawn in a native `WebContentsView` is
- * its own first responder: a key pressed while that page has focus is delivered to that
- * page and never reaches the menu item - the same reason the tab commands live in the menu
- * *and* in the renderer. Catching the key here, before the page's own renderer sees it,
- * makes the shortcut work wherever the focus is; `refreshScreen` collapses the case where
- * the accelerator also fired.
+ * A page drawn in a native `WebContentsView` is its own first responder: a key pressed
+ * while that page has focus is delivered to the page and never reaches the View menu's
+ * key equivalent, which is why the shortcut looked dead while reading a page. Catching it
+ * here, before the page's own renderer sees it, is what makes the key work wherever the
+ * focus is; the window itself is wired the same way for the chrome.
  */
 function wireRefreshKey(contents) {
   contents.on('before-input-event', (event, input) => {
@@ -1911,25 +1878,9 @@ function wireRefreshKey(contents) {
     const plain = !input.shift && !input.alt;
     if (input.type === 'keyDown' && accelerator && plain && String(input.key ?? '').toLowerCase() === 'r') {
       event.preventDefault();
-      requestRefresh();
+      refreshScreen();
     }
   });
-}
-
-/**
- * Asks the window to run the refresh command.
- *
- * The keystroke and the two menu surfaces do not run the command themselves: the window is
- * where the lock lives (this machine still being prepared disables the control), and a key
- * that bypassed that lock would re-run the preparation a second time. So the native
- * layers only say "the person asked"; the window decides whether that is a refresh or a
- * press on a control that is deliberately disabled. The banner's own retry keeps its
- * separate path - repairing a half-installed host is exactly what the lock must not block.
- */
-function requestRefresh() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('refresh-key');
-  }
 }
 
 /**
@@ -1955,7 +1906,7 @@ function installTray() {
         { label: '打开机器列表', click: () => mainWindow?.show() },
         {
           label: '刷新',
-          click: () => requestRefresh(),
+          click: () => refreshScreen(),
         },
         { type: 'separator' },
         { label: '退出', role: 'quit' },
@@ -2076,7 +2027,7 @@ function installAppMenu() {
         {
           label: '刷新',
           accelerator: 'CommandOrControl+R',
-          click: () => requestRefresh(),
+          click: () => refreshScreen(),
         },
         {
           label: '跳到服务…',
@@ -2931,10 +2882,8 @@ ipcMain.handle('refresh', async (_event, select) => {
   if (select !== undefined && select !== null && select !== '') {
     return refreshAgent(select);
   }
-  // A plain refresh is "this screen is stuck". The page is replaced before the slow
-  // read, so the control answers immediately; see refreshScreen().
-  const { snapshot } = await refreshScreen();
-  return snapshot;
+  // A plain refresh is the browser's reload: replace the page on screen and nothing else.
+  return { reloaded: refreshScreen() };
 });
 ipcMain.handle('login-status', async () => (supervisor ? supervisor.loginStatus() : { done: false, state: await currentSnapshot() }));
 /**

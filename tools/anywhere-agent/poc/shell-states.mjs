@@ -148,28 +148,6 @@ function check(name, actual, expected) {
   }
 }
 
-/**
- * Presses the refresh shortcut in a state where the control is locked.
- *
- * A locked press has to stop before the main process: the lock exists so a press does not
- * start a second run of the preparation. Every read publishes a snapshot, so counting the
- * pushes this document receives is how "nothing was asked" is observable from outside -
- * and it is the assertion that fails if the keydown guard is ever dropped, because the
- * control's disabled state alone cannot prove what the key did.
- */
-async function pressRefreshWhileLocked(page) {
-  await page.evaluate(() => {
-    window.__awLockedPressPushes = 0;
-    window.anywhere.onSnapshot?.(() => {
-      window.__awLockedPressPushes += 1;
-    });
-  });
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+R' : 'Control+R');
-  // Long enough for an accepted command's read to publish; far shorter than the 45 s
-  // heartbeat, so a push counted here is one this press asked for.
-  await page.waitForTimeout(600);
-}
-
 const userData = join(args.out, 'userdata');
 mkdirSync(userData, { recursive: true });
 // A previous run leaves the tabs it ended with. The window restores them on the first
@@ -389,31 +367,19 @@ try {
   );
   check('banner names the local problem', (await page.locator('#banner-title').innerText()).length > 0, true);
   check('banner carries an action', (await page.locator('#banner-actions .button').count()) > 0, true);
-  // The local host is not ready (checking, or the installer still has to run), so a press
-  // would re-run the preparation instead of re-reading the screen. The control carries
-  // that lock on screen, and the shortcut reads the same lock rather than a copy of it.
-  check('refresh is locked while this machine is being prepared', await page.locator('#refresh').isDisabled(), true);
-  await pressRefreshWhileLocked(page);
-  // A locked press must not reach the main process at all: a second preparation run is
-  // exactly what the lock exists to prevent, and the shortcut is the path a person who
-  // knows it would try. Every read publishes, so zero publishes is "nothing was asked".
-  const pushesAfterLockedPress = await page.evaluate(() => window.__awLockedPressPushes ?? -1);
-  check('a locked refresh asks the main process for nothing', pushesAfterLockedPress, 0);
-
-  // The native layers (View menu, tray, a key pressed while a page has focus) do not run
-  // the sequence themselves: they hand the request to this window, which is where the
-  // lock lives. A request arriving that way must be dropped as well, or the disabled
-  // control could be bypassed from the menu the moment the page took focus.
-  const forwardedBefore = await page.evaluate(() => window.__awLockedPressPushes ?? 0);
-  await app.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0]?.webContents.send('refresh-key');
+  // The refresh command only reloads a page: it never re-runs the preparation and never
+  // reads the machine list, so it stays usable in this state instead of being greyed out.
+  check('the refresh control stays usable while this machine is prepared', await page.locator('#refresh').isEnabled(), true);
+  const pushesBeforePress = await page.evaluate(() => {
+    window.__awPressPushes = 0;
+    window.anywhere.onSnapshot?.(() => {
+      window.__awPressPushes += 1;
+    });
+    return window.__awPressPushes;
   });
-  await page.waitForTimeout(600);
-  check(
-    'a forwarded refresh is dropped while the control is locked',
-    await page.evaluate(() => window.__awLockedPressPushes),
-    forwardedBefore,
-  );
+  await page.click('#refresh');
+  await page.waitForTimeout(500);
+  check('a press never reads the machine list', await page.evaluate(() => window.__awPressPushes), pushesBeforePress);
   await page.screenshot({ path: join(args.out, `provisioning-${scheme}.png`) });
 
   // Every state, in this scheme, with its own screenshot. Order matters: `offline` runs

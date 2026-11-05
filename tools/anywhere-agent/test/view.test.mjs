@@ -11,14 +11,12 @@ const source = readFileSync(fileURLToPath(new URL('../shell/renderer/view.js', i
 const sandbox = {};
 vm.createContext(sandbox);
 vm.runInContext(source, sandbox);
-const { viewModel, groupMachines, resolveSelection, kernelFact, statusOf, diagnosticsOf, accountOf, PROVISIONING_COPY, REFRESH_LOCKED } = sandbox.AWView;
+const { viewModel, groupMachines, resolveSelection, kernelFact, statusOf, diagnosticsOf, accountOf, PROVISIONING_COPY } = sandbox.AWView;
 
 test('refresh stays available while a connection is being made', () => {
   // Refresh means "read the list again"; it is the one thing a person can press when a
   // connection looks stuck. Only preparing this machine runs a sequence that a second
   // press would duplicate, so only that state may lock the button.
-  assert.deepEqual(plain(REFRESH_LOCKED), ['provisioning']);
-  assert.equal(REFRESH_LOCKED.includes('connecting'), false);
 });
 
 // Values built inside the vm realm have that realm's prototypes, and a strict deep

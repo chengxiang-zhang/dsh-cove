@@ -118,15 +118,6 @@
       },
     };
 
-    /**
-     * The states where pressing refresh would start a second run of a sequence already in
-     * flight: preparing this machine installs things, so a second press is not a re-read.
-     * `connecting` is deliberately not one of them - pressing refresh there re-reads the
-     * list, which is exactly what a person does when a connection looks stuck. Blocking it
-     * left the only way out of a wedged connect as the menu item or a restart.
-     */
-    const REFRESH_LOCKED = ['provisioning'];
-
     /** The rail: what the window is showing, plus what is always available. */
     const RAIL_ACTIVE = { home: 'machines', workspace: 'session' };
 
@@ -653,7 +644,6 @@
       STATE_TONE,
       STATE_PANEL,
       PROVISIONING_COPY,
-      REFRESH_LOCKED,
       WELCOME,
     };
   };
