@@ -92,8 +92,18 @@ function importSpecs(source: string): string[] {
   return specs
 }
 
+/**
+ * Walk a directory tree.
+ *
+ * A missing root is a failure, never an empty list. Returning `[]` made this whole
+ * fence vacuous: with the entire service tree moved aside, every assertion below
+ * held for the empty set and the gate still reported four green tests. The scan
+ * must refuse to scan nothing.
+ */
 function walk(dir: string, skip?: string): string[] {
-  if (!existsSync(dir)) return []
+  if (!existsSync(dir)) {
+    throw new Error(`dependency fence: directory is missing, refusing to scan nothing: ${dir}`)
+  }
   const files: string[] = []
   for (const name of readdirSync(dir)) {
     const full = join(dir, name)
@@ -117,7 +127,8 @@ function edgesOf(files: readonly string[]): Edge[] {
 }
 
 describe('superagent dependency fence', () => {
-  const saEdges = edgesOf(walk(SA))
+  const saFiles = walk(SA)
+  const saEdges = edgesOf(saFiles)
 
   it('1. every import edge inside SA is in the allowed table', () => {
     expect(violations(saEdges)).toEqual([])
@@ -145,5 +156,20 @@ describe('superagent dependency fence', () => {
     const found = violations(synthetic)
     expect(found).toHaveLength(1)
     expect(found[0]).toContain('kernel -> desk')
+  })
+
+  // The four assertions above are all of the form "no violation among the edges
+  // that were found", so on their own they hold for an empty scan. Measured on
+  // 2026-11-06: 132 files and 515 relative edges. The floors sit well below that,
+  // so moving a module around does not fail the gate, but a scan that found
+  // nothing, or found one lonely file, does.
+  it('5. the scan sees the real tree, so an empty scan cannot pass', () => {
+    expect(saFiles.length).toBeGreaterThan(100)
+    expect(saEdges.length).toBeGreaterThan(400)
+  })
+
+  it('6. a missing SA root fails instead of scanning nothing', () => {
+    expect(() => walk(join(SRC, 'host', 'services', 'superagent-absent-for-the-fence-test')))
+      .toThrow(/refusing to scan nothing/u)
   })
 })
