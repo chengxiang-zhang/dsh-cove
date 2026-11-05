@@ -33,6 +33,96 @@
 | [10-执行体](10-执行体.md) | 执行体 | 执行体模板、尝试、预算、结案、升级、观察器 | 执行侧 | 中 | 协议、内核、世界模型 |
 | [11-恢复与降级](11-恢复与降级.md) | 恢复与降级 | 对账、租约、失败隔离与降级矩阵 | 运维与值班 | 低 | 协议、内核、桌子、执行体、世界模型 |
 
+## 架构图
+
+### 视图一：跑在哪（部署、进程与信任边界）
+
+```
+人类入口：飞书私聊 / 飞书群 / CLI / Web / API        ← 都只是通道，不是内核
+                    │
+                    ▼
+channels/feishu（原 lark-inbox 并入）
+  入站：归一、去重、写 inbox_events
+  出站：send / react / audience / history
+  不并入通道的平台件：feishu 域（应用凭据、bot 身份）、notify 域（运行结束推送）
+                    │ inbound（event_id 幂等）
+                    ▼
+superagent 服务域（web-all 内唯一服务域；cordis.patch.yml 仍一行）
+  kernel 四原语：claim → ledger → clock → outlet      ← 唯一写账本
+    注入四个接口：ClaimPolicy · TickSignal · OutletPolicy · SenderPort
+  desk（案卷、now 投影）        judgment（快路径、六道闸、翻译、派活）
+  timing（议程、注意力、模板）  executors（画像、尝试、结案、升级）
+  rules / memory / world        recovery（对账、租约、降级、第二声音）
+  observability（读数、命令、面板渲染）
+                    │ sessionController.create / prompt / cancel / inspect
+        ┌───────────┴────────────┐
+        ▼                        ▼
+   桌子会话（9 个桌面工具）    执行体会话（画像工具 + report）
+        │                        │ turn/end + report
+        └──────────┬─────────────┘
+                   ▼
+        回到内核：结案判定 → 议程 → 桌子 → 出口
+```
+
+### 视图二：一句话怎么变成一件承诺（数据流）
+
+```
+① 老板说一句
+        │
+② 通道 inbound → 内核 claim（CAS）→ 写 intake（一条事件一个 owner）
+        │
+③ 内核请求回合 → 桌子编译案卷（now + 桌切片 + 本批）
+        │
+④ 桌子回合内：judge 归位 → commit 交办（意图/判据/边界/悬念/执行体/预算）
+        │
+⑤ 内核一个事务：commitment(open) + attempt(pending)
+        ├──► outlet.say(ack) ──► 通道.send ──► 老板（≤30 秒，只说"接了"）
+        └──► 执行体 dispatch：create 会话 + prompt(queue) → attempt=running
+                    │
+⑥ 执行体干活：report(progress/blocked/ready) 写 journal；宿主记 tool_calls/停滞/打转/预算
+                    │
+⑦ turn/end 到达 → 宿主结案判定（证据 ↔ check_kind；对不上=未验证）
+                    │
+⑧ 终态 → 议程触发下一回合 → 桌子 say(deliver)（≤100 词 + 证据）→ 老板
+                    │
+⑨ 老板补一句 → 快路径/模型判 amend → journal 追加 request_id → 执行体下回合消费（没消费不结案）
+                    │
+⑩ 老板说停 → 即时路径 release → cancel 尝试 → 回执写"停在哪一步、改动怎么办"
+```
+
+### 视图三：交互时序（三条即时路径不排队）
+
+```
+老板        通道         内核             桌子            执行体
+ │ 说一句    │            │                │               │
+ │──────────►│ inbound    │                │               │
+ │           │───────────►│ claim(CAS)     │               │
+ │           │            │───────────────►│ 起回合 + 案卷  │
+ │           │            │◄───────────────│ judge / commit│
+ │           │◄───────────│ say(ack)       │               │
+ │◄──────────│ 一句受理    │ dispatch ──────────────────────►│ running
+ │           │            │◄───────────────────────────────│ report / 事件
+ │           │            │◄───────────────────────────────│ turn/end
+ │           │            │ 结案判定 → 议程 → 桌子          │
+ │           │◄───────────│ say(deliver) ──┘               │
+ │◄──────────│ 交付+证据   │                │               │
+ │ 说停      │            │ 即时路径 release → cancel ────►│
+ │◄──────────│ 终止回执    │                │               │
+```
+
+三条不走时钟的即时路径：受理 ack、停止 release、派发失败终止句。时钟只负责"到点看一眼"与超时升级。
+
+### 视图四：状态机
+
+```
+commitment   proposed ──► open ──► at_risk ──► fulfilled
+                            │         ├──────► unverified（证据对不上）
+                            │         ├──────► broken
+                            └─────────┴──────► released / withdrawn / orphaned
+attempt      pending ──► running ──► ended（end_reason 原值；未知当失败）
+outbox       queued ──► sent / failed / suppressed / folded
+```
+
 ## 依赖方向
 
 箭头指"依赖"：上层可以调下层，下层不知道上层。组合根 `index.ts` 只做装配与钩子接线，不属于任何模块。
