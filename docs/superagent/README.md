@@ -79,7 +79,7 @@ superagent 服务域（web-all 内唯一服务域；cordis.patch.yml 仍一行�
         ├──► outlet.say(ack) ──► 通道.send ──► 老板（≤30 秒，只说"接了"）
         └──► 执行体 dispatch：create 会话 + prompt(queue) → attempt=running
                     │
-⑥ 执行体干活：report(progress/blocked/ready) 写 journal；宿主记 tool_calls/停滞/打转/预算
+⑥ 执行体干活：report(progress/blocked/ready) 写 journal；宿主记 tool_calls 与止损读数，停滞/打转自愈重派
                     │
 ⑦ turn/end 到达 → 宿主结案判定（证据 ↔ check_kind；对不上=未验证）
                     │
