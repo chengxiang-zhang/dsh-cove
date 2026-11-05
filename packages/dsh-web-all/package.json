@@ -29,7 +29,8 @@
       "patch": [
         "./cordis.patch.yml",
         "./presets/hiopen.patch.yml",
-        "./presets/code-vibe.patch.yml"
+        "./presets/code-vibe.patch.yml",
+        "./presets/superagent-desk.patch.yml"
       ]
     },
     "client": {

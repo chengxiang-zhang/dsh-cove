@@ -250,11 +250,20 @@ describe('desk presence', () => {
     deliver(r)
     await closeWindow(r)
     expect(prompts(r)).toHaveLength(1)
-    // S1: execution scope follows exec.agent, so no host source may call execute itself; the dossier never rides a section.
+    // S1: execution scope follows exec.agent, so a host-side execute without an agent runs the
+    // global tool view. No host source outside channels/ may call execute itself.
     const root = join(__dirname, '../src/host/services/superagent')
     const offenders = sourceFiles(root).filter(f => !relative(root, f).startsWith('channels/'))
       .filter(f => /tools\.execute|\.execute\(/.test(readFileSync(f, 'utf8')))
     expect(offenders).toEqual([])
+    // The dossier must ride the turn's user message, never a system prompt section (T-11).
+    // Why not system-prompt-audit: that gate (scripts/system-prompt-audit.test.mjs) only flags literal
+    // {{...}} groups inside a section/context `text:` expression. A dynamic value such as
+    // `systemPrompt.section({ name: 'dossier', text: dossier.text })` carries no literal braces, so the
+    // gate stays green: negative control NC-a (2026-11-05) put exactly that call in desk/presence.ts
+    // and test:scripts still read 608/608. Only a literal `{{dossier}}` turned it red (NC-b).
+    // The stand-in is this source scan: any `systemPrompt.` under desk/ fails the test. This
+    // constraint is enforced by this scan, not by system-prompt-audit.
     expect(sourceFiles(join(root, 'desk')).filter(f => /systemPrompt\./.test(readFileSync(f, 'utf8')))).toEqual([])
   })
 

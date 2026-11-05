@@ -62,4 +62,42 @@
 
 | 波 | 状态 | 读数 | 时间 |
 | --- | --- | --- | --- |
-| W0 | 进行中 | S0 隔离自检与基线读数在跑 | 2026-11-05 23:2x |
+| W0 | 完成 | S0 holds / S1 **fails**（见下）/ S2 holds / S3 holds(n=1) / S4 holds / S5 holds | 2026-11-05 23:46 |
+| W1 | 完成 | T01 10+4、T02 174/174 + trio 75、T03 7；commits a877a56 / 2ee3444 | 2026-11-05 23:47 |
+| W2 | 完成 | T04 18、T05 12、T06 11、T07 8；commit 50777f3 | 2026-11-05 23:47 |
+| W3 | 完成 | T08 12、T09 10、T10 13、T11 11、T18 11；`tests/superagent-` 18 files / 200 passed | 2026-11-06 00:07 |
+| W4 | 完成 | T12 11、T13 8、T14 12、T15 10、T16 13 | 2026-11-06 00:07 |
+| W5 | 进行中 | T17 12、T19 14、T20 14、T28 53 + 608；T21/T22/T23/T24 在跑 | 2026-11-06 00:40 |
+| W6–W9 | 未开 | T25/T26 → T27 → T29/T30 | — |
+
+## W0 spike 的结论（比 SPIKES.md 原文更权威，实现按这里）
+
+- **S1 fails，但原因不是拿不到 scope**：agent 级 ctx 拿到了、三件套生效；`subagent` 注册在**agent 面**，`restrict` 按设计只过滤继承来的工具（F10 被真实会话证实：31 个工具砍到只剩它）。所以"可见集恰等于 9 个桌面工具"不可达。
+- **执行作用域由 `exec.agent` 决定，不由调用方 ctx 决定**：不带 agent 的宿主侧 `tools.execute` 走全局视图，`ssh_exec` 照跑。R2 的真实缺口。
+- guard 能从 `ToolExecutionInput.agent` 读到会话 id，按会话拒绝成立。
+- **S4**：退出码只有 `tool/result.data.message.content[*].text` 的 `[exit code: N]` 文本标记（无标记即 0），`isError` 非零退出仍为 false，不可当失败信号；`user/message` 无 turn 字段，`consumed_turn` 只能按 `turn/start…turn/end` 的 seq 区间算。
+- **S2**：`create({agentPreset})` 可用且返回值带预设；按会话覆盖模型（`agent/request`）与按目录覆盖都生效，全局默认不变；`modelCatalog()` 的字段是 `groups`/`routableProviders`/`failures`。
+- **S5**：运行中 steer 不打断原回合、queue 落到下一回合、空闲 queue 起新回合。
+- **S3**：19/19 行可从 `raw.sender.sender_id.union_id` 回填（扁平形状；v2 包装在 `raw.event.sender.sender_id`），`user_id` 恒空不可作备用键；样本只有 1 个发送者与 1 个 app，属方向性。
+
+## R2 现在的机械保证（T20 交付后的口径）
+
+1. guard 兜底 + fail-closed 自检：桌子会话上非桌面工具一律拒；任意一次非桌面工具真执行成功，下一回合不发 prompt。
+2. 禁止宿主侧裸调 `tools.execute`：源码扫描用例 + grep 门禁。
+3. **仍靠提示词的一条**：agent 面的 `subagent` 不装，只能靠专用预设；`restrict` 过滤不到它。
+4. **"案卷不进 system prompt"靠源码扫描**（`desk/` 出现 `systemPrompt.` 即红），不靠 `system-prompt-audit`：后者只拦字面 `{{…}}`，对动态文本空转。
+
+## 已发生的 spec 修正（Lead 授权，均已提交）
+
+- T-00 G6 白名单含 `channels/**`（`DatabaseSync` 与事务入口三处），账本不变量改由"只有 kernel 写 `sa_*`"承担（T08 运行时 + T28 静态）。
+- T-00 F22 的 grep 改为 `grep -cE '^\s*- id:'`（原文会把注释数成 4）；G1 的类型错误退出码记为 1（pnpm 包装）或 2（直接 `tsc -b`）。
+- T-01 的 T04 通过数 16 → 18；T-01 的 `TABLE_OWNERS` 注释改为 kernel 只拥有 intake/commitment/journal/outbox/lease/inbox_events(owner)，deliberation 归 desk、subscription 归 judgment（以 02 对象目录为准）。
+- `kernel/ledger.ts` 追加三个具名方法：`touch`（I1 上限）、`recordOutbox`、`advanceSubscription`（passthrough 的 input_seq+1）、`patchCommitment`（只许 slot/used_*/extended/budget_* 六列）。
+- `tx.run` 拒绝多语句（`MULTI_STATEMENT`）：此前 `INSERT …; DELETE …` 会静默丢掉尾句。
+
+## 已知未决（不阻塞，但交付报告必须写）
+
+- 退出码只能靠文本标记解析；若 provider 改文本，结案会退到 unverified。
+- `promoteCandidates` 需要 owner 注入；记忆派生提示因协议无 `body_json` 列，到案卷只能是固定句。
+- `world` 的 ssh 适配器把所有候选提议成 `netbird/<canonical>`，公网域名也会出现为候选（只影响噪声，人批时不选即可）。
+- 真实工具面证据要等用户重启 DSH 服务后读一张桌子会话的 `request/header`。

@@ -34,6 +34,7 @@ describe('bundled code-vibe preset', () => {
       './cordis.patch.yml',
       './presets/hiopen.patch.yml',
       './presets/code-vibe.patch.yml',
+      './presets/superagent-desk.patch.yml',
     ])
     expect(manifest.files).toContain('presets')
     expect(manifest.dsh.engines.dsh).toBe('>=0.2.0-rc.2')
