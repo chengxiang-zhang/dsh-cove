@@ -115,9 +115,15 @@ interface Harness {
   deliver(envelope: LarkInboxEnvelope): void
 }
 
-/** Noon and three in the morning, local: the two sides of the quiet-hours gate. */
-const NOON = new Date('2023-11-15T12:00:00+08:00').getTime()
-const THREE_AM = new Date('2023-11-15T03:00:00+08:00').getTime()
+/**
+ * Noon and three in the morning, in the machine's own time: the two sides of the
+ * quiet-hours gate. The gate reads `new Date(now).getHours()` - local wall clock, which is
+ * the right answer for a bot running on the person's own machine - so a fixture pinned to
+ * a fixed offset (+08:00) only means "noon" on a host in that zone. Built from local
+ * components, "local noon" and "local 3am" stay the same test on a UTC runner.
+ */
+const NOON = new Date(2023, 10, 15, 12, 0, 0).getTime()
+const THREE_AM = new Date(2023, 10, 15, 3, 0, 0).getTime()
 
 function harness(overrides: Partial<AutoReplyConfig> = {}, startClock = 1_700_000_000_000): Harness {
   const store = InboxStore.open({ rootDir: tempDir() })
