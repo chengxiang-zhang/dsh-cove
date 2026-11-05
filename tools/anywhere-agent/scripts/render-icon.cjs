@@ -14,8 +14,22 @@ const { app, BrowserWindow } = require('electron');
 const { readFileSync, writeFileSync } = require('node:fs');
 const { dirname, resolve } = require('node:path');
 
-const [svgPath, outPath, sizeArg] = process.argv.slice(2);
+// Arguments, taken from the script's own name onwards. The caller may pass Chromium
+// switches before the script path (an isolated `--user-data-dir`, `--disable-gpu`,
+// `--no-sandbox`), and Electron leaves those on this process's argv ahead of the script:
+// reading argv by position would take a switch - or the script path itself - for the
+// artwork. Everything before the script name is launcher, not input.
+const argv = process.argv.slice(1);
+const scriptAt = argv.findIndex((arg) => arg.endsWith('render-icon.cjs'));
+const [svgPath, outPath, sizeArg] = (scriptAt >= 0 ? argv.slice(scriptAt + 1) : argv).filter(
+  (arg) => !arg.startsWith('--'),
+);
 const size = Number(sizeArg ?? 1024);
+
+// A rasteriser does not need a GPU, and asking for one is how this crash took the Dock
+// icon down with it: a GPU process that cannot initialise kills the render before any
+// page exists.
+app.disableHardwareAcceleration();
 
 /** Inlines an SVG's relative image references, so it renders the same from anywhere. */
 function inlineImages(svg, baseDir) {

@@ -60,6 +60,31 @@ for required in "$ELECTRON_DIST" "$HELPER" "$CONTRACT"; do
   fi
 done
 
+# Rasterises one piece of brand artwork with the distribution's Electron.
+#
+# The artwork is part of the product surface, not decoration: a bundle whose .icns never
+# got built shows the vendor's logo in the Dock, and a bundle whose tray image never got
+# built shows nothing in the menu bar. Electron can fail to start (a GPU process that
+# cannot initialise, a transient SIGTRAP while other Electron instances are running), so
+# the render gets its own profile directory, no GPU, and a few attempts - and running out
+# of attempts is an error here rather than a warning that lets the wrong icon ship.
+# `ALLOW_VENDOR_ICON=1` is the deliberate opt-out for an environment that cannot render.
+render_brand_art() {
+  local svg="$1" out="$2" size="$3" attempt log data
+  data="$(mktemp -d)/electron-render"
+  for attempt in 1 2 3; do
+    log="$(mktemp -d)/render-$attempt.log"
+    if "$ELECTRON_DIST/Contents/MacOS/Electron" \
+        --user-data-dir="$data" --disable-gpu --disable-gpu-sandbox --no-sandbox \
+        "$PACKAGE_DIR/scripts/render-icon.cjs" "$svg" "$out" "$size" >"$log" 2>&1; then
+      return 0
+    fi
+    cat "$log" >&2
+    sleep 1
+  done
+  return 1
+}
+
 echo "==> staging $APP"
 rm -rf "$APP"
 mkdir -p "$OUT"
@@ -135,11 +160,9 @@ echo "==> building the app icon from the brand artwork"
 ICON_SOURCE="$PACKAGE_DIR/icons/app-icon.svg"
 ICONSET="$(mktemp -d)/AppIcon.iconset"
 mkdir -p "$ICONSET"
+icon_ok=0
 if [ -f "$ICON_SOURCE" ]; then
-  # The *distribution's* runtime, not the staged bundle: a bundle already carries its
-  # own app, so `Electron <script>` would run the app instead of the script.
-  if "$ELECTRON_DIST/Contents/MacOS/Electron" "$PACKAGE_DIR/scripts/render-icon.cjs" \
-      "$ICON_SOURCE" "$ICONSET/icon-1024.png" 1024 >/dev/null 2>&1; then
+  if render_brand_art "$ICON_SOURCE" "$ICONSET/icon-1024.png" 1024; then
     for spec in "16 16" "32 32" "64 32" "128 128" "256 256" "512 256" "512 512" "1024 512"; do
       set -- $spec
       sips -z "$1" "$1" "$ICONSET/icon-1024.png" --out "$ICONSET/icon_${2}x${2}$([ "$1" != "$2" ] && echo '@2x').png" >/dev/null
@@ -148,15 +171,28 @@ if [ -f "$ICON_SOURCE" ]; then
       # The same artwork as a plain PNG: the running app sets its Dock tile from this, so
       # what the Dock shows does not depend on any icon cache being warm.
       cp "$ICONSET/icon-1024.png" "$APP/Contents/Resources/AppIcon.png"
+      icon_ok=1
       echo "  icon: built from app-icon.svg"
     else
-      echo "  warning: iconutil could not build the icns; keeping the runtime's icon" >&2
+      echo "iconutil could not build the icns from $ICONSET" >&2
     fi
   else
-    echo "  warning: could not rasterise the brand artwork; keeping the runtime's icon" >&2
+    echo "could not rasterise $ICON_SOURCE" >&2
   fi
 else
-  echo "  warning: $ICON_SOURCE is missing; keeping the runtime's icon" >&2
+  echo "missing artwork: $ICON_SOURCE" >&2
+fi
+if [ "$icon_ok" -ne 1 ]; then
+  # The alternative is Electron's logo in the Dock, which is the vendor's brand, not the
+  # product's - so a build that cannot produce the icon is a broken build, not a warning.
+  # The opt-out exists for an environment that genuinely cannot start a renderer.
+  if [ "${ALLOW_VENDOR_ICON:-0}" = "1" ]; then
+    echo "  warning: continuing without the product icon (ALLOW_VENDOR_ICON=1)" >&2
+  else
+    echo "error: no product icon; refusing to build a bundle that would ship the vendor's logo" >&2
+    echo "       set ALLOW_VENDOR_ICON=1 to build one anyway" >&2
+    exit 1
+  fi
 fi
 
 echo "==> rewriting Info.plist"
@@ -180,13 +216,16 @@ plist_set NSHumanReadableCopyright ""
 MARK_SOURCE="$PACKAGE_DIR/../../tools/dsh-netbird/brand/dashboard/logo-mark.svg"
 if [ -f "$MARK_SOURCE" ] && [ -f "$APP/Contents/MacOS/Electron" ]; then
   TRAY_MASTER="$(mktemp -d)/tray-master.png"
-  if "$ELECTRON_DIST/Contents/MacOS/Electron" "$PACKAGE_DIR/scripts/render-icon.cjs" \
-      "$MARK_SOURCE" "$TRAY_MASTER" 256 >/dev/null 2>&1; then
+  if render_brand_art "$MARK_SOURCE" "$TRAY_MASTER" 256; then
     sips -z 18 18 "$TRAY_MASTER" --out "$APP/Contents/Resources/trayTemplate.png" >/dev/null
     sips -z 36 36 "$TRAY_MASTER" --out "$APP/Contents/Resources/trayTemplate@2x.png" >/dev/null
     echo "  tray: built from logo-mark.svg"
+  elif [ "${ALLOW_VENDOR_ICON:-0}" = "1" ]; then
+    echo "  warning: continuing without the menu bar icon (ALLOW_VENDOR_ICON=1)" >&2
   else
-    echo "  warning: could not rasterise the tray icon" >&2
+    echo "error: could not rasterise the menu bar mark; refusing to build a bundle without it" >&2
+    echo "       set ALLOW_VENDOR_ICON=1 to build one anyway" >&2
+    exit 1
   fi
 fi
 
@@ -230,6 +269,42 @@ if codesign --verify --strict --verbose=2 "$APP" 2>&1 | tail -2; then
   echo "  signature verifies"
 else
   echo "  signature did NOT verify" >&2
+  exit 1
+fi
+
+# The bundle's identity, read back from the artifact itself rather than trusted from the
+# steps above: a build that says it has the product icon but ships `electron.icns` is how
+# the Dock ends up showing the vendor's logo, and nothing later in this script would
+# notice. Every one of these is a failure, because all of them are visible to the person
+# who installs the build.
+echo "==> verifying the bundle's identity"
+IDENTITY_FAILURES=0
+check_identity() {
+  if [ "$2" = "$3" ]; then
+    echo "  ok   $1: $3"
+  else
+    echo "  FAIL $1: got '$2', want '$3'" >&2
+    IDENTITY_FAILURES=$((IDENTITY_FAILURES + 1))
+  fi
+}
+check_identity "CFBundleIconFile" \
+  "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP/Contents/Info.plist" 2>/dev/null || true)" \
+  "AppIcon"
+check_identity "AppIcon.icns present" \
+  "$([ -s "$APP/Contents/Resources/AppIcon.icns" ] && echo yes || echo no)" "yes"
+check_identity "AppIcon.png present" \
+  "$([ -s "$APP/Contents/Resources/AppIcon.png" ] && echo yes || echo no)" "yes"
+check_identity "no vendor icon left" \
+  "$([ -e "$APP/Contents/Resources/electron.icns" ] && echo present || echo absent)" "absent"
+check_identity "AppIcon.icns is not the runtime's icon" \
+  "$([ -s "$APP/Contents/Resources/AppIcon.icns" ] && [ "$(shasum -a 256 "$APP/Contents/Resources/AppIcon.icns" | cut -d' ' -f1)" = "$(shasum -a 256 "$ELECTRON_DIST/Contents/Resources/electron.icns" | cut -d' ' -f1)" ] && echo same || echo different)" \
+  "different"
+if [ -f "$PACKAGE_DIR/../../tools/dsh-netbird/brand/dashboard/logo-mark.svg" ]; then
+  check_identity "menu bar mark present" \
+    "$([ -s "$APP/Contents/Resources/trayTemplate.png" ] && echo yes || echo no)" "yes"
+fi
+if [ "$IDENTITY_FAILURES" -ne 0 ]; then
+  echo "error: the bundle would show the wrong icon; refusing to ship it" >&2
   exit 1
 fi
 
