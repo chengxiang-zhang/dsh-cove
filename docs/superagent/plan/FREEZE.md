@@ -106,3 +106,32 @@ DONE-1 四个命令（`pnpm typecheck` / `pnpm test` / `pnpm docs:check` / `pnpm
 - `promoteCandidates` 需要 owner 注入；记忆派生提示因协议无 `body_json` 列，到案卷只能是固定句。
 - `world` 的 ssh 适配器把所有候选提议成 `netbird/<canonical>`，公网域名也会出现为候选（只影响噪声，人批时不选即可）。
 - 真实工具面证据要等用户重启 DSH 服务后读一张桌子会话的 `request/header`。
+
+## 独立对抗评审 R1（2026-11-06，只读，跨模型族）
+
+verdict 初始为 **FAIL**：R1 用可复现 probe 打穿 3 条不变量并找出 12 处实现缺口 + 5 处设计缺口。逐条修复后（commit `fix(superagent): close the invariants the adversarial review broke`），六靶现状：
+
+| 靶 | 初始 | 现在 |
+| --- | --- | --- |
+| P1 唯一写入者 | 突破（`opts.module ?? 'kernel'` 让 9 处非内核调用点拿到裸写权） | 守住（`module` 类型必填 + 运行期 `MODULE_REQUIRED`；27 处调用点已补） |
+| P2 只追加 | 突破（`INSERT OR REPLACE` 绕过 BEFORE DELETE 触发器） | 守住（ledger 拒绝 REPLACE + `BEFORE INSERT` 触发器 + 裸句柄同样被拦） |
+| I3 无主算力 | 突破（库级无"running 必须属未结案承诺"） | 守住（`updateAttempt` 校验 + 两道库级触发器） |
+| 结案不信自述 | 突破（command 判据不比对 `done_when`，执行体自造证据即可结案） | 守住（判据必须命中 `done_when` 里的那条命令；`report` 不算证据；对不上判 unverified） |
+| P3 幂等 | 守住 | 守住 |
+| 状态机全部边 | 部分（终态边守住，非终态边只靠 `ledger.transition`） | 同左，列入未决 |
+
+最严重的一个（已修）：`ledger.ts` 的 `active = true` 在 `BEGIN IMMEDIATE` 之前，一次 `SQLITE_BUSY` 之后账本在本进程内永久写死，只能重启——现在置位在 `BEGIN` 成功之后、`finally` 无条件复位。
+
+设计层 5 条（B1–B5）已由 Lead 改文档：`10` 的 command 判据收紧为"必须是 `done_when` 里的那条命令"，`03` 的 owner 不变量排除影子行并写明"只有影子行"的中间态，`02` 的 attempt 止损线按 kind 分档，`02` 的 P3 注明 `message_id` 的唯一索引归通道 DDL。
+
+## 最终验收读数（Lead 复跑，2026-11-06 02:22）
+
+- `pnpm typecheck` → 退出码 0，error TS 0
+- `pnpm test` → 134 files / **1906 passed** / 4 skipped，退出码 0
+- `pnpm docs:check` → all documentation gates passed
+- `pnpm test:scripts` → **608 pass / 0 fail**
+- `vitest run tests/superagent-` → 31 files / 340 passed
+- `grep -cE '^\s*- id:' packages/dsh-web-all/cordis.patch.yml` → 1
+- 七步链 e2e → 7/7
+
+仍未验证（需真实实例）：真实工具面端口、执行体 report 工具的真实注册、按会话覆盖模型的真实生效、飞书真实发送；以及 DONE-6 的 72 小时影子期读数。
