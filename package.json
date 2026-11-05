@@ -34,7 +34,8 @@
     "preset:check": "node scripts/render-preset.mjs --check && node scripts/verify-preset-refs.mjs",
     "fleet:collect": "node scripts/dsh-fleet-collect.mjs",
     "fleet:schedule": "node scripts/dsh-fleet-collect.mjs --install-schedule",
-    "fleet:rollout": "node scripts/dsh-fleet-rollout.mjs"
+    "fleet:rollout": "node scripts/dsh-fleet-rollout.mjs",
+    "wish-review": "node scripts/wish-preset-review.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
