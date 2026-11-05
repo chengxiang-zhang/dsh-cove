@@ -28,7 +28,7 @@
   "counts": {
     "cases": 174,
     "responder": 67,
-    "responderMigrated": 46
+    "responderMigrated": 54
   },
   "cases": [
     {
@@ -560,9 +560,10 @@
       "case": "cancels an expired turn, closes it as a timeout, and ignores its late end",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "turn expiry is presence tick; no superagent case pins a timed-out desk turn yet"
+      "status": "migrated",
+      "reading": "after the timeout the waiter is gone, so the late turn/end leaves the recorded row unchanged",
+      "target": "tests/superagent-parity-desk.spec.ts::replaces \"cancels an expired turn... and ignores its late end\": the late end does not close the turn a second time",
+      "module": "superagent/desk/presence.ts"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
@@ -579,18 +580,20 @@
       "case": "captures a turn that finishes before the prompt call returns",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the responder had to race its own synchronous prompt; the desk turn is event-driven, so there is nothing to capture early and no equivalent case"
+      "status": "migrated",
+      "reading": "the waiter is registered before the prompt; an end that arrives during it closes the turn as completed",
+      "target": "tests/superagent-parity-desk.spec.ts::replaces \"captures a turn that finishes before the prompt call returns\": an end that arrives while the prompt is still out still closes the turn",
+      "module": "superagent/desk/presence.ts"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
       "case": "closes a prompt that never opens a turn as a timeout instead of waiting forever",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the desk enforces TURN_TIMEOUT_MS on its own turns; the superagent suite has no case for it yet"
+      "status": "migrated",
+      "reading": "tick cancels the session and closes the deliberation once the turn passes TURN_TIMEOUT_MS",
+      "target": "tests/superagent-parity-desk.spec.ts::replaces \"closes a prompt that never opens a turn as a timeout instead of waiting forever\": an expired turn is cancelled and closed",
+      "module": "superagent/desk/presence.ts"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
@@ -654,9 +657,9 @@
       "case": "ignores an interrupted assistant message instead of forwarding a half stream",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the desk never forwards a model stream; its text arrives through the tool surface, so a half assistant message cannot reach a person"
+      "status": "not-applicable",
+      "reading": "no equivalent: 设计取消：桌子的文本只经工具面产生，从不转发模型流，半条 assistant 消息没有到达人的通道",
+      "why": "设计取消：桌子的文本只经工具面产生，从不转发模型流，半条 assistant 消息没有到达人的通道"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
@@ -721,18 +724,19 @@
       "case": "puts a job whose prompt threw before binding a turn back into the batch",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "a desk turn that throws is retried by presence tick (desk-presence #8) with a different observable; the responder job queue is gone"
+      "status": "migrated",
+      "reading": "a rejected prompt closes the turn as error and requeues the batch; the next tick delivers it again",
+      "target": "tests/superagent-parity-desk.spec.ts::replaces \"puts a job whose prompt threw before binding a turn back into the batch\": a rejected prompt requeues and the next round delivers it",
+      "module": "superagent/desk/presence.ts"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
       "case": "re-registers bound sessions when a replacement responder starts",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "bound sessions are no longer re-registered by hand: the desk resolves its session from the ledger every turn (roles + presence), so there is no hand-off step"
+      "status": "not-applicable",
+      "reading": "no equivalent: 设计取消：会话归属每轮由账本重建（resolveRole + presence），没有进程内名单需要重新注册",
+      "why": "设计取消：会话归属每轮由账本重建（resolveRole + presence），没有进程内名单需要重新注册"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
@@ -777,9 +781,9 @@
       "case": "remembers the chat the person is actually using",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the desk is keyed by chat id (deskIdOf), so \"the chat the person is actually using\" is the only desk there is; the responder had to remember it"
+      "status": "not-applicable",
+      "reading": "no equivalent: 设计取消：桌子以 chat id 为键（deskIdOf），\"对方正在用的会话\"就是唯一的那个桌子，无需记忆",
+      "why": "设计取消：桌子以 chat id 为键（deskIdOf），\"对方正在用的会话\"就是唯一的那个桌子，无需记忆"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
@@ -836,8 +840,8 @@
       "class": "responder",
       "responder": true,
       "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "session binding retries belong to channels/feishu/session-binding.ts, which keeps its own spec (lark-inbox-session-binding)"
+      "reading": "no equivalent: 缺陷：ensureSession 只 create 一次，失败靠 tick 重排批次（无次数上限）且从不向人解释；会话创建持续失败时消息永久排队，人只有 ack 模板",
+      "why": "缺陷：ensureSession 只 create 一次，失败靠 tick 重排批次（无次数上限）且从不向人解释；会话创建持续失败时消息永久排队，人只有 ack 模板"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
@@ -933,9 +937,9 @@
       "case": "still delivers the answer when the aborted end arrives inside the grace period",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the responder grace window has no desk counterpart; a desk turn is closed by its own turn/end"
+      "status": "not-applicable",
+      "reading": "no equivalent: 设计取消：responder 的宽限期保护的是一次在途的平台发送；桌子在回合结束后经 outbox 发送，没有需要抢救的在途窗口",
+      "why": "设计取消：responder 的宽限期保护的是一次在途的平台发送；桌子在回合结束后经 outbox 发送，没有需要抢救的在途窗口"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
@@ -1035,9 +1039,9 @@
       "case": "counts the messages of one batch",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the responder appended a batch metadata line to its prompt; the desk prompt is assembled from the dossier, so the line does not exist"
+      "status": "not-applicable",
+      "reading": "no equivalent: 设计取消：桌子用案卷重建 prompt，无 responder 式的 prompt 记账（Lead 裁定）",
+      "why": "设计取消：桌子用案卷重建 prompt，无 responder 式的 prompt 记账（Lead 裁定）"
     },
     {
       "suite": "lark-inbox-router.spec.ts",
@@ -1092,9 +1096,10 @@
       "case": "leaves evidence even when the fallback itself cannot close the job",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the same reply_jobs evidence falls away with the ledger row it describes; journal rows replace it"
+      "status": "migrated",
+      "reading": "with no lease every utterance is refused, and the deliberation row still records the turn and its trace",
+      "target": "tests/superagent-parity-desk.spec.ts::replaces \"leaves evidence even when the fallback itself cannot close the job\": the deliberation row survives an utterance the outlet refuses",
+      "module": "superagent/desk/presence.ts"
     },
     {
       "suite": "lark-inbox-router.spec.ts",
@@ -1141,9 +1146,9 @@
       "case": "says how many messages this batch carries and how long since the last answer",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the responder appended a batch metadata line to its prompt; the desk prompt is assembled from the dossier, so the line does not exist"
+      "status": "not-applicable",
+      "reading": "no equivalent: 设计取消：桌子用案卷重建 prompt，无 responder 式的 prompt 记账（Lead 裁定）",
+      "why": "设计取消：桌子用案卷重建 prompt，无 responder 式的 prompt 记账（Lead 裁定）"
     },
     {
       "suite": "lark-inbox-router.spec.ts",
@@ -1159,27 +1164,28 @@
       "case": "still answers in words when the ledger refuses to close after a reaction",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the reply ledger row that could refuse a close is gone; the outbox records the send and has no second close step"
+      "status": "migrated",
+      "reading": "a refused reaction leaves no row, and the acknowledgement in words is still submitted at ACK_TEMPLATE_MS",
+      "target": "tests/superagent-parity-desk.spec.ts::replaces \"still answers in words when the reaction cannot be given\": the acknowledgement in words goes out although the reaction was refused",
+      "module": "superagent/desk/presence.ts"
     },
     {
       "suite": "lark-inbox-router.spec.ts",
       "case": "still treats the silent token as an instruction, not as an answer",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the silent-token rule lived in the responder prompt; the desk decides silence through its disposition, which has no token"
+      "status": "not-applicable",
+      "reading": "no equivalent: 设计取消：桌子用案卷重建 prompt，无 responder 式的 prompt 记账（Lead 裁定）",
+      "why": "设计取消：桌子用案卷重建 prompt，无 responder 式的 prompt 记账（Lead 裁定）"
     },
     {
       "suite": "lark-inbox-router.spec.ts",
       "case": "tells an older conversation the new contract once, not on every turn",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the instructions hash lived in the responder prompt path; the desk rebuilds its prompt from the ledger each turn, so there is no once-only notice"
+      "status": "not-applicable",
+      "reading": "no equivalent: 设计取消：桌子用案卷重建 prompt，无 responder 式的 prompt 记账（Lead 裁定）",
+      "why": "设计取消：桌子用案卷重建 prompt，无 responder 式的 prompt 记账（Lead 裁定）"
     },
     {
       "suite": "lark-inbox-router.spec.ts",
@@ -1405,9 +1411,10 @@
       "case": "does not extend the turn deadline by taking a steer",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the desk turn has no per-turn deadline to extend; stop-loss is budget based (executors-dispatch #9)"
+      "status": "migrated",
+      "reading": "sendInput does not touch budget_wall_ms or extended",
+      "target": "tests/superagent-parity-desk.spec.ts::replaces \"does not extend the turn deadline by taking a steer\": taking input changes neither the wall budget nor the extension flag",
+      "module": "superagent/executors/attempts.ts"
     },
     {
       "suite": "lark-inbox-steer.spec.ts",
@@ -1462,18 +1469,18 @@
       "case": "keeps settling a steer already taken after the switch is turned off",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the steer switch is the responder s own setting and disappears with it"
+      "status": "not-applicable",
+      "reading": "no equivalent: 设计取消：superagent 没有 steer 开关（直通由规则层逐条决定），不存在\"关掉后仍在结算\"的状态",
+      "why": "设计取消：superagent 没有 steer 开关（直通由规则层逐条决定），不存在\"关掉后仍在结算\"的状态"
     },
     {
       "suite": "lark-inbox-steer.spec.ts",
       "case": "keeps the one-collecting-and-one-inflight rule while a steer is pending",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the collecting/inflight pair is reply_jobs bookkeeping, replaced by the outbox and the desk turn"
+      "status": "not-applicable",
+      "reading": "no equivalent: 设计取消：reply_jobs 的 collecting/inflight 记账已不存在；桌子一桌一回合的规则由 desk-presence #4 覆盖",
+      "why": "设计取消：reply_jobs 的 collecting/inflight 记账已不存在；桌子一桌一回合的规则由 desk-presence #4 覆盖"
     },
     {
       "suite": "lark-inbox-steer.spec.ts",
@@ -1510,9 +1517,10 @@
       "case": "returns a steer the engine never took to the next batch",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the batch is gone; unconsumed input is visible as a journal row and re-queued by the next attempt, with no dedicated case"
+      "status": "migrated",
+      "reading": "a refused steer returns mode=queue and leaves one amend journal row the next attempt carries, once per request id",
+      "target": "tests/superagent-parity-desk.spec.ts::replaces \"returns a steer the engine never took to the next batch\": a refused steer is queued and stays as evidence for the next attempt",
+      "module": "superagent/executors/attempts.ts"
     },
     {
       "suite": "lark-inbox-steer.spec.ts",
@@ -1540,8 +1548,8 @@
       "class": "responder",
       "responder": true,
       "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "steer limits were a responder guard; the desk takes one input per turn by construction"
+      "reading": "no equivalent: 缺陷：sendInput 没有每回合的 steer 上限，每条 passthrough 决策都能再注入一次；responder 有上限。影响是 token 与回合抖动，不是正确性",
+      "why": "缺陷：sendInput 没有每回合的 steer 上限，每条 passthrough 决策都能再注入一次；responder 有上限。影响是 token 与回合抖动，不是正确性"
     },
     {
       "suite": "lark-inbox-steer.spec.ts",
