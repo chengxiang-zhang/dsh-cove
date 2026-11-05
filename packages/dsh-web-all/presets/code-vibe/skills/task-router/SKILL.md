@@ -136,7 +136,7 @@ T5 重估：每 5 轮 / 每里程碑 / 每次压缩后 / 触发升级条件 → 
 | T0 | 无（本 skill 规则） | 无 | E1（事实） | ≤2 轮 |
 | T1 | `fix-loop` | 3 行报告 + diff | E1（先红后绿） | 15–30 分钟 / ≤4 轮 |
 | T2 | `change-spec`（spec/wish-lite/ops） | spec+tasks+acceptance（含 Plan Card） | E2 + 负控 | 2–4h / ≤12 轮 / 1–2 agent |
-| T3 | `large-backlog-program` + `agent-team-project-loop`；T3-wish 用 `wish-programming` 全路径 | 账本+宪章+批次+板卡+HANDOFF | E2+E3 | 轮数推导 + 2×硬顶；单会话 ≤60–80 轮 |
+| T3 | `large-backlog-program` + `agent-team-project-loop`；T3-wish 用 `wish-programming` 全路径 | 账本+宪章+批次+板卡+HANDOFF | E2+E3 | 轮数推导 + 2×硬顶；单会话 ≤60–80 轮（计划数，不作 `create_goal` 的 `max_goal_rounds`） |
 | TR | `research-brief` | findings + gap | 来源+覆盖 | 按问题 |
 | TX | `incident-runbook` | incident + 复盘 | 止血读数 | 立即 |
 
