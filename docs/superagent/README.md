@@ -115,13 +115,16 @@ superagent 服务域（web-all 内唯一服务域；cordis.patch.yml 仍一行�
 ### 视图四：状态机
 
 ```
-commitment   proposed ──► open ──► at_risk ──► fulfilled
-                            │         ├──────► unverified（证据对不上）
-                            │         ├──────► broken
-                            └─────────┴──────► released / withdrawn / orphaned
+commitment   proposed ──► open ─────► fulfilled | unverified | broken
+                │           │
+                │           ├───────► at_risk ──► fulfilled | unverified | broken
+                │           │            │
+                └───────────┴────────────┴─────► released | withdrawn | orphaned
 attempt      pending ──► running ──► ended（end_reason 原值；未知当失败）
 outbox       queued ──► sent / failed / suppressed / folded
 ```
+
+状态机的权威定义在 [协议](02-协议.md)：`open` 可直接结案（正常交付是 `open → fulfilled`），`at_risk` 只是中间态，`proposed` 可直接 `withdrawn`。
 
 ## 依赖方向
 
@@ -145,6 +148,8 @@ outbox       queued ──► sent / failed / suppressed / folded
                                  ▼
                                协议
 ```
+
+图是分层示意，只画主干；精确依赖以下表为准（例如规则不依赖记忆，规则与记忆不依赖内核，它们直接依赖协议与世界模型）。
 
 精确的边（谁调谁，写死在模块接口上）：
 
