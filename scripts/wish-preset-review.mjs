@@ -27,7 +27,9 @@
  *   node scripts/wish-preset-review.mjs --json          # machine-readable summary
  *   node scripts/wish-preset-review.mjs --excerpt pc-tower:/home/pc/.dsh/sessions/...
  *
- * Exit: 0 ok (even with no new sessions), 1 at least one machine failed, 2 usage.
+ * Exit: 0 ok (even with no new sessions; an unreachable machine is a warning),
+ * 1 a machine failed under --strict, 2 usage. A permanently offline machine must
+ * not turn every scheduled run into a failure.
  */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -264,6 +266,7 @@ export function parseArgs(argv) {
     state: DEFAULT_STATE_PATH,
     out: DEFAULT_OUT_ROOT,
     excerpt: null,
+    strict: false,
     help: false,
   }
   for (let i = 0; i < argv.length; i += 1) {
@@ -300,6 +303,9 @@ export function parseArgs(argv) {
         break
       case '--excerpt':
         options.excerpt = next()
+        break
+      case '--strict':
+        options.strict = true
         break
       case '--help':
       case '-h':
@@ -656,10 +662,11 @@ export function helpText() {
     '  --excerpt h:p   print a compact transcript for <host>:<session path>',
     '  --json          print the run summary as JSON',
     '  --quiet         only print failures and the report path',
+    '  --strict        exit 1 when a machine could not be read (default: warn and continue)',
     '  --state PATH    state file (default .harvest/wish-preset-review/state.json)',
     '  --out DIR       report root (default .harvest/wish-preset-review)',
     '',
-    'Exit: 0 ok, 1 a machine failed, 2 usage.',
+    'Exit: 0 ok (an unreachable machine is a warning), 1 failed with --strict, 2 usage.',
   ].join('\n')
 }
 
@@ -736,13 +743,17 @@ export async function main(argv = process.argv.slice(2)) {
     sessions: collected.length,
     totals: aggregateSessions(collected),
   }
+  if (failures > 0 && !options.quiet) {
+    process.stdout.write(`wish-preset-review: ${failures} machine(s) could not be read\n`)
+  }
   if (options.json) {
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`)
   } else if (!options.quiet) {
     process.stdout.write(`wish-preset-review: ${collected.length} new or changed session(s) from ${machines.length} machine(s)\n`)
     process.stdout.write(`report: ${reportPath}\n`)
   }
-  return failures > 0 ? 1 : 0
+  if (failures > 0 && options.strict) return 1
+  return 0
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

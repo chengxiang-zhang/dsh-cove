@@ -25,7 +25,7 @@ pnpm wish-review --all           # 忽略游标重读窗口
 pnpm wish-review --excerpt <host>:<会话文件绝对路径>
 ```
 
-机器清单复用 `config/fleet-collect.local.json` 的 `machines`；某台机器离线时该机器记一条失败、其余照常出报告，命令以退出码 1 结束。
+机器清单复用 `config/fleet-collect.local.json` 的 `machines`；某台机器离线时只记一条警告、其余照常出报告，默认仍以退出码 0 结束（加 `--strict` 才把离线算失败），长期离线的机器不会让每轮都变成失败。
 报告为空是合法结果：没有任何新增会话时必须写「本轮无改动」，不得为交付编造规则。
 
 ## 读数口径
