@@ -15,6 +15,7 @@
 - **浏览器自动化**：按会话隔离的 Playwright 浏览器，以 `mcp__playwright__*` 工具命名空间对外提供。
 - **自动化任务运行目标**：原生自动化任务默认投递回创建它的会话；本能力让每条任务可选「每次新会话」——每次运行开一条全新会话，原对话只保留任务定义。**没有单独的设置界面**：在创建任务时说清楚（自然语言）即可，agent 用 `schedule_mode_set` 一次设好。
 - **许愿式编程预设**：内置 `code-vibe` 预设（按任务分档的流程、精选 skills、会话确认与路由门禁）与原生编码工具，作为额外会话模式显示；标准模式仍为默认。
+- **秘书（superagent）**：飞书入站消息可选的第二个负责人，把承诺记进账本、把活派给执行体会话并回报结果；由三档开关控制，默认仍由现有 responder 应答。
 
 Web profile 的运行时栈是 `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app` + `@dsh-cove/dsh-web-all`。
 
@@ -173,6 +174,31 @@ DSH 原生 `@deepseek-ai/dsh-schedule` 把任务绑定在创建它的会话上�
       runHistoryLimit: 200
 ```
 
+## 秘书（superagent）
+
+`superagent` 服务域是挂在同一个飞书收件箱上的秘书。它与其他服务域共享 `web-all` 生命周期，与飞书队列共用 `inbox.sqlite`，现有 responder 保持原样。
+
+三档开关决定每条入站消息由谁应答。开关逐条消息读取，切换对下一条消息立即生效，不需要重启进程。
+
+| 档位 | 谁应答 | superagent 写什么 |
+| --- | --- | --- |
+| `responder`（默认） | 现有 responder，与现在完全一致 | 只写消息归属 |
+| `shadow` | 现有 responder | 在影子行上记自己的判断；一条消息也不发 |
+| `superagent` | 秘书 | 账本与全部出站消息 |
+
+配置键放在 `lark-inbox` 设置命名空间里，没有对应的设置页。
+
+| 键 | 含义 |
+| --- | --- |
+| `superagentMode` | `responder`、`shadow` 或 `superagent`；其他取值一律按 `responder` 读取 |
+| `superagentDesk` | `seatDir`、`preset`（默认 `superagent-desk`）与可选的 `model`（`provider`、`model`、`effort`）；不配 model 则沿用全局默认 |
+| `superagentWorld` | `owners` 与 `colleagues`（`union_id`、`name`）、`entities`、`mandates`；授权只能由人给出 |
+| `superagentAttention` | `interruptQuota`（3）、`quiet`（`22:00` 至 `08:00`）与 `briefAt`（`18:30`） |
+
+- 本服务域在 DSH 服务重启后生效；重启前 responder 照旧运行。重启前请备份 `$DSH_HOME/lark-inbox/inbox.sqlite`。
+- 切回 `responder` 不删账本；再切回来时从账本继续。
+- 用 `node scripts/superagent-check.mjs --db <inbox.sqlite>` 检查账本；影子期结束后用 `node scripts/superagent-check.mjs --shadow --since-hours 72` 读取影子期判据。
+
 ## 安全模型
 
 - 暴露本地状态或高权限操作的 Host API 共用一条访问围栏：loopback 请求，或请求 Host 属于部署通过 `--trusted-host` 声明的 authority（从 `ctx.webStartup.trustedHosts` 读取，更早的 SDK 为 `ctx.webRuntime.trustedHosts`）且携带有效 DSH 浏览器会话，并且始终要求同源标记。socket 本身必须保持 loopback，因此同机反向代理把规范 Host 转发到 `127.0.0.1`。该围栏不能替代有身份认证的网络边界；`noBrowserAuth: true` 会把远程分支退化为仅 Host/Origin 检查。
@@ -200,6 +226,9 @@ DSH 原生 `@deepseek-ai/dsh-schedule` 把任务绑定在创建它的会话上�
 - 默认命令超时只覆盖 `ssh_exec` 与 `ssh_cluster`：SFTP 传输（`ssh_upload`、`ssh_download`）与 Web 交互终端没有超时，会一直进行到传输完成或会话结束——它们的耗时由数据量和远端响应决定，而不是由一条命令决定。
 - 「每次新会话」任务可用 agent 工具删除，也可在原生任务页删除运行会话上的那一行：两者都会让该任务停止，且不会被重建。原生页删除后策略在下一次收敛时退役（schedule_mode_list 不再报告它）；中断的轮转只有在日志能确定副作用身份时才会继续，否则明确保留为 `recovery-required`。
 - 原会话被归档或停止时，本域会撤下该任务的运行副本并把它标记为已停止（原生只会清理绑定在原会话上的任务）。
+- 秘书同时只跑一个 durable 执行体；其余改仓库的活排队等待，队列有五个位置。
+- 飞书应用没有消息历史读取权限时，秘书无法发现另一个实例在应答同一个 bot。
+- 秘书没有面板：状态通过 `status` 命令路由与账本检查脚本读取。
 - 兼容性跟随锁定的 `@deepseek-ai/*` SDK 版本与本仓库发版节奏。
 
 ## 许可证

@@ -15,7 +15,8 @@ import type { Profile, ProfileRegistry } from '../executors/profiles/index.ts'
 import type { Ledger } from '../kernel/ledger.ts'
 import type { Audience } from '../memory/visibility.ts'
 import { PHYSICAL } from '../protocol/db.ts'
-import { threadKey, type InboundEvent } from '../protocol/events.ts'
+import type { InboundEvent } from '../protocol/events.ts'
+import { threadKeyOf } from '../kernel/claim.ts'
 import type { AttemptRow, Capability, CommitmentRow, Strength, WorkClassRow } from '../protocol/objects.ts'
 import type { CommitInput, ToolErrorCode } from '../protocol/tools.ts'
 
@@ -135,7 +136,7 @@ export function translateToCommit(ctx: JudgmentTurn, input: CommitInput, deps: T
   const event = ctx.batch.find(e => e.event_id === input.event_id)
   if (!event) return fail('NOT_IN_BATCH', `${input.event_id} is not in this batch`)
   const sender = ctx.sender ?? event.sender.union_id ?? event.sender.open_id
-  const key = threadKey(event.chat.type, event.chat.id, event.thread || event.message_id)
+  const key = threadKeyOf(event)
 
   // 1. Check.
   const missing = checkComplete(input.check_kind, input.done_when)

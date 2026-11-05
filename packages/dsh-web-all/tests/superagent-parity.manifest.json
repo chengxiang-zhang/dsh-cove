@@ -1,0 +1,1647 @@
+{
+  "version": 1,
+  "note": "T29 ledger: every case of the 11 lark-inbox specs, its class, and where its behaviour lives after the move. class == the behaviour s home after T02/T18/T27; a responder case that is not migrated is listed with a why.",
+  "sources": [
+    "tests/lark-inbox-audit.spec.ts",
+    "tests/lark-inbox-host.spec.ts",
+    "tests/lark-inbox-inbound.spec.ts",
+    "tests/lark-inbox-responder.spec.ts",
+    "tests/lark-inbox-retention.spec.ts",
+    "tests/lark-inbox-router.spec.ts",
+    "tests/lark-inbox-session-binding.spec.ts",
+    "tests/lark-inbox-settings.spec.ts",
+    "tests/lark-inbox-steer.spec.ts",
+    "tests/lark-inbox-watchdog.spec.ts",
+    "tests/lark-inbox-wizard.spec.tsx"
+  ],
+  "classes": [
+    "responder",
+    "channel",
+    "admin"
+  ],
+  "statuses": [
+    "migrated",
+    "kept-in-channel",
+    "retired",
+    "not-applicable"
+  ],
+  "counts": {
+    "cases": 174,
+    "responder": 67,
+    "responderMigrated": 46
+  },
+  "cases": [
+    {
+      "suite": "lark-inbox-audit.spec.ts",
+      "case": "answers normally when the audit directory cannot be written",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "trail failures are swallowed by the channel audit sink; it stays with the channel"
+    },
+    {
+      "suite": "lark-inbox-audit.spec.ts",
+      "case": "does not throw when the directory it would write to cannot be created",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "trail failures are swallowed by the channel audit sink; it stays with the channel"
+    },
+    {
+      "suite": "lark-inbox-audit.spec.ts",
+      "case": "drops a line whose detail cannot be serialised and keeps going",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "trail failures are swallowed by the channel audit sink; it stays with the channel"
+    },
+    {
+      "suite": "lark-inbox-audit.spec.ts",
+      "case": "records a fold-in that was promoted, and the turn that consumed it",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the decision trail is written by channels/feishu/admin/audit.ts, which stays with the channel"
+    },
+    {
+      "suite": "lark-inbox-audit.spec.ts",
+      "case": "records a refused fold-in with the reason it was refused",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the decision trail is written by channels/feishu/admin/audit.ts, which stays with the channel"
+    },
+    {
+      "suite": "lark-inbox-audit.spec.ts",
+      "case": "records a send failure instead of only a ledger row",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the decision trail is written by channels/feishu/admin/audit.ts, which stays with the channel"
+    },
+    {
+      "suite": "lark-inbox-audit.spec.ts",
+      "case": "records an acknowledgement choice, a veto and a fallback",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the decision trail is written by channels/feishu/admin/audit.ts, which stays with the channel"
+    },
+    {
+      "suite": "lark-inbox-audit.spec.ts",
+      "case": "records the shadow decision without touching the turn",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the decision trail is written by channels/feishu/admin/audit.ts, which stays with the channel"
+    },
+    {
+      "suite": "lark-inbox-audit.spec.ts",
+      "case": "rotates past the limit and keeps exactly one generation",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "log rotation is the admin sink s own bound"
+    },
+    {
+      "suite": "lark-inbox-audit.spec.ts",
+      "case": "survives a sink that throws, because the seam is guarded twice",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "trail failures are swallowed by the channel audit sink; it stays with the channel"
+    },
+    {
+      "suite": "lark-inbox-audit.spec.ts",
+      "case": "truncates a long conversation key without losing its head",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "log rotation is the admin sink s own bound"
+    },
+    {
+      "suite": "lark-inbox-audit.spec.ts",
+      "case": "writes one valid line per decision kind, in order, for one job",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the decision trail is written by channels/feishu/admin/audit.ts, which stays with the channel"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "admits the deployment browser entry when the shared fence is injected",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings schema and the wizard routes live in channels/feishu/admin"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "closes a client whose SDK startup completes after stop and ignores late messages",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "the queue, the gateway and the runtime belong to the channel after the move"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "closes an opened queue if gateway construction fails",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "the queue, the gateway and the runtime belong to the channel after the move"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "gates app messages, unmentioned groups, and non-allowlisted senders in order",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "the queue, the gateway and the runtime belong to the channel after the move"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "keeps disabled and unconfigured runtimes inert while tools/routes remain registered",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "the queue, the gateway and the runtime belong to the channel after the move"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "keeps namespace defaults including announcement default false",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings schema and the wizard routes live in channels/feishu/admin"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "refuses the credential write while the feature is disabled",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings schema and the wizard routes live in channels/feishu/admin"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "registers the original guidance only when announceToAgent is true",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "the queue, the gateway and the runtime belong to the channel after the move"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "rejects non-loopback or cross-origin wizard/control requests",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings schema and the wizard routes live in channels/feishu/admin"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "returns the structured not-running envelope when disabled/unconfigured",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "the queue, the gateway and the runtime belong to the channel after the move"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "rolls back tools and earlier routes when a later route cannot register",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "the queue, the gateway and the runtime belong to the channel after the move"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "serves exact status/start/cancel/bind envelopes with no-store",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings schema and the wizard routes live in channels/feishu/admin"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "supports peek/pop/ack, retry, dead-letter, and event-id dedup",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "the queue, the gateway and the runtime belong to the channel after the move"
+    },
+    {
+      "suite": "lark-inbox-host.spec.ts",
+      "case": "uses the injected WSClient seam and dispatches the subscribed event",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "the queue, the gateway and the runtime belong to the channel after the move"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "answers the original message in place",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "applies a settings change to the next event without waiting for a rebuild",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "changes the answer-path settings without rebuilding the socket",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "claims each pending message once",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "does not need the bot identity when the mention rule is off",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "drops a running runtime when the feature is switched off",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "explains missing credentials and surfaces a delivery failure",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "is exposed as a tool that answers a stored message",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "matches the bot by its own open id, not by \"any mention\"",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "prefers an explicit chat id over the stored conversation",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "propagates a store.append failure to the SDK event handler",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "rebuilds the runtime when a relevant setting changes, and only then",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "refuses a group message that mentions a colleague instead of the bot",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "refuses every group message while the bot identity is unknown, and keeps direct messages",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "replaces mention placeholders with the names the platform resolved",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "reports a gate failure reason for each rule",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "reports an unknown event id and a missing target instead of throwing",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "reports not-found when settling a message nobody claimed",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "reports why replying is unavailable when the domain has no sender",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "requeues a stale claim that still has attempts left",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "retires an exhausted stale claim instead of requeueing it forever",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "starts a new message when threading is not wanted",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "starts as connecting, becomes connected on the SDK callback, and reports errors",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "stores the readable text in the envelope and the raw event beside it",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "summarizes non-text bodies and keeps plain strings intact",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "upgrades a store created by the previous schema in place",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-inbound.spec.ts",
+      "case": "uses message_id as a second idempotency key",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel",
+      "why": "inbound normalization, dedupe, queue and tools are channel behaviour by 03"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "admits everyone the operator allows when the allowlist is empty",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "allowlist default",
+      "why": "an empty allowlist is the channel config default; the secretary decides audience from the world model instead"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "answers a group message only when the bot is named",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "mention gating",
+      "why": "the mention rule stays with the channel in core/lark-inbox/gating.ts"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "answers nothing while the mode is off, and leaves the message queueable",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "the answering switch",
+      "why": "autoReplyMode lives in channels/feishu/admin/config.ts and is enforced by the channel admit hook (T18); the queue keeps the row"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "answers one direct message once and binds it to a deterministic session",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-assembly.spec.ts::3. superagent: owner=superagent; a scripted desk commit and ack leave one reply-tier outbound",
+      "module": "superagent/index.ts",
+      "reading": "one direct inbound produces exactly one reply-tier outbound; the deterministic session is desk-presence #1"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "asks the model to decide after a long run elsewhere, and honours silence",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-timing-agenda.spec.ts::turns ten silent minutes into a self-heal signal that speaks to nobody",
+      "module": "superagent/timing/agenda/index.ts",
+      "reading": "ten silent minutes become a self-heal signal that speaks to nobody"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "cancels an expired turn, closes it as a timeout, and ignores its late end",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "turn expiry is presence tick; no superagent case pins a timed-out desk turn yet"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "cancels the running turn on /stop and reports it stopped",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-judgment-route.spec.ts::1. stop words release a live thread and fall through when the thread is idle",
+      "module": "superagent/judgment/route.ts",
+      "reading": "a stop word releases the live thread and falls through when idle, the same manual control"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "captures a turn that finishes before the prompt call returns",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the responder had to race its own synchronous prompt; the desk turn is event-driven, so there is nothing to capture early and no equivalent case"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "closes a prompt that never opens a turn as a timeout instead of waiting forever",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the desk enforces TURN_TIMEOUT_MS on its own turns; the superagent suite has no case for it yet"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "closes a turn that was running when the process died as interrupted, without re-running it",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-recovery.spec.ts::closes a session whose last turn ended instead of leaving the commitment running",
+      "module": "superagent/recovery/reconcile.ts",
+      "reading": "reconcile closes a session whose last turn ended instead of re-running it"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "does not let the next sweep re-send a reply that is already in flight",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "outbound delivery",
+      "why": "send serialisation stays with the channel and the reply ledger the channel keeps"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "does not react while the receipt is off, or in probe mode",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "the read receipt",
+      "why": "a receipt is a channel act (channels/feishu/react.ts); the decision to answer is not in it"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "does not report a switch that is off as if it were on",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-commands.spec.ts::1. status --json 的在办集合与 11 的 SQL 一致，降级段只含未结束的行",
+      "module": "superagent/surface/commands/index.ts",
+      "reading": "the degraded section only lists rows with ended_at NULL, so an off switch is not reported as a running one"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "folds consecutive messages into one turn and answers each batch",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-desk-presence.spec.ts::2. the 3-second collect window: messages at 0 s and 2 s share a turn, 4 s goes to the next",
+      "module": "superagent/desk/presence.ts",
+      "reading": "the collect window folds consecutive messages into one turn, the same fold-in the responder batched"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "gives up once the answer has clearly gone stale",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "outbound retry",
+      "why": "send retry policy stays with the channel; the outbox retry is covered by kernel-outlet #9"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "ignores an interrupted assistant message instead of forwarding a half stream",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the desk never forwards a model stream; its text arrives through the tool surface, so a half assistant message cannot reach a person"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "keeps a message accepted in probe out of Feishu even after the switch to self",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-assembly.spec.ts::2. shadow: owner=responder, one shadow intake, no outbox or commitment; the desk turn is a shadow deliberation",
+      "module": "superagent/index.ts",
+      "reading": "a shadow intake never becomes an outbox row, so no later switch can send it"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "keeps retrying slowly while the failure still looks temporary",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "outbound retry",
+      "why": "send retry policy stays with the channel; the outbox retry is covered by kernel-outlet #9"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "keeps sweeping when the heartbeat cannot be written",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-kernel-clock.spec.ts::5. a throwing signal is treated as no signal; the rest of the round proceeds",
+      "module": "superagent/kernel/clock.ts",
+      "reading": "a throwing signal is treated as no signal and the rest of the round proceeds, the same keep-sweeping rule"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "keeps the notification path away from a session opened by /new",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-judgment-route.spec.ts::2. /new and 新会话 acknowledge and rotate without calling a model",
+      "module": "superagent/judgment/route.ts",
+      "reading": "/new rotates the desk session without a model call, so the old session keeps no notifications"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "leaves a stalled send retryable once its grace expires",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "outbound delivery",
+      "why": "send serialisation stays with the channel and the reply ledger the channel keeps"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "opens no second batch when the same event is admitted again",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-kernel-claim.spec.ts::2. a second claim of the same event is already_claimed and leaves one intake row",
+      "module": "superagent/kernel/claim.ts",
+      "reading": "a second claim of one event is already_claimed and writes one intake row, as the responder wrote one batch"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "puts a job whose prompt threw before binding a turn back into the batch",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "a desk turn that throws is retried by presence tick (desk-presence #8) with a different observable; the responder job queue is gone"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "re-registers bound sessions when a replacement responder starts",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "bound sessions are no longer re-registered by hand: the desk resolves its session from the ledger every turn (roles + presence), so there is no hand-off step"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "reacts as soon as the message is accepted, before any turn runs",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "the read receipt",
+      "why": "a receipt is a channel act (channels/feishu/react.ts); the decision to answer is not in it"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "reacts to a message that has to queue behind a running turn",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "the read receipt",
+      "why": "a receipt is a channel act (channels/feishu/react.ts); the decision to answer is not in it"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "records what would have been sent without sending it",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-assembly.spec.ts::2. shadow: owner=responder, one shadow intake, no outbox or commitment; the desk turn is a shadow deliberation",
+      "module": "superagent/index.ts",
+      "reading": "shadow records the intake and writes no outbox, which is probe-by-another-name"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "refuses a sender outside the allowlist",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-judgment-route.spec.ts::7. a sender outside the authorized range is declined with both R4 fields",
+      "module": "superagent/judgment/route.ts",
+      "reading": "an unauthorized sender is declined with the R4 fields, same refusal before any model call"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "remembers the chat the person is actually using",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the desk is keyed by chat id (deskIdOf), so \"the chat the person is actually using\" is the only desk there is; the responder had to remember it"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "reports mode, counts and the text that would have been sent",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-commands.spec.ts::1. status --json 的在办集合与 11 的 SQL 一致，降级段只含未结束的行",
+      "module": "superagent/surface/commands/index.ts",
+      "reading": "status --json reports the in-progress set and the degrade section from the ledger"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "reports the not-running reason instead of an empty ledger",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-assembly.spec.ts::5. a ledger that cannot open leaves the responder answering and one diagnostic",
+      "module": "superagent/index.ts",
+      "reading": "a ledger that cannot open leaves the responder answering and writes one diagnostic instead of an empty view"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "reports which switches are in force, and follows a settings change",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-assembly.spec.ts::4. switching the mode takes effect on the next inbound; switching back keeps the ledger",
+      "module": "superagent/index.ts",
+      "reading": "the mode in force is read per inbound and follows a settings change without a rebuild"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "retries a retryable failure with the same idempotency token",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "outbound retry",
+      "why": "send retry policy stays with the channel; the outbox retry is covered by kernel-outlet #9"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "retries a send that was in flight inside the platform idempotency window",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-kernel-outlet.spec.ts::9. failures retry after 30 s then 60 s; at 24 h the row fails and leaves one pending note",
+      "module": "superagent/kernel/outlet.ts",
+      "reading": "the outbox retries 30 s then 60 s with the same idempotency token"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "retries a session bind that hangs, then explains itself when attempts run out",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "session binding retries belong to channels/feishu/session-binding.ts, which keeps its own spec (lark-inbox-session-binding)"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "retries a submission that never reached the engine",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-recovery.spec.ts::marks a lost session orphaned, keeps the live one, and redoes it on the next round with one brief line",
+      "module": "superagent/recovery/reconcile.ts",
+      "reading": "an attempt whose session is gone is marked orphaned and redone on the next round with one brief line"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "rotates the session on /new without answering anything",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-judgment-route.spec.ts::2. /new and 新会话 acknowledge and rotate without calling a model",
+      "module": "superagent/judgment/route.ts",
+      "reading": "the same rotate-on-/new, asserted on the generation and on the absence of a reply"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "sends a sentence naming the failure when the turn errors",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-desk-presence.spec.ts::8. an event left unjudged is retried once; the second miss gets one host fallback",
+      "module": "superagent/desk/presence.ts",
+      "reading": "an unjudged event is retried once and then answered by the host fallback, so silence is still impossible"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "sends a sentence when the turn completes with no text",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-desk-presence.spec.ts::8. an event left unjudged is retried once; the second miss gets one host fallback",
+      "module": "superagent/desk/presence.ts",
+      "reading": "the same host fallback covers a turn that produced nothing"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "sends what the model decided to say",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-timing-agenda.spec.ts::reports a first late delivery into the brief, never as an interrupt",
+      "module": "superagent/timing/agenda/index.ts",
+      "reading": "a late delivery is reported into the brief, never as an interrupt"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "starts sending when the mode is changed to self, without a rebuild",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-assembly.spec.ts::4. switching the mode takes effect on the next inbound; switching back keeps the ledger",
+      "module": "superagent/index.ts",
+      "reading": "switching the mode takes effect on the next inbound without a rebuild"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "stays out of a short run, a disabled switch, and the quiet hours",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-timing-policy.spec.ts::4. the quiet window folds an interrupt, unless the risk is irreversible",
+      "module": "superagent/timing/outlet-policy.ts",
+      "reading": "the quiet window folds an interrupt unless the risk is irreversible"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "still answers when the reaction is refused",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "the read receipt",
+      "why": "a receipt is a channel act (channels/feishu/react.ts); the decision to answer is not in it"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "still delivers a reply that was accepted while sending was on",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-assembly.spec.ts::4. switching the mode takes effect on the next inbound; switching back keeps the ledger",
+      "module": "superagent/index.ts",
+      "reading": "the mode is read per inbound at claim time, so a message already accepted keeps its owner"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "still delivers the answer when the aborted end arrives inside the grace period",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the responder grace window has no desk counterpart; a desk turn is closed by its own turn/end"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "still sends a reply the previous process never attempted, however old it is",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-kernel-outlet.spec.ts::10. a queued row never tried for 5 minutes is failed",
+      "module": "superagent/kernel/outlet.ts",
+      "reading": "a queued row never tried is swept rather than left invisible, so an old unattempted reply still surfaces"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "stops retrying a permanent failure and retires the message",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "outbound retry",
+      "why": "send retry policy stays with the channel; the outbox retry is covered by kernel-outlet #9"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "treats a send older than the platform window as uncertain instead of resending",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-kernel-outlet.spec.ts::9. failures retry after 30 s then 60 s; at 24 h the row fails and leaves one pending note",
+      "module": "superagent/kernel/outlet.ts",
+      "reading": "at 24 h the row fails and leaves one pending note instead of resending"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "treats the same message under a new event id as the same batch message",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "message-id dedupe",
+      "why": "the second idempotency key is the store partial unique index on message_id, which stays with the channel"
+    },
+    {
+      "suite": "lark-inbox-responder.spec.ts",
+      "case": "writes one when it starts and again when a turn settles",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-kernel-clock.spec.ts::6. start runs exactly 3 rounds in 180 seconds; lastTickAt is the last round",
+      "module": "superagent/kernel/clock.ts",
+      "reading": "liveness is the clock round and lastTickAt in the ledger rather than a file next to the queue"
+    },
+    {
+      "suite": "lark-inbox-retention.spec.ts",
+      "case": "does not delete a queue row a surviving job still points at",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "row and shard retention is channel housekeeping"
+    },
+    {
+      "suite": "lark-inbox-retention.spec.ts",
+      "case": "keeps the JSONL shard even when the index row is gone",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "row and shard retention is channel housekeeping"
+    },
+    {
+      "suite": "lark-inbox-retention.spec.ts",
+      "case": "never prunes a queue row that is still pending",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "row and shard retention is channel housekeeping"
+    },
+    {
+      "suite": "lark-inbox-retention.spec.ts",
+      "case": "removes finished rows older than the cutoff and keeps unfinished ones",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "row and shard retention is channel housekeeping"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "adds no metadata line to the prompt",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "the router contract text",
+      "why": "the instructions a conversation is told live in channels/feishu/admin/config.ts and stay with the channel"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "counts the messages of one batch",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the responder appended a batch metadata line to its prompt; the desk prompt is assembled from the dossier, so the line does not exist"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "does not answer a second time when another path settled the job mid-reaction",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-kernel-outlet.spec.ts::5. a second reply text for one event is REPLY_EXISTS; a react for it is not limited",
+      "module": "superagent/kernel/outlet.ts",
+      "reading": "a second reply text for one event is REPLY_EXISTS, so nobody answers twice"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "does not recognise the acknowledgement token",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "the router contract text",
+      "why": "the instructions a conversation is told live in channels/feishu/admin/config.ts and stay with the channel"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "does not send the acknowledgement token from an unprompted notice",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-timing-agenda.spec.ts::turns ten silent minutes into a self-heal signal that speaks to nobody",
+      "module": "superagent/timing/agenda/index.ts",
+      "reading": "a proactive signal speaks to nobody, so no token leaves the building"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "falls back to a sentence when the reaction cannot be given",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-desk-presence.spec.ts::8. an event left unjudged is retried once; the second miss gets one host fallback",
+      "module": "superagent/desk/presence.ts",
+      "reading": "a refused reaction becomes the host fallback sentence"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "keeps the old one-shot rule while switched off",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "the router contract text",
+      "why": "the switched-off wording stays with the channel config"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "leaves evidence even when the fallback itself cannot close the job",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the same reply_jobs evidence falls away with the ledger row it describes; journal rows replace it"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "permits a reaction only for a batch made entirely of closed acknowledgements",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-timing-policy.spec.ts::6. the acknowledgement offers one question or one closing line, never both",
+      "module": "superagent/timing/outlet-policy.ts",
+      "reading": "the acknowledgement is one of a question or a closing line, never both"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "reacts instead of speaking when the model chose to acknowledge",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-timing-policy.spec.ts::6. the acknowledgement offers one question or one closing line, never both",
+      "module": "superagent/timing/outlet-policy.ts",
+      "reading": "acknowledgement is an outlet moment with a fixed shape rather than a model sentence"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "reacts to an acknowledgement from a question, in the same run",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-timing-policy.spec.ts::6. the acknowledgement offers one question or one closing line, never both",
+      "module": "superagent/timing/outlet-policy.ts",
+      "reading": "the same acknowledgement shape inside one run"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "refuses the second member instead of throwing through the sweep",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-executors-dispatch.spec.ts::7. input steers an open turn, queues on an ended one; the consuming turn is written from the seq range",
+      "module": "superagent/executors/attempts.ts",
+      "reading": "input is idempotent per request id and consumed once by the turn that took it"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "says how many messages this batch carries and how long since the last answer",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the responder appended a batch metadata line to its prompt; the desk prompt is assembled from the dossier, so the line does not exist"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "sends exactly the instructions the previous build sent",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "the router contract text",
+      "why": "the instructions a conversation is told live in channels/feishu/admin/config.ts and stay with the channel"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "still answers in words when the ledger refuses to close after a reaction",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the reply ledger row that could refuse a close is gone; the outbox records the send and has no second close step"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "still treats the silent token as an instruction, not as an answer",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the silent-token rule lived in the responder prompt; the desk decides silence through its disposition, which has no token"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "tells an older conversation the new contract once, not on every turn",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the instructions hash lived in the responder prompt path; the desk rebuilds its prompt from the ledger each turn, so there is no once-only notice"
+    },
+    {
+      "suite": "lark-inbox-router.spec.ts",
+      "case": "vetoes the reaction and answers in words when the batch asked something",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-timing-policy.spec.ts::6. the acknowledgement offers one question or one closing line, never both",
+      "module": "superagent/timing/outlet-policy.ts",
+      "reading": "a question may never be answered with a reaction, the same veto"
+    },
+    {
+      "suite": "lark-inbox-session-binding.spec.ts",
+      "case": "adopts the existing session when create fails and inspect finds it",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "session adoption",
+      "why": "bindReplySession now lives in channels/feishu/session-binding.ts and keeps this spec with it"
+    },
+    {
+      "suite": "lark-inbox-session-binding.spec.ts",
+      "case": "adopts when create returns a different id but the session is really there",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "session adoption",
+      "why": "bindReplySession now lives in channels/feishu/session-binding.ts and keeps this spec with it"
+    },
+    {
+      "suite": "lark-inbox-session-binding.spec.ts",
+      "case": "omits the working directory when none is configured",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "session adoption",
+      "why": "bindReplySession now lives in channels/feishu/session-binding.ts and keeps this spec with it"
+    },
+    {
+      "suite": "lark-inbox-session-binding.spec.ts",
+      "case": "reports a fresh create as not adopted",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "session adoption",
+      "why": "bindReplySession now lives in channels/feishu/session-binding.ts and keeps this spec with it"
+    },
+    {
+      "suite": "lark-inbox-session-binding.spec.ts",
+      "case": "rethrows a mismatched id when inspection is unavailable",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "session adoption",
+      "why": "bindReplySession now lives in channels/feishu/session-binding.ts and keeps this spec with it"
+    },
+    {
+      "suite": "lark-inbox-session-binding.spec.ts",
+      "case": "rethrows the create failure when the session cannot be shown",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "session adoption",
+      "why": "bindReplySession now lives in channels/feishu/session-binding.ts and keeps this spec with it"
+    },
+    {
+      "suite": "lark-inbox-session-binding.spec.ts",
+      "case": "rethrows when the engine cannot be inspected at all",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "session adoption",
+      "why": "bindReplySession now lives in channels/feishu/session-binding.ts and keeps this spec with it"
+    },
+    {
+      "suite": "lark-inbox-session-binding.spec.ts",
+      "case": "treats an empty id as the engine owning the supplied one",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "session adoption",
+      "why": "bindReplySession now lives in channels/feishu/session-binding.ts and keeps this spec with it"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "covers every lark-inbox schema field except the read-only legacy credentials",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "declares a staged spec for every behavior field, and the secret one write-only",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "does not promise that credentials take effect immediately",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "edits exactly the shared feishu credential fields",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "keeps an English key for every Chinese key",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "keeps the revision gate and the read projections of each namespace apart",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "leaves no key without a translation in either language",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "names the namespaces the host registers",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "never reads a secret the host would have stripped",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "picks the table from the document language and substitutes named parameters",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "renders one row per credential field plus the admission switch",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "translates the credential area and the admission switch on both sides",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-settings.spec.ts",
+      "case": "writes behavior fields under lark-inbox and credentials under feishu",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the settings page and its namespace routing are admin surface"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "adds the steer columns in place and keeps the rows it finds",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-db.spec.ts::3. upgrades a legacy inbox_events in place: owner added as NULL, other columns untouched",
+      "module": "superagent/protocol/db.ts",
+      "reading": "the in-place column upgrade on a live inbox store"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "answers a request instead of forwarding the silent token",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-timing-policy.spec.ts::6. the acknowledgement offers one question or one closing line, never both",
+      "module": "superagent/timing/outlet-policy.ts",
+      "reading": "an acknowledgement may not answer a question; the same refusal to show the token"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "does not extend the turn deadline by taking a steer",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the desk turn has no per-turn deadline to extend; stop-loss is budget based (executors-dispatch #9)"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "does not steer a turn that has not bound yet",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-executors-dispatch.spec.ts::7. input steers an open turn, queues on an ended one; the consuming turn is written from the seq range",
+      "module": "superagent/executors/attempts.ts",
+      "reading": "steer applies to an open turn only, queue otherwise"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "does not steer at all when the switch is off",
+      "class": "channel",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "the steer switch",
+      "why": "the steer switch is the responder config that stays with the channel"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "gives up on the wait, and says so, when no turn ever comes",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the responder waited for a turn that never came; a desk turn is bounded by presence tick, and no case pins the give-up message yet"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "holds the job for the turn that consumes a steer the first turn missed",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-executors-dispatch.spec.ts::7. input steers an open turn, queues on an ended one; the consuming turn is written from the seq range",
+      "module": "superagent/executors/attempts.ts",
+      "reading": "input steers the open turn and is written by the turn that consumed it"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "joins the open batch instead of overtaking it",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-desk-presence.spec.ts::2. the 3-second collect window: messages at 0 s and 2 s share a turn, 4 s goes to the next",
+      "module": "superagent/desk/presence.ts",
+      "reading": "the collect window keeps arrival order instead of overtaking"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "keeps settling a steer already taken after the switch is turned off",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the steer switch is the responder s own setting and disappears with it"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "keeps the one-collecting-and-one-inflight rule while a steer is pending",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the collecting/inflight pair is reply_jobs bookkeeping, replaced by the outbox and the desk turn"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "leaves a steer stranded by a stop inside the next job alone",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-judgment-route.spec.ts::1. stop words release a live thread and fall through when the thread is idle",
+      "module": "superagent/judgment/route.ts",
+      "reading": "a stop releases the thread; the next turn starts clean"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "never steers a turn that is not answering a request",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-executors-dispatch.spec.ts::7. input steers an open turn, queues on an ended one; the consuming turn is written from the seq range",
+      "module": "superagent/executors/attempts.ts",
+      "reading": "only an open turn takes input; an ended one queues for the next"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "reports what it would have done in shadow mode, and touches nothing",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-kernel-claim.spec.ts::7. shadow mode: owner=responder, one shadow=1 intake, no outbox and no commitment",
+      "module": "superagent/kernel/claim.ts",
+      "reading": "shadow writes one shadow intake and nothing else, which is the same touch-nothing report"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "returns a steer the engine never took to the next batch",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "the batch is gone; unconsumed input is visible as a journal row and re-queued by the next attempt, with no dedicated case"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "steers once for one message, however often it is delivered",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-kernel-claim.spec.ts::2. a second claim of the same event is already_claimed and leaves one intake row",
+      "module": "superagent/kernel/claim.ts",
+      "reading": "a redelivered event is already_claimed and consumes nothing twice"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "still lets a proactive turn choose silence",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-timing-agenda.spec.ts::turns ten silent minutes into a self-heal signal that speaks to nobody",
+      "module": "superagent/timing/agenda/index.ts",
+      "reading": "a proactive signal may speak to nobody"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "stops steering a turn that has taken its limit",
+      "class": "responder",
+      "responder": true,
+      "status": "retired",
+      "reading": "no equivalent: the behaviour is replaced by the ledger",
+      "why": "steer limits were a responder guard; the desk takes one input per turn by construction"
+    },
+    {
+      "suite": "lark-inbox-steer.spec.ts",
+      "case": "strands pending steers when a restart interrupts the turn",
+      "class": "responder",
+      "responder": true,
+      "status": "migrated",
+      "target": "tests/superagent-recovery.spec.ts::closes a session whose last turn ended instead of leaving the commitment running",
+      "module": "superagent/recovery/reconcile.ts",
+      "reading": "reconcile closes an interrupted turn instead of re-running it"
+    },
+    {
+      "suite": "lark-inbox-watchdog.spec.ts",
+      "case": "does nothing when no runtime is mounted",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the responder watchdog itself moved to channels/feishu/admin/responder-watchdog.ts"
+    },
+    {
+      "suite": "lark-inbox-watchdog.spec.ts",
+      "case": "does nothing while the responder is attached",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the responder watchdog itself moved to channels/feishu/admin/responder-watchdog.ts"
+    },
+    {
+      "suite": "lark-inbox-watchdog.spec.ts",
+      "case": "repairs a missing responder and says so",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the responder watchdog itself moved to channels/feishu/admin/responder-watchdog.ts"
+    },
+    {
+      "suite": "lark-inbox-watchdog.spec.ts",
+      "case": "reports a repair that threw instead of swallowing it",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the responder watchdog itself moved to channels/feishu/admin/responder-watchdog.ts"
+    },
+    {
+      "suite": "lark-inbox-watchdog.spec.ts",
+      "case": "stops trying for a while after a repair that did not take",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the responder watchdog itself moved to channels/feishu/admin/responder-watchdog.ts"
+    },
+    {
+      "suite": "lark-inbox-wizard.spec.tsx",
+      "case": "binds an existing bot while sending the secret only in finish-bind",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the wizard dialog is admin surface in channels/feishu/admin/wizard.ts"
+    },
+    {
+      "suite": "lark-inbox-wizard.spec.tsx",
+      "case": "cancels an active flow and returns to idle",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the wizard dialog is admin surface in channels/feishu/admin/wizard.ts"
+    },
+    {
+      "suite": "lark-inbox-wizard.spec.tsx",
+      "case": "hides the wizard only when the feature is explicitly disabled",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "wizard visibility is the settings page s own rule"
+    },
+    {
+      "suite": "lark-inbox-wizard.spec.tsx",
+      "case": "shows idle actions, the create-new verification URL and QR, then polls to connected",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the wizard dialog is admin surface in channels/feishu/admin/wizard.ts"
+    },
+    {
+      "suite": "lark-inbox-wizard.spec.tsx",
+      "case": "surfaces failure copy and lets the user go back",
+      "class": "admin",
+      "responder": false,
+      "status": "kept-in-channel",
+      "reading": "stays with the channel admin surface",
+      "why": "the wizard dialog is admin surface in channels/feishu/admin/wizard.ts"
+    }
+  ]
+}

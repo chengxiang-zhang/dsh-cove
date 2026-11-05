@@ -19,7 +19,8 @@ import type { Claim } from '../kernel/claim.ts'
 import type { Ledger } from '../kernel/ledger.ts'
 import type { SpeechProposal } from '../kernel/ports.ts'
 import { PHYSICAL, type LedgerReader } from '../protocol/db.ts'
-import { threadKey, type InboundEvent } from '../protocol/events.ts'
+import type { InboundEvent } from '../protocol/events.ts'
+import { threadKeyOf } from '../kernel/claim.ts'
 import {
   OPEN_STATES,
   type Capability,
@@ -101,7 +102,7 @@ export interface GateFacts {
 
 /** The thread a message belongs to (`02` thread identity). */
 export function threadOf(event: InboundEvent): string {
-  return threadKey(event.chat.type, event.chat.id, event.thread === '' ? event.message_id : event.thread)
+  return threadKeyOf(event)
 }
 
 /** The sending party id as the ledger records it. */

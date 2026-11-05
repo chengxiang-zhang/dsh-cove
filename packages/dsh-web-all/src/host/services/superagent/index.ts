@@ -35,7 +35,8 @@ import { createToolFace, type AgentScopeLike, type ToolFacePort } from './desk/t
 import { idemKeyOf } from './desk/tools.ts'
 import { createExecutors } from './executors/attempts.ts'
 import { createClosure } from './executors/closure.ts'
-import { createEscalation } from './executors/escalate.ts'
+import { createEscalation, type EscalationReason } from './executors/escalate.ts'
+import type { ToolDefinitionLike } from './executors/report-tool.ts'
 import { createProfileRegistry } from './executors/profiles/index.ts'
 import type { HostClock, HostLog, SessionControllerFace } from './host-ports.ts'
 import { amendTool, releaseHost, releaseTool } from './judgment/amend-release.ts'
@@ -49,7 +50,7 @@ import { pushbackTool } from './judgment/pushback.ts'
 import { createRoutePolicy } from './judgment/route.ts'
 import type { SenderClass } from './judgment/route-rules.ts'
 import type { JudgmentTurn, WorkClassPort } from './judgment/translate.ts'
-import { createClaim } from './kernel/claim.ts'
+import { createClaim, threadKeyOf } from './kernel/claim.ts'
 import { createClock } from './kernel/clock.ts'
 import { createLease } from './kernel/lease.ts'
 import { createLedger, type Ledger } from './kernel/ledger.ts'
@@ -122,6 +123,8 @@ export interface Assembly {
   dispose(): Promise<void>
   /** For tests and diagnostics: the live ledger, when one is open. */
   ledger(): Ledger | undefined
+  /** The executor `report` tool, registered on every `sa-x-*` session (02 executor tool). */
+  reportTool(): ToolDefinitionLike | undefined
 }
 
 /** Apply a model override to a resolved request config without touching anything global (X3, F14). */
@@ -140,6 +143,7 @@ interface Machine {
   presence: Presence
   executors: ReturnType<typeof createExecutors>
   closure: ReturnType<typeof createClosure>
+  escalation: ReturnType<typeof createEscalation>
   outlet: Outlet
   outletPolicy: OutletPolicy
   recovery: Recovery
@@ -217,7 +221,8 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       const a = deps.config().superagentAttention
       const interrupts = read.get<{ n: number }>(`SELECT count(*) AS n FROM ${PHYSICAL.outbox} WHERE tier = 'interrupt' AND created_at >= ?`, now - (now % DAY_MS))?.n ?? 0
       return { moment: p.moment, ballToOwnerWithClock: !!c && c.ball === owner() && c.state === 'at_risk', irreversible: false,
-        isReplyToInbound: p.event_id !== undefined, interruptsToday: interrupts, quotaPerDay: a.interruptQuota, localHHMM: hhmm(now), quiet: a.quiet }
+        // 09 reply tier: an answer to what just arrived, or a delivery the requester is waiting on.
+        isReplyToInbound: p.event_id !== undefined || (p.moment === 'deliver' && c?.origin_kind === 'event'), interruptsToday: interrupts, quotaPerDay: a.interruptQuota, localHHMM: hhmm(now), quiet: a.quiet }
     }
     const HOST_KEYS = /^(sa:(fb|rx|ack|toolface|brief):|cannot:)/
     const outletPolicy = createOutletPolicy({
@@ -323,7 +328,7 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
         return (OWNER_CLASSES as readonly string[]).includes(cls) ? cls as SenderClass : 'unknown'
       },
     })
-    return { db, ledger, claim, policy, presence, executors, closure, outlet, outletPolicy, recovery, commands, briefNow, world, memory, dispatcher,
+    return { db, ledger, claim, policy, presence, executors, closure, escalation, outlet, outletPolicy, recovery, commands, briefNow, world, memory, dispatcher,
       fastDeps: { ...ar, dispatcher, profiles, defaultProfile: 'durable-full', rotateDesk: id => { presence.rotate(id, 'manual') } },
       stopClock: undefined, kernelClock } as Machine & { kernelClock: ReturnType<typeof createClock> }
   }
@@ -357,7 +362,7 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       void applyFastpath(m.fastDeps, event, decisionOf()).catch(e => log.warn(`superagent fastpath ${event.event_id}: ${String(e)}`))
       return
     }
-    const key = `${event.chat.type}:${event.chat.id}:${event.thread || event.message_id}`
+    const key = threadKeyOf(event)
     const sub = m.ledger.read.get<{ attempt_id: string }>(`SELECT attempt_id FROM ${PHYSICAL.subscription} WHERE thread_key = ?`, key)
     if (sub) void m.executors.sendInput(sub.attempt_id, `pt:${event.event_id}`, event.text).catch(e => log.warn(`superagent passthrough: ${String(e)}`))
   }
@@ -414,7 +419,20 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       const a = m.ledger.read.get<AttemptRow>(`SELECT * FROM ${PHYSICAL.attempt} WHERE session_id = ? AND state <> 'ended'`, sessionId)
       if (!a) return
       try {
-        m.closure.close(a.attempt_id, { reason: parseEndReason(e.data?.reason?.kind) }, m.executors.lastReport(a.attempt_id))
+        const reason = parseEndReason(e.data?.reason?.kind)
+        const report = m.executors.lastReport(a.attempt_id)
+        const result = m.closure.close(a.attempt_id, { reason }, report)
+        if (result.state === 'fulfilled' || result.state === 'unverified' || result.state === 'broken') {
+          // The host's report signal (10): one desk turn on the commitment says the delivery.
+          const requestId = `report:${a.attempt_id}`
+          const did = m.ledger.open(tx => tx.requestTurn({ trigger_kind: 'report', commitment_id: a.commitment_id, request_id: requestId }))
+          if (did) void m.presence.runTurn({ deliberation_id: did, request_id: requestId, commitment_id: a.commitment_id, trigger_kind: 'report' })
+            .catch(err => log.warn(`superagent report turn: ${String(err)}`))
+        } else if (result.state === 'escalate') {
+          const why: EscalationReason = reason === 'completed' ? (report?.state === 'blocked' ? 'blocked_technical' : 'failed')
+            : reason === 'max-tokens' || reason === 'interrupted' || reason === 'error' ? reason : 'failed'
+          m.escalation.escalate(a.commitment_id, why)
+        }
       } catch (error) {
         log.warn(`superagent closure ${a.attempt_id}: ${String(error)}`)
       }
@@ -446,6 +464,7 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       machine = undefined
     },
     ledger: () => machine?.ledger,
+    reportTool: () => machine?.executors.report,
   }
 }
 
@@ -549,6 +568,17 @@ export function register(ctx: Context): () => Promise<void> {
     const id = (payload as { agent?: { session?: { id?: unknown } } }).agent?.session?.id
     return typeof id === 'string' ? overrideModel(resolved, assembly.modelFor(id)) : resolved
   }))
+  // The executor report tool, scoped to each executor session (02 executor tool).
+  own(ctx.on('agent/created' as never, ((payload: { agent?: { session?: { id?: unknown }; ctx?: { tools?: { register?: (d: unknown) => () => void } } } }) => {
+    const id = payload.agent?.session?.id
+    const tool = assembly.reportTool()
+    const tools = payload.agent?.ctx?.tools
+    if (typeof id === 'string' && id.startsWith('sa-x-') && tool && typeof tools?.register === 'function') {
+      tools.register({ name: tool.name, description: tool.description, parameters: tool.parameters,
+        execute: (args: unknown) => tool.execute(args, { sessionId: id }) })
+    }
+    return undefined
+  }) as never) as () => void)
   for (const r of assembly.routes({ isTrusted: request => accessTrustOf(ctx).isTrusted(request) })) own(ctx.webServer.register(r))
   return async () => {
     for (const d of disposers.splice(0).reverse()) { try { d() } catch { /* keep unwinding */ } }

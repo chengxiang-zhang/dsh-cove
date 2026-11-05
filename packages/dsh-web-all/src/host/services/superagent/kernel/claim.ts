@@ -31,11 +31,17 @@ const OWNER_CAS = `UPDATE ${PHYSICAL.inbox_event} SET owner = ? WHERE event_id =
 
 interface Keys { deskId: string; threadKey: string }
 
+/**
+ * The one place a thread key is composed (T30): `<chat type>:<chat id>:<root id>`.
+ * `event.thread` is the bare root message id the channel reports; every module that
+ * needs the key calls this instead of composing its own.
+ */
+export function threadKeyOf(event: InboundEvent): string {
+  return makeThreadKey(event.chat.type, event.chat.id, event.thread || event.message_id)
+}
+
 function keysOf(event: InboundEvent): Keys {
-  return {
-    deskId: `${event.chat.type}:${event.chat.id}`,
-    threadKey: makeThreadKey(event.chat.type, event.chat.id, event.thread || event.message_id),
-  }
+  return { deskId: `${event.chat.type}:${event.chat.id}`, threadKey: threadKeyOf(event) }
 }
 
 const senderOf = (event: InboundEvent): string => event.sender.union_id ?? event.sender.open_id

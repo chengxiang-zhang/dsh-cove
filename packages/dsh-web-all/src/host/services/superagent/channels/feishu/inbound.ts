@@ -17,7 +17,6 @@
  */
 
 import type { InboundEvent } from '../../protocol/events.ts'
-import { threadKey } from '../../protocol/events.ts'
 import type { LarkInboxEnvelope } from '../../../../../core/lark-inbox/queue.ts'
 
 /** Why an envelope could not be turned into an inbound event; stable for logging. */
@@ -129,14 +128,16 @@ export function toInboundEvent(envelope: LarkInboxEnvelope, receivedAt: number):
 
   // A message that answers inside a thread belongs to the thread's root, not to
   // itself: keying it to its own id would open one thread per message.
-  const rootId = asString(message.root_id) ?? asString(message.thread_id) ?? messageId
+  // The thread is the bare root message id; the thread key (`p2p:<chat>:<root>`) is
+  // composed in exactly one place, kernel/claim.ts threadKeyOf (T30).
+  const rootId = asString(message.root_id) ?? asString(message.parent_id) ?? messageId
   const unionId = unionIdOf(raw)
 
   return {
     event_id: envelope.eventId,
     chat: { id: chatId, type: chatTypeRaw },
     sender: unionId === undefined ? { open_id: openId } : { open_id: openId, union_id: unionId },
-    thread: threadKey(chatTypeRaw, chatId, rootId),
+    thread: rootId,
     text: envelope.content,
     message_id: messageId,
     received_at: receivedAt,

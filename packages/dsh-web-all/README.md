@@ -15,6 +15,7 @@ English | [中文](README.zh.md)
 - **Browser automation**: per-session Playwright browsers exposed as the `mcp__playwright__*` tool namespace.
 - **Automation run target**: native automation tasks deliver into the conversation that created them; this capability lets each task run in a fresh session every time instead, keeping the original conversation clean. There is no settings UI for it: it is chosen in natural language when the task is created, and the agent applies it with `schedule_mode_set`.
 - **Wish Programming preset**: a bundled `code-vibe` preset with tiered task routing, its curated skills, a session confirmation and routing gate, and native coding tools appears as an additional session mode; Standard remains the default.
+- **Superagent (secretary)**: an optional second owner for Feishu inbound messages that keeps commitments in a ledger, dispatches work to executor sessions and reports back, behind a three-position switch that defaults to the existing responder.
 
 The web profile runtime stack is `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app` + `@dsh-cove/dsh-web-all`.
 
@@ -174,6 +175,31 @@ The `schedule-mode` namespace: `enabled` (default `true`; disabling it removes t
       runHistoryLimit: 200
 ```
 
+## Superagent
+
+The `superagent` service domain is a secretary on the same Feishu inbox. It shares the `web-all` lifecycle and the Feishu queue's `inbox.sqlite`, and it leaves the existing responder in place.
+
+A three-position switch decides who answers each inbound message. The switch is read for every message, so a change applies to the next message without restarting the process.
+
+| Mode | Who answers | What superagent writes |
+| --- | --- | --- |
+| `responder` (default) | the existing responder, exactly as before | message ownership only |
+| `shadow` | the existing responder | its own judgment on shadow rows; it never sends a message |
+| `superagent` | the secretary | the ledger and every outbound message |
+
+The keys live in the `lark-inbox` settings namespace; there is no settings page for them.
+
+| Key | Meaning |
+| --- | --- |
+| `superagentMode` | `responder`, `shadow` or `superagent`; any other value reads as `responder` |
+| `superagentDesk` | `seatDir`, `preset` (default `superagent-desk`) and an optional `model` with `provider`, `model`, `effort`; no model keeps the global default |
+| `superagentWorld` | `owners` and `colleagues` (`union_id`, `name`), `entities`, and `mandates`, which only people grant |
+| `superagentAttention` | `interruptQuota` (3), `quiet` (`22:00` to `08:00`) and `briefAt` (`18:30`) |
+
+- The domain takes effect after the DSH service is restarted; until then the responder runs unchanged. Back up `$DSH_HOME/lark-inbox/inbox.sqlite` before the restart.
+- Switching back to `responder` keeps the ledger; switching forward again continues from it.
+- Check the ledger with `node scripts/superagent-check.mjs --db <inbox.sqlite>`; after a shadow period, `node scripts/superagent-check.mjs --shadow --since-hours 72` reads the shadow criteria.
+
 ## Security model
 
 - Host APIs that expose local state or privileged actions share one access fence: a loopback request, or a Host authority the deployment declares through `--trusted-host` (read from `ctx.webStartup.trustedHosts`, or `ctx.webRuntime.trustedHosts` on earlier SDKs) carrying an authenticated DSH browser session, always with same-origin markers. The socket itself must stay loopback, which is why a same-host reverse proxy forwards the canonical Host to `127.0.0.1`. The fence is not a substitute for an authenticated network boundary, and `noBrowserAuth: true` reduces the remote branch to the Host/Origin check alone.
@@ -201,6 +227,9 @@ The `schedule-mode` namespace: `enabled` (default `true`; disabling it removes t
 - Only `ssh_exec` and `ssh_cluster` carry the default command timeout: SFTP transfers (`ssh_upload`, `ssh_download`) and the interactive Web terminal keep running until the transfer or the session ends, because their duration is set by payload size and remote responsiveness rather than by a command.
 - "New session per run" tasks can be deleted through the agent tools, or by deleting the row on the run session in the native task page: either way the task stops and is not rebuilt. After a native-page delete the policy is retired at the next reconciliation (so schedule_mode_list stops reporting it); interrupted rotations resume only where their journal identifies the effects, otherwise they remain visibly `recovery-required`.
 - Archiving or stopping the original conversation disarms that task's run copy and marks it stopped (the native layer only cleans rows bound to the archived conversation).
+- Superagent runs one durable executor at a time; further repository work waits in line, with five places.
+- Without message-history read permission for the Feishu application, superagent cannot detect a second instance answering the same bot.
+- Superagent has no panel: its state is read through the `status` command route and the ledger check script.
 - Compatibility follows the pinned `@deepseek-ai/*` SDK versions and the repository release cadence.
 
 ## License

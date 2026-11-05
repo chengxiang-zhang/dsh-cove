@@ -120,7 +120,8 @@ describe('inbound: envelope to protocol event', () => {
     expect(wrapped.sender).toEqual({ open_id: 'ou_sender', union_id: 'on_sender' })
     expect(wrapped.chat).toEqual({ id: 'oc_dm', type: 'p2p' })
     expect(wrapped.message_id).toBe('om_evt-dm')
-    expect(wrapped.thread).toBe('p2p:oc_dm:om_evt-dm')
+    // T30: the channel reports the bare root id; the key is composed once (kernel threadKeyOf).
+    expect(wrapped.thread).toBe('om_evt-dm')
     expect(wrapped.event_id).toBe('evt-dm')
     expect(wrapped.text).toBe('hi bot')
     expect(wrapped.received_at).toBe(1_700_000_000_000)

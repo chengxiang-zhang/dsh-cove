@@ -205,6 +205,9 @@ export function createPresence(deps: DeskDeps): Presence {
     }
     deferrals.delete(trigger.deliberation_id)
     writeDesk(`UPDATE ${D} SET turn_open = 1, updated_at = ? WHERE desk_id = ?`, now, deskId)
+    // The turn is taken now: running + started_at (idle-rate and fingerprint readings key on it).
+    writeDesk(`UPDATE ${PHYSICAL.deliberation} SET state = 'running', started_at = coalesce(started_at, ?), desk_id = coalesce(desk_id, ?), updated_at = ?
+      WHERE deliberation_id = ? AND state = 'requested'`, now, deskId, now, trigger.deliberation_id)
     const closeDesk = (): void => {
       writeDesk(`UPDATE ${D} SET turn_open = 0, event_count = event_count + ?, last_event_at = coalesce(?, last_event_at), updated_at = ? WHERE desk_id = ?`,
         batch.length, batch.length ? ledger.nowMs() : null, ledger.nowMs(), deskId)
