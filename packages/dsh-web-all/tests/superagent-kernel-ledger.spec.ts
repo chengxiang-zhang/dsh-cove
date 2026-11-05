@@ -74,6 +74,11 @@ describe('kernel ledger', () => {
     t.ledger.open(tx => tx.transition(c.commitment_id, 'released'))
     expect(codeOf(() => t.ledger.open(tx => tx.transition(c.commitment_id, 'open')))).toBe('ILLEGAL_TRANSITION')
     expect(codeOf(() => t.ledger.open(tx => tx.transition(c.commitment_id, 'withdrawn')))).toBe('ILLEGAL_TRANSITION')
+    // patchCommitment: only the six non-state columns, and never on a closed commitment.
+    const live = seedCommitment(t)
+    expect(t.ledger.open(tx => tx.patchCommitment(live.commitment_id, { slot: '1', used_turns: 3 }))).toMatchObject({ slot: '1', used_turns: 3, state: 'open' })
+    expect(codeOf(() => t.ledger.open(tx => tx.patchCommitment(live.commitment_id, { what: 'x' } as never)))).toBe('BAD_COLUMN')
+    expect(codeOf(() => t.ledger.open(tx => tx.patchCommitment(c.commitment_id, { used_turns: 1 })))).toBe('ILLEGAL_TRANSITION')
   })
 
   it('6. next_look_at is clamped: deliver to now+24h, goal to now+7d', () => {
@@ -150,5 +155,19 @@ describe('kernel ledger', () => {
     t.ledger.open(tx => tx.finishTurn(first as string, { ops: 1, tool_errors: 0, tokens: 1200, end_reason: 'completed', rule_trace: [] }))
     expect(t.ledger.open(tx => tx.requestTurn({ trigger_kind: 'agenda', commitment_id: c.commitment_id, request_id: 'tick:3' }))).toBe('D:tick:3')
     expect(count(t, 'sa_deliberation')).toBe(2)
+  })
+
+  it('13. tx.run and reads refuse a second statement instead of silently dropping it', () => {
+    const t = openTestLedger()
+    const c = seedCommitment(t)
+    const sql = `INSERT INTO sa_doc_index (doc_id, path, title, kind, added_by, added_at, created_at) VALUES ('d1', '/h.md', 'h', 'handoff', 'human', 1, 1); DELETE FROM sa_commitment`
+    expect(codeOf(() => t.ledger.open(tx => tx.run(sql), { module: 'memory' }))).toBe('MULTI_STATEMENT')
+    expect(count(t, 'sa_doc_index')).toBe(0)
+    expect(count(t, 'sa_commitment')).toBe(1)
+    // A semicolon inside a literal is refused too; a single trailing one is fine.
+    expect(codeOf(() => t.ledger.open(tx => tx.run(`UPDATE sa_commitment SET what = 'a;b' WHERE commitment_id = ?`, c.commitment_id)))).toBe('MULTI_STATEMENT')
+    expect(codeOf(() => t.ledger.read.all('SELECT 1; SELECT 2'))).toBe('MULTI_STATEMENT')
+    t.ledger.open(tx => tx.run(`UPDATE sa_commitment SET what = 'ok' WHERE commitment_id = ?;`, c.commitment_id))
+    expect(t.db.prepare('SELECT what FROM sa_commitment').get()).toEqual({ what: 'ok' })
   })
 })
