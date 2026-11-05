@@ -17,7 +17,7 @@ import { PHYSICAL, TABLE_OWNERS, type LedgerReader, type LedgerTx, type OwnerMod
 import {
   OPEN_STATES, TERMINAL_STATES, canTransition, parseEndReason,
   type AttemptRow, type AudienceClass, type CommitmentRow, type CommitmentState, type Disposition,
-  type JournalKind, type TriggerKind,
+  type JournalKind, type OutboxRow, type TriggerKind,
 } from '../protocol/objects.ts'
 
 export type LedgerErrorCode = 'ILLEGAL_TRANSITION' | 'LEDGER_ASYNC_TX' | 'LEDGER_NESTED_TX' | 'SHADOW_NO_WRITE'
@@ -57,6 +57,10 @@ export interface NewIntake {
   deliberation_id?: string
 }
 
+/** A queued outbox row; tier and words come from the outlet policy, never from the proposal. */
+export type NewOutbox = Pick<OutboxRow, 'idem_key' | 'chat_id' | 'payload' | 'body' | 'moment' | 'tier' | 'audience' | 'words' | 'lease_epoch'>
+  & Partial<Pick<OutboxRow, 'outbox_id' | 'reply_to' | 'event_id' | 'commitment_id' | 'expects_reply' | 'deliver'>>
+
 export interface TurnFinish {
   ops: number; tool_errors: number; tokens: number; end_reason: string; rule_trace: unknown
   pub_hash?: string; dossier_hash?: string; audience_class?: AudienceClass; dossier_tokens?: number; window_id?: number
@@ -74,6 +78,12 @@ export interface KernelTx extends LedgerTx {
   disposeIntake(eventId: string, shadow: 0 | 1, d: { disposition: Disposition; reason?: string; alternative?: string; about?: string; corrects?: string }): void
   requestTurn(r: { trigger_kind: TriggerKind; desk_id?: string; commitment_id?: string; request_id: string }): string | undefined
   finishTurn(deliberationId: string, r: TurnFinish): void
+  /** T13: the only way to push next_look_at without a state change; applies the I1 cap itself. */
+  touch(commitmentId: string, nextLookAt: number): void
+  /** T14: writes one queued outbox row. */
+  recordOutbox(row: NewOutbox): OutboxRow
+  /** T12 passthrough: input_seq + 1 on the thread's live subscription; returns the new value. */
+  advanceSubscription(threadKey: string): number
 }
 
 export interface Ledger {
@@ -99,7 +109,9 @@ const I = PHYSICAL.intake
 const D = PHYSICAL.deliberation
 
 const WRITE_TARGET = /^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+["`[]?(\w+)/i
-const KERNEL_OWNER_CAS = /^\s*UPDATE\s+inbox_events\s+SET\s+owner\s*=\s*\?\s+WHERE\s/i
+/** The one approved shape (Lead ruling): the claim CAS on inbox_events.owner. */
+const KERNEL_OWNER_CAS = 'update inbox_events set owner = ? where event_id = ? and owner is null'
+const normalized = (sql: string): string => sql.trim().replace(/\s+/g, ' ').replace(/\s*;$/, '').toLowerCase()
 const READ_ONLY = /^\s*(?:SELECT|WITH)\b/i
 const WRITE_WORD = /\b(?:INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER|CREATE)\b/i
 
@@ -109,7 +121,7 @@ function assertOwned(sql: string, module: OwnerModule): void {
   if (!target) throw new LedgerError('TABLE_NOT_OWNED', `tx.run accepts INSERT/UPDATE/DELETE only: ${sql.slice(0, 60)}`)
   if (TABLE_OWNERS[target] === module) return
   // The kernel owns exactly one column of the channel's table: the claim CAS on owner.
-  if (module === 'kernel' && target === PHYSICAL.inbox_event && KERNEL_OWNER_CAS.test(sql)) return
+  if (module === 'kernel' && target === PHYSICAL.inbox_event && normalized(sql) === KERNEL_OWNER_CAS) return
   throw new LedgerError('TABLE_NOT_OWNED', `${module} may not write ${target} (owner: ${TABLE_OWNERS[target] ?? 'none'})`)
 }
 
@@ -335,6 +347,27 @@ export function createLedger(db: DatabaseSync, clock: LedgerClock): Ledger {
           now, r.ops, r.tool_errors, r.tokens, parseEndReason(r.end_reason), JSON.stringify(r.rule_trace ?? null),
           r.pub_hash ?? null, r.dossier_hash ?? null, r.audience_class ?? null, r.dossier_tokens ?? null, r.window_id ?? null, now, deliberationId)
         if (changed === 0) throw new LedgerError('MISSING', `open deliberation ${deliberationId}`)
+      },
+
+      touch(commitmentId, nextLookAt) {
+        live()
+        const current = commitmentById(commitmentId)
+        if (!OPEN.has(current.state)) throw new LedgerError('ILLEGAL_TRANSITION', `touch on ${current.state} ${commitmentId}`, 'touch_closed')
+        updateRow(C, 'commitment_id', commitmentId, { next_look_at: clampLook(current.kind, nextLookAt, now), updated_at: now })
+      },
+
+      recordOutbox(row) {
+        live(); noShadow('recordOutbox')
+        const outboxId = row.outbox_id ?? `O:${row.idem_key}`
+        insertRow(PHYSICAL.outbox, { ...row, outbox_id: outboxId, state: 'queued', attempts: 0, created_at: now, updated_at: now })
+        return get<OutboxRow>(`SELECT * FROM ${PHYSICAL.outbox} WHERE outbox_id = ?`, outboxId) as OutboxRow
+      },
+
+      advanceSubscription(threadKey) {
+        live()
+        const changed = exec(`UPDATE ${PHYSICAL.subscription} SET input_seq = input_seq + 1, updated_at = ? WHERE thread_key = ?`, now, threadKey)
+        if (changed === 0) throw new LedgerError('MISSING', `subscription ${threadKey}`)
+        return (get<{ input_seq: number }>(`SELECT input_seq FROM ${PHYSICAL.subscription} WHERE thread_key = ?`, threadKey) as { input_seq: number }).input_seq
       },
     }
     return tx

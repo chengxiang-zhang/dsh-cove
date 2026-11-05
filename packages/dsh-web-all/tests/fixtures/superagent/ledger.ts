@@ -8,6 +8,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { createLedger, type Ledger, type NewAttempt, type NewCommitment } from '../../../src/host/services/superagent/kernel/ledger.ts'
 import type { AttemptRow, CommitmentRow } from '../../../src/host/services/superagent/protocol/objects.ts'
+import type { InboundEvent } from '../../../src/host/services/superagent/protocol/events.ts'
 import { createManualClock, type ManualClock } from './manual-clock.ts'
 import { openTestLedgerDb } from './memdb.ts'
 
@@ -41,4 +42,21 @@ export function seedCommitment(t: TestLedger, over: Partial<NewCommitment> = {})
 
 export function seedAttempt(t: TestLedger, commitmentId: string, over: Partial<NewAttempt> = {}): AttemptRow {
   return t.ledger.open(tx => tx.recordAttempt({ commitment_id: commitmentId, executor: 'codex', reason: 'repo work', lifetime: 'oneshot', ...over }))
+}
+
+/** A live subscription row: thread -> commitment -> attempt (T12 passthrough). */
+export function seedSubscription(t: TestLedger, threadKey: string, commitmentId: string, attemptId: string): void {
+  t.db.prepare(`INSERT INTO sa_subscription (thread_key, commitment_id, attempt_id, input_seq, created_at, updated_at)
+    VALUES (?, ?, ?, 0, ?, ?)`).run(threadKey, commitmentId, attemptId, t.clock.now(), t.clock.now())
+}
+
+let inboundSeq = 0
+
+/** An inbound event; seed its `inbox_events` row with `seedInbound` from memdb. */
+export function inboundEvent(over: Partial<InboundEvent> = {}): InboundEvent {
+  inboundSeq += 1
+  return {
+    event_id: `evt-${inboundSeq}`, chat: { id: 'oc_1', type: 'p2p' }, sender: { open_id: 'ou_owner', union_id: 'on_owner' },
+    thread: `om_root_${inboundSeq}`, text: 'hello', message_id: `om_${inboundSeq}`, received_at: 0, ...over,
+  }
 }
