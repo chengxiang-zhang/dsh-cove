@@ -127,11 +127,23 @@ verdict 初始为 **FAIL**：R1 用可复现 probe 打穿 3 条不变量并找�
 ## 最终验收读数（Lead 复跑，2026-11-06 02:22）
 
 - `pnpm typecheck` → 退出码 0，error TS 0
-- `pnpm test` → 134 files / **1906 passed** / 4 skipped，退出码 0
+- `pnpm test` → `shared` 4 files / 37 passed + `packages/dsh-web-all` 134 files / **1906 passed** / 4 skipped，退出码 0
 - `pnpm docs:check` → all documentation gates passed
 - `pnpm test:scripts` → **608 pass / 0 fail**
-- `vitest run tests/superagent-` → 31 files / 340 passed
+- `vitest run tests/superagent-` → 31 files / **341 passed**（在 `e83c811` 上复跑；`d282aac` 上为 340，差的一条是 I3 竞态用例）
 - `grep -cE '^\s*- id:' packages/dsh-web-all/cordis.patch.yml` → 1
 - 七步链 e2e → 7/7
 
 仍未验证（需真实实例）：真实工具面端口、执行体 report 工具的真实注册、按会话覆盖模型的真实生效、飞书真实发送；以及 DONE-6 的 72 小时影子期读数。
+
+## 最终独立验收（V1，2026-11-06 02:38）
+
+verdict **PASS-WITH-NITS**，判据对象 `e83c811`（干净树）：DONE-1..5 全部成立，DONE-2 连跑三次均 7/7，DONE-3 三档退出码 0/1/3（缺文件 2）全对，DONE-4 = 1，DONE-5 = 4 passed 且 kernel 无上行 import。报告在 `~/.dsh/superagent-verify/FINAL.md`。
+
+四条 nit 的处置：
+1. FREEZE 的读数过期（340 → 341、漏记 shared 4/37）——已按本节上面的数字改正。
+2. **`superagent-deps.spec.ts` 会假绿**：`walk()` 在目录不存在时返回 `[]`，四条断言对空集恒真（把 `superagent/` 整体移走仍 4/4 绿）。真实规模 132 文件 / 515 条边。已派工补正断言（必须 `saEdges.length > 400` 且目录缺失即红）。
+3. `PLAN.md` 的 DONE-4 命令数注释——已改为 `grep -cE '^\s*- id:'`。
+4. P1 的边界要说准（写入交付报告）：命名 `KernelTx` 方法对任何已声明 module 开放（`memory` 也能 `tx.append`/`tx.transition`），P1 的机械边界是"模块拿不到裸连接 + 裸 SQL 按声明 module 白名单"。
+
+另有三条限制必须写进交付报告：`answer` 判据可只凭 summary 结案（设计如此）；七步链第 3 步本身不断言证据来自会话事件（来源校验在 `closure.ts` 与 hardening A11 的用例里）；三档开关没有设置页入口，只能改 profile 的 `lark-inbox` 命名空间。

@@ -33,7 +33,7 @@
 | DONE-1 | `pnpm typecheck && pnpm test && pnpm docs:check && pnpm test:scripts` | 四个命令退出码均为 0 |
 | DONE-2 | `pnpm --filter @dsh-cove/dsh-web-all exec vitest run tests/superagent-e2e-seven-step.spec.ts` | 7 个用例（`01 §E` 每步一个）全过，退出码 0 |
 | DONE-3 | `node scripts/superagent-check.mjs --db <e2e 产出的 fixture 库>` | 退出码 0，输出含 `I1 ok`、`I2 ok`、`I3 ok`、`I4 ok` 与七步链 7 行 `ok` |
-| DONE-4 | `grep -c -- '- id:' packages/dsh-web-all/cordis.patch.yml` | `1`（F22） |
+| DONE-4 | `grep -cE '^\s*- id:' packages/dsh-web-all/cordis.patch.yml` | `1`（F22；不要用 `grep -c -- '- id:'`，注释行会被数到，实测输出 4） |
 | DONE-5 | `pnpm --filter @dsh-cove/dsh-web-all exec vitest run tests/superagent-deps.spec.ts` | 依赖边与 `README` 精确边表一致、kernel 无上行 import，退出码 0 |
 | DONE-6 | 用户重启 DSH 服务并把开关切到 `shadow` 后，`node scripts/superagent-check.mjs --shadow --since-hours 72` | 退出码 0；`shadow_owner_mismatch=0`、`shadow_outbox_rows=0`、`intake_shadow>=30`（数量门槛见 NEEDS-DECISION N12） |
 
