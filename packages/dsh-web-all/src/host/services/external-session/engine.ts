@@ -314,9 +314,10 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
         prompt: request.prompt,
         cwd,
         providerSessionId: isNew ? undefined : session.providerSessionId,
+        ...request.model === undefined ? {} : { model: request.model },
         signal: controller.signal,
       }, request.provider)
-      return await this.settle(turnRecord(n, request.prompt, startedAt, outcome), outcome, session.id)
+      return await this.settle(turnRecord(n, request.prompt, startedAt, outcome, request.model), outcome, session.id)
     } catch (error) {
       // An adapter must resolve its failures; reaching here is a bug. Record it
       // as a failed turn so the session is left in a readable state.
@@ -326,7 +327,7 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
         result: '',
         durationMs: this.now() - Date.parse(startedAt),
       }
-      return await this.settle(turnRecord(n, request.prompt, startedAt, failedOutcome), failedOutcome, session.id)
+      return await this.settle(turnRecord(n, request.prompt, startedAt, failedOutcome, request.model), failedOutcome, session.id)
     } finally {
       // A throw before the first persist would otherwise leave the caller
       // waiting on a promise nothing resolves.
@@ -341,7 +342,7 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
   /** Run one adapter turn, converting a thrown error into a failed outcome. */
   private async runAdapter(
     adapter: ExternalAdapter,
-    request: { prompt: string; cwd: string; providerSessionId?: string; signal: AbortSignal },
+    request: { prompt: string; cwd: string; providerSessionId?: string; model?: string; signal: AbortSignal },
     provider: ExternalProvider,
   ): Promise<TurnOutcome> {
     try {
@@ -390,6 +391,7 @@ function turnRecord(
   prompt: string,
   startedAt: string,
   outcome: TurnOutcome,
+  model?: string,
 ): ExternalTurnRecord {
   const record: ExternalTurnRecord = {
     n,
@@ -400,6 +402,9 @@ function turnRecord(
     result: outcome.result,
   }
   if (outcome.usage !== undefined) record.usage = outcome.usage
+  // The model is per turn, not per session: a continuation may switch it, and a
+  // bill or a regression is attributable only when the record says which it ran on.
+  if (model !== undefined) record.model = model
   if (outcome.costUsd !== undefined) record.costUsd = outcome.costUsd
   return record
 }

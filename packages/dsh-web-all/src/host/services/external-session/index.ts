@@ -17,7 +17,8 @@ import type { ExternalAdapter } from '../../../core/external-session/adapters.ts
 import type { ExternalProvider } from '../../../core/external-session/types.ts'
 import { resolveExternalSessionConfig, type ExternalSessionConfig } from './config.ts'
 import { ExternalSessionEngine } from './engine.ts'
-import { assertNoNativeProvider } from './mutex.ts'
+import { assertNoNativeProvider, watchNativeProviders } from './mutex.ts'
+import { registerDelegationTools } from './tools.ts'
 import { createAdapterRegistry } from './registry.ts'
 import { registerExternalSessionRoutes } from './routes.ts'
 import { ExternalSessionStore, isDirectory, type StoreFileSystem } from './store.ts'
@@ -27,7 +28,7 @@ export { resolveExternalSessionConfig, EXTERNAL_SESSION_DEFAULTS, binaryFor } fr
 export type { ExternalSessionConfig, ResolvedExternalSessionConfig } from './config.ts'
 export { ExternalSessionEngine } from './engine.ts'
 export { ExternalSessionStore } from './store.ts'
-export { assertNoNativeProvider, findNativeProviderConflict, describeConflict } from './mutex.ts'
+export { assertNoNativeProvider, findNativeProviderConflict, describeConflict, watchNativeProviders } from './mutex.ts'
 export { EXTERNAL_SESSION_API, registerExternalSessionRoutes } from './routes.ts'
 
 /** Service-domain options; every field has a production default. */
@@ -85,6 +86,15 @@ export function register(ctx: Context, deps: ExternalSessionServiceDeps = {}): (
   const gateway: ExternalSessionGateway = engine
   const disposeService = ctx.provide(EXTERNAL_SESSION_SERVICE, gateway)
   const disposeRoutes = registerExternalSessionRoutes(ctx, gateway)
+  // The probe above is a snapshot of the registry at this instant. A profile
+  // that mounts the native external bundles after this entity passes it with an
+  // empty registry and then gets both paths a moment later, so the same
+  // identification runs again on every later provider registration.
+  const disposeWatch = watchNativeProviders(ctx, warn)
+  // The delegation tools belong to this Loader entry, not to a preset row: a preset
+  // mounts its plugin outside the Loader, and a module imported from there can never
+  // be replaced without a restart.
+  const disposeTools = registerDelegationTools(ctx, gateway, config.delegation, warn)
 
   // The first read is eager so the panel and the tools see the persisted
   // sessions immediately; a failure here degrades to an empty store with a
@@ -94,6 +104,8 @@ export function register(ctx: Context, deps: ExternalSessionServiceDeps = {}): (
   })
 
   return () => {
+    try { disposeTools() } catch { /* tolerant */ }
+    try { disposeWatch() } catch { /* tolerant */ }
     try { disposeRoutes() } catch { /* tolerant */ }
     try { disposeService() } catch { /* tolerant */ }
   }

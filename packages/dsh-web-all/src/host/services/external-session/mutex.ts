@@ -7,6 +7,12 @@
  * could pick either. The design therefore refuses to start while a native
  * external provider is still registered, and names the switch to turn off.
  *
+ * The guard has two phases because one is not enough. {@link assertNoNativeProvider}
+ * refuses the mount when a native provider is already registered, and
+ * {@link watchNativeProviders} reports one that registers later — the ordering a
+ * profile actually ships (this entity mounts before the native bundles) makes the
+ * second phase the one that fires.
+ *
  * The probe is structural on purpose. `@deepseek-ai/dsh-subagent` is not a
  * dependency of this package, so `subagents` cannot be imported as a type — and
  * more importantly, a host that simply does not have that service is a valid
@@ -20,11 +26,27 @@ import type { Context } from '@deepseek-ai/cordis'
 /** Subagent provider names the native external plugins register. */
 export const NATIVE_SUBAGENT_PROVIDERS: readonly string[] = ['claude-code', 'codex']
 
+/**
+ * Rows that register the native external providers.
+ *
+ * The probe reads the provider registry, so these rows — not the tool rows —
+ * are what a refusal is about. They are named first because turning off only
+ * the tool rows leaves the providers registered and the refusal in place, and
+ * turning off only the provider rows leaves a tool that can answer nothing but
+ * `provider-missing` while holding this capability's tool name.
+ */
+export const NATIVE_PROVIDER_ROWS: readonly string[] = ['subagent-claude-code', 'subagent-codex']
+
+/** Rows that expose the native tool names over those providers. */
+export const NATIVE_TOOL_ROWS: readonly string[] = ['tool-subagent-claude-code', 'tool-subagent-codex']
+
 /** Settings lines that toggle the native external providers. */
 const TOGGLE_HINT = 'Turn off the native external subagent providers '
-  + '(the `tool-subagent-claude-code` and `tool-subagent-codex` rows in the DSH profile, or the two '
-  + 'external-provider switches in Settings) and reload; the external-session capability already '
-  + 'provides those CLIs, and running both would spawn the same binary twice.'
+  + `(the ${quoteRows(NATIVE_PROVIDER_ROWS)} provider rows in the DSH profile — or the same rows `
+  + 'inside the `@deepseek-ai/dsh-subagent-claude-code` and `@deepseek-ai/dsh-subagent-codex` '
+  + `bundle entries — together with the ${quoteRows(NATIVE_TOOL_ROWS)} tool rows) and reload; the `
+  + 'external-session capability already provides those CLIs, and running both would spawn the '
+  + 'same binary twice.'
 
 /** One positive identification. */
 export interface NativeProviderConflict {
@@ -34,8 +56,15 @@ export interface NativeProviderConflict {
 
 type ContextWithGet = Context & { get?: (id: string, strict?: boolean) => unknown }
 
+type ContextWithOn = Context & { on?: (event: string, listener: (payload: unknown) => void) => (() => void) | undefined }
+
 interface SubagentsLike {
   list?: () => unknown
+}
+
+/** Backtick-quoted row list for operator-facing text. */
+function quoteRows(rows: readonly string[]): string {
+  return rows.map(row => `\`${row}\``).join(' and ')
 }
 
 /** Optional service lookup that never throws. */
@@ -108,4 +137,55 @@ export function assertNoNativeProvider(ctx: Context, onWarning?: (message: strin
     return
   }
   if (conflict.providers.length > 0) throw new Error(describeConflict(conflict))
+}
+
+/** The message an operator needs when a native provider arrives after the mount. */
+export function describeLateConflict(providers: readonly string[]): string {
+  return `[web-all] external-session is mounted, but the native external subagent provider(s) `
+    + `${providers.join(', ')} registered afterwards. Both paths to the same CLI are now live: a `
+    + 'delegation may spawn the same binary twice and bill the same account twice. '
+    + TOGGLE_HINT
+}
+
+/**
+ * Report native providers that register after this domain mounted.
+ *
+ * The mount-time probe reads the registry once, so a profile whose bundle order
+ * puts the native packages *after* this entity slips past it: the check sees an
+ * empty registry, passes, and the native providers appear a moment later. That
+ * ordering is what the Web profile actually ships, so the identification has to
+ * run a second time on the registration event as well.
+ *
+ * A late arrival reports instead of unmounting: once the store, the routes and
+ * the engine are live, tearing them down because a neighbour arrived later would
+ * take away the capability the operator kept. The report is the actionable half.
+ * @param ctx - the context the service mounted on.
+ * @param onConflict - receives the message once per newly identified provider set.
+ * @returns a disposer that stops listening; harmless when the host has no events.
+ */
+export function watchNativeProviders(
+  ctx: Context,
+  onConflict: (message: string) => void,
+): () => void {
+  const on = (ctx as ContextWithOn).on
+  if (typeof on !== 'function') return () => {}
+  const reported = new Set<string>()
+  let dispose: (() => void) | undefined
+  try {
+    dispose = on.call(ctx, 'subagent/provider-added', payload => {
+      const name = providerName(payload)
+      if (name === null || !NATIVE_SUBAGENT_PROVIDERS.includes(name) || reported.has(name)) return
+      reported.add(name)
+      try {
+        onConflict(describeLateConflict([name]))
+      } catch {
+        // Reporting must never become a second failure of the mount.
+      }
+    })
+  } catch {
+    return () => {}
+  }
+  return () => {
+    try { dispose?.() } catch { /* tolerant */ }
+  }
 }

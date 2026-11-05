@@ -150,6 +150,8 @@ export interface TurnRequest {
    * conversation; the engine is what decides a continuation is legal.
    */
   providerSessionId?: string
+  /** Exact model id for this turn; the caller has already trimmed and validated it. */
+  model?: string
   /** Aborting cancels this turn. */
   signal?: AbortSignal
 }

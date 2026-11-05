@@ -100,8 +100,11 @@ const RESUME_MISSING_PATTERN = /no conversation found with session id|--resume r
  * @param providerSessionId - CLI conversation id to continue, when continuing.
  * @returns the argument vector after `argv[0]`.
  */
-export function claudeTurnArgv(prompt: string, providerSessionId?: string): string[] {
+export function claudeTurnArgv(prompt: string, providerSessionId?: string, model?: string): string[] {
   const argv = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'auto']
+  // A pinned model is a query-level override, so it belongs with the other flags
+  // and before the terminator that protects a dash-leading prompt.
+  if (model !== undefined && model.length > 0) argv.push('--model', model)
   if (providerSessionId !== undefined && providerSessionId.length > 0) argv.push('--resume', providerSessionId)
   if (prompt.startsWith('-')) argv.push('--')
   argv.push(prompt)
@@ -229,6 +232,20 @@ function diagnostic(exit: ExternalProcessOutcome | undefined, stderr: string, ca
 }
 
 /**
+ * Full spawn argv for one turn.
+ *
+ * The model is threaded here rather than at the call site, because a builder that
+ * accepts a model and a spawn that forgets to pass it looks identical in review and
+ * silently falls back to the CLI's own configured model.
+ * @param executable - resolved CLI path.
+ * @param request - the turn being run.
+ * @returns the argument vector, executable first.
+ */
+export function spawnArgv(executable: string, request: TurnRequest): string[] {
+  return [executable, ...claudeTurnArgv(request.prompt, request.providerSessionId, request.model)]
+}
+
+/**
  * Build the Claude Code adapter.
  * @param deps - host process port plus the settings, home and clock seams.
  * @param config - the resolved binary override or default.
@@ -285,7 +302,7 @@ export function createClaudeAdapter(deps: ExternalAdapterDeps, config: ExternalA
       let handle: ExternalProcessHandle
       try {
         handle = deps.process.spawn({
-          argv: [executable, ...claudeTurnArgv(request.prompt, request.providerSessionId)],
+          argv: spawnArgv(executable, request),
           cwd: request.cwd,
           graceMs: deps.cancelGraceMs,
           env: credentials.env,

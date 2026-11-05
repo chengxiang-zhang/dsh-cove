@@ -5,14 +5,13 @@
  * all service domains live under src/host/services and are externalized the
  * same way the former per-plugin packages were.
  *
- * `src/preset-tools.ts` is the second node entry, not a second plugin row: it
- * is the module a preset mounts when it wants the external-session tools, which
- * keeps those tools scoped to the presets that declare them while the entity
- * row stays alone.
+ * The single node entry is the entity row. External-session tools are registered by
+ * that entry; a second entry mounted from a preset would put the module graph
+ * outside the Loader, where HMR cannot replace it without a restart.
  */
 import { clientBundle } from '../../shared/tsdown.client.ts'
 
-export default clientBundle('@dsh-cove/dsh-web-all', ['src/index.ts', 'src/preset-tools.ts'], {
+export default clientBundle('@dsh-cove/dsh-web-all', ['src/index.ts'], {
   libExternal: [
     '@deepseek-ai/dsh-client-connection',
     '@deepseek-ai/dsh-client-locale',

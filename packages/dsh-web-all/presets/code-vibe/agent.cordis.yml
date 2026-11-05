@@ -296,27 +296,11 @@
         toolName: subagent_fork
         backgroundMode: one-shot
 
-    # External CLI delegation is served by this package's own external-session
-    # service, reachable through the `preset-tools` entry (one tool row per
-    # provider). The tool names keep the native spelling so prompts, skills and
-    # user habits carry over unchanged; these two rows are the only place those
-    # tools reach a session, and the native `@deepseek-ai/dsh-subagent-*` provider
-    # rows stay disabled because two paths to the same CLI invite the wrong pick.
-    #
-    # Both rows are on. To hide one product from agents composed from a copy of
-    # this preset, add `disabled: true` to its row; the row is the per-session
-    # switch.
-    - id: tool-subagent-codex
-      name: '@dsh-cove/dsh-web-all/preset-tools'
-      config:
-        provider: codex
-        toolName: subagent_codex
-
-    - id: tool-subagent-claude-code
-      name: '@dsh-cove/dsh-web-all/preset-tools'
-      config:
-        provider: claude
-        toolName: subagent_claude_code
+    # External CLI delegation (external-session) is mounted at the Loader plane by
+    # the profile's own rows, not here. A preset row instantiates the plugin outside
+    # the Loader, and HMR can only replace modules whose every live importer is a
+    # Loader entry: with these rows present, any change to the tool module forced a
+    # restart instead of hot-swapping.
 
     # 0.1.6-alpha.1 dropped @deepseek-ai/dsh-workflow-worker-thread from the
     # shipped CLI tree (last published was 0.1.5-rc.2). Stock presets now use

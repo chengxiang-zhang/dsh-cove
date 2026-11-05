@@ -30,6 +30,11 @@ export interface ExternalTurnRequest {
   cwd?: string
   /** Title for a newly created session; ignored on a continuation. */
   title?: string
+  /**
+   * Exact model id for this turn. Omitted means the CLI's own configured model,
+   * which is also what a continuation keeps unless the caller changes it.
+   */
+  model?: string
   /** Cancels this turn. A panel cancellation aborts the same way. */
   signal?: AbortSignal
 }

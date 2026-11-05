@@ -64,7 +64,7 @@
 | 层 | 路径 | 职责 |
 | --- | --- | --- |
 | 共享类型 | `packages/dsh-web-all/src/core/external-session/` | `types.ts` 记录与视图类型、`errors.ts` 八个错误码、`schema.ts` 存储 schema 与校验、`lifecycle.ts` 状态迁移、`adapters.ts` 适配器契约、`gateway.ts` 服务接口、`views.ts` 视图投影 |
-| 预设入口 | `packages/dsh-web-all/src/preset-tools.ts` | 预设行挂载的工具入口，一行一个 provider（见 §7） |
+| 工具面 | `packages/dsh-web-all/src/host/services/external-session/tools.ts` | 由本实体自己的 Loader 条目注册四个工具（见 §7） |
 | 服务域 | `packages/dsh-web-all/src/host/services/external-session/` | `index.ts` 的 `register`、`engine.ts` 状态机与 FIFO、`store.ts` 的 JSON 原子写、`routes.ts` 的 `/api/external-session` 数据面、`mutex.ts` 的互斥门、`registry.ts` 把适配器接到 `ctx.subprocess`、`config.ts` 配置与默认值、`tools.ts` 四个工具的定义、`providers/` 下每个 CLI 一个适配器 |
 | 客户端 | `packages/dsh-web-all/src/client/external-session/` | 右侧面板、下拉分组与宿主 routes 的客户端 |
 
@@ -136,9 +136,15 @@ external_session_stop(session_id)
 - 提供 `session_id`：在该会话上跑下一轮，内部使用 CLI 会话号续接。
 - 返回统一结构：`{ session_id, turn, status, result, usage, cost_usd, can_continue }`。
 - 工具为同步阻塞：本轮结束才返回。这样结果直接进入对话，不依赖任何未公开的消息注入通道。
+
+两个派发工具各自带一个可选的 `model`：目录由接线行给，不写在代码里。行上的 `config.models` 是 `[{ id, description }]`，编译成参数 schema 的 `oneOf` 分支，于是每个候选模型在选择处就带着自己的说明；行上不给 `models` 时该参数退化为自由字符串，最终由 CLI 自己的设置决定。两个工具各带各的目录，避免把 Claude 的模型 id 递给 Codex。
+
+模型按轮记录：`model` 写进该轮的 turn 记录，续轮可以换模型，账单与回归才归得到具体模型。
+
+每个工具还可以配一个 `default`：调用方省略 `model` 时用它。当前这台机器的口径是 claude 默认 `kaon/claude-opus-5-5`、codex 默认 `gpt-6-astra`，工具的说明文字会把默认档直接写出来，模型不必猜。
 - 不做后台模式：一次调用占用当前轮，直到本轮结束。要改成后台派发，给工具加一个 `background` 参数即可，引擎与存储不动。
 
-这四个工具由预设行挂载，不是宿主无条件注册：`@dsh-cove/dsh-web-all/preset-tools` 是 agent-plane 入口，一个预设行注册一个 provider 的委派工具，并默认同时注册 `external_session_list` 与 `external_session_stop`（多行时用 `control: false` 让控制工具只声明一次）。宿主装配挂载引擎与存储而不挂工具，因为面板与工具共用同一份数据。引擎服务缺席时这一行不注册任何工具、只发一条 warn，工具名留给原生行——工具注册是容忍式的，重名不报错，谁先注册谁拥有那个名字。
+这四个工具由本实体自己的 Loader 条目注册，随实体行一起装配：`web-all` 的 `config.externalSession.tools` 决定每个 provider 的开关与模型目录，控制工具只注册一次。工具不放在预设里——预设行由 `agentPresets` 在运行时装配，不属于 Loader 条目，而 HMR 只能替换「所有活着的 importer 都是 Loader 条目」的模块；工具一旦从预设平面 import，本文件的任何改动都要重启宿主才生效。工具注册仍是容忍式的：名字被占时不报错，先注册者拥有，被拒的一方发一条点名讯息。
 
 错误码固定为一组，面向模型给出一句话就够的解释：
 
@@ -214,63 +220,53 @@ Codex：
 
 | 对象 | 处置 |
 | --- | --- |
-| `tool-subagent-claude-code` / `tool-subagent-codex` 两行 | 由本能力承担，指向本包的工具入口（接线见 §13） |
+| `tool-subagent-claude-code` / `tool-subagent-codex` 两行 | 由本能力承担，指向本包的工具入口（两种接线见 §13） |
 | `@deepseek-ai/dsh-subagent` 服务、spawn/fork 本地子代理、Agent Team | 保留不动 |
+| ACP 两个强模型入口 `subagent_astra` / `subagent_opus55` | 退役：它们做的事已由本能力用 `model` 覆盖（codex→astra、claude→opus），provider 行与 tool 行一并置 `disabled: true` |
+| `subagent_cursor` | 保留：本能力只驱动 claude 与 codex 两个 CLI，Cursor 没有对应通道 |
 | `~/.claude/settings.json`、Codex 原生配置 | 保留，仍是唯一凭据与模型来源 |
 
-互斥检测：服务域加载时若发现原生外部 provider 仍注册（`ctx.subagents.list()` 含 `claude-code` 或 `codex`），拒绝挂载并给出关闭指引，不静默双跑。检测只探 provider 注册表，不扫工具目录；同名的原生工具行拦不住，工具注册本身是容忍式的（先注册者拥有那个名字），所以迁移时四个原生行要一起关掉（见 §13）。
+互斥检测分两段，因为一段挡不住实际装配顺序。服务域加载时若发现原生外部 provider 已注册（`ctx.subagents.list()` 含 `claude-code` 或 `codex`），拒绝挂载并给出关闭指引；挂载之后再收到 `subagent/provider-added`，同一识别再跑一次并报告，不拆除已挂载的域。两段里哪一段先响由装配顺序决定：实体注入的服务更多，原生 provider 行只等 `subagents`，两种先后都出现过，所以两段都必须有。
+
+检测只探 provider 注册表，不扫工具目录。工具名的归属由注册表本身决定：先注册者拥有该名字，后注册者被拒。被拒的行不静默退出——它报一行讯息，点名仍占着名字的行，否则目录里留着一个看着能用、实际永远走原生 provider 的委派。
 
 ## 13. 迁移与回滚
 
-接线点只有预设 `code-vibe` 里的两个工具行。改接线只改 `packages/dsh-web-all/presets/code-vibe/agent.cordis.yml`，再跑 `node scripts/render-preset.mjs` 重新生成 `presets/code-vibe.patch.yml`；`node scripts/render-preset.mjs --check` 是漂移门，手改生成物会被它打红。
+接线只有一处：实体行 `web-all` 的 `config.externalSession`。工具由该行自己注册，因此该 profile 的每个预设、每个会话都看得到，也不需要另插工具行。
 
-两行的现状：
+不放在预设里是有代价的结论：预设行由 `agentPresets` 在运行时装配，不属于 Loader 条目；而 HMR 只能替换「所有活着的 importer 都是 Loader 条目」的模块。把工具行放进预设，等于任何一次工具代码改动都要重启宿主才生效。
 
-| 行 | `name` | `config.provider` | `config.toolName` | 状态 |
-| --- | --- | --- | --- | --- |
-| `tool-subagent-claude-code` | `@dsh-cove/dsh-web-all/preset-tools` | `claude` | `subagent_claude_code` | 启用 |
-| `tool-subagent-codex` | `@dsh-cove/dsh-web-all/preset-tools` | `codex` | `subagent_codex` | 启用 |
+**同一个 `- id:` 在一份 patch 里只能出现一次**：后出现的 `config` 对已存在条目是**整键替换**，不是深合并。把 `externalSession` 单独写成第二个 `- id: web-all`，会让该条目只剩 `externalSession`，`noBrowserAuth`、`feishu`、`lark-inbox`、`playwright` 全部丢失。实体配置必须并进已有那条 `web-all` 的 `config` 块。
 
-原生的 `@deepseek-ai/dsh-subagent-claude-code` 与 `@deepseek-ai/dsh-subagent-codex` 两个 provider 包仍装在 profile 里供对照，但不进预设组合。
+```yaml
+- id: web-all
+  config:
+    externalSession:
+      claudeBin: /Users/leo/.local/bin/claude
+      tools:
+        claude:
+          models:
+            - id: kaon/claude-sonnet-5-5
+              description: 均衡默认档，日常任务先选它
+            - id: kaon/claude-opus-5-5
+              description: 最强也最贵，用于复杂设计、排障与对抗式复核
+        codex:
+          models:
+            - id: gpt-6-astra
+              description: 当前 ChatGPT 账号下可用；terra 在 CLI 侧返回 400
+```
 
 活 profile（`~/.dsh/profiles/web/cordis.patch.yml`）要同时改两处，缺一处迁移就不完整。
 
-**一、关掉四个原生行**，每行加 `disabled: true`；以下是这四行连同各自原有的 config，其余行保持原样：
+**一、删掉四个原生行**（provider 两行、tool 两行，整段移除；不是加 `disabled: true`），并把这些尾巴一起清掉：
 
-```yaml
-- id: subagent-claude-code
-  name: '@deepseek-ai/dsh-subagent-claude-code'
-  disabled: true
-  config:
-    permissionMode: auto
+- 从 `dsh.profile.bundles` 去掉 `@deepseek-ai/dsh-subagent-claude-code` 与 `@deepseek-ai/dsh-subagent-codex`；
+- 从 `dependencies` 去掉同名两项；
+- 删掉 profile `node_modules/@deepseek-ai/` 下对应的两个包目录。
 
-- id: subagent-codex
-  name: '@deepseek-ai/dsh-subagent-codex'
-  disabled: true
-  config:
-    model: gpt-6-astra
+停用行留着只是噪音：它继续把原生工具名占在配置里，下一个读 profile 的人还得判断它是死是活。互斥门查的是 provider 注册表，所以 provider 行必须和 tool 行一起消失，只删 tool 行挡不住门。
 
-- insert:
-    - id: tool-subagent-claude-code
-      name: '@deepseek-ai/dsh-tool-subagent'
-      disabled: true
-      config:
-        provider: claude-code
-        toolName: subagent_claude_code
-        backgroundMode: one-shot
-        maxDepth: provider-managed
-
-    - id: tool-subagent-codex
-      name: '@deepseek-ai/dsh-tool-subagent'
-      disabled: true
-      config:
-        provider: codex
-        toolName: subagent_codex
-        backgroundMode: one-shot
-        maxDepth: provider-managed
-```
-
-这一步不是可选的：互斥门看到原生 provider 仍在注册就拒绝挂载，本能力完全不生效，`/api/external-session/*` 一直 404。该 profile 的 `patchReload` 是 `live`，改这几行热重载生效，不需要重启宿主。
+这一步不是可选的：互斥门看到原生 provider 仍在注册就拒绝挂载，本能力完全不生效，`/api/external-session/*` 一直 404。保存 `cordis.patch.yml` 不触发重载（`dsh.profile.patchReload` 在 0.2.1-rc.5 里没有实现，全量搜索该安装包命中 0 次，也没有代码注册 `hmr.watchConfig`）。重组入口是 Plugin Manager 的写操作（`set_plugin` / `set_bundle` / 安装 / 卸载），它调用 `hmr.reconcileProfile()`。本能力把工具注册在实体自己的 Loader 条目里之后，该调用返回 `applied`；把工具挂在预设入口或另立子入口的旧结构返回 `restart-required` 与 `restartReason: unmanaged-plugin`。这条差别已实测两轮：同一 profile 连续两次 `set_bundle` 开关都回 `applied`，活工具的说明文字随之改变。
 
 **二、给实体行配 `claudeBin`**：
 
@@ -285,14 +281,14 @@ Codex：
 
 `~/.dsh/profiles/web/node_modules/@dsh-cove/dsh-web-all` 是指向本仓 `packages/dsh-web-all` 的符号链接，重启后加载的就是本仓代码。
 
-回滚：删掉那四个 `disabled` 与 `externalSession`，并把预设两行的 `name` 换回 `@deepseek-ai/dsh-tool-subagent`、`provider` 换回 `claude-code` / `codex`，重新生成 patch 并重启 DSH 生效。两侧数据文件不同（本能力写 `~/.dsh/dsh-external-session.json`，原生不写这个文件），回滚不迁移、不覆盖对方数据。
+回滚：把两个原生 bundle 与其 profile 行加回去，并去掉 `externalSession` 配置。两侧数据文件不同（本能力写 `~/.dsh/dsh-external-session.json`，原生不写这个文件），回滚不迁移、不覆盖对方数据。
 
 ## 14. 验收判据
 
 | 编号 | 判据 |
 | --- | --- |
-| E1 | 权限对照：同一任务分别由原生与本能力执行，两者都能写文件并运行命令，不出现「全部拒绝」 |
-| E2 | 结果对照：同一真实缺陷任务，两者改动的文件与结论可比 |
+| E1 | 权限：无人值守模式下本能力能写文件并运行命令，不出现「全部拒绝」 |
+| E2 | 结果：同一真实缺陷任务，结论与改动可复核 |
 | E3 | 续接：先要求「记住 42」，再以同一 `session_id` 追问「刚才让你记的数字是多少」，回答 42 |
 | E4 | 冷恢复：重启 DSH 后 `external_session_list` 仍列出该会话，续轮成功 |
 | E5 | 资源：取消与正常结束后 `ps` 无残留 CLI 进程；并发上限触发时返回 `busy` |
@@ -302,7 +298,7 @@ Codex：
 
 | 期 | 交付物 | 完成标准 |
 | --- | --- | --- |
-| P0 | 服务域骨架、存储、工具注册、互斥检测、面板空态 | 工具出现在工具目录；原生行未关时启动即报错 |
+| P0 | 服务域骨架、存储、工具注册、互斥检测、面板空态 | 工具出现在工具目录；原生 provider 仍在注册时报错，或在其后注册时立刻报一行点名讯息 |
 | P1 | Claude Code 适配器（一次性） | E1、E2 通过 |
 | P2 | 续轮（会话号与 `--resume`） | E3、E4 通过 |
 | P3 | 面板（时间线、追问、取消）与下拉分组 | 面板可独立完成 E3 全流程 |
@@ -313,10 +309,11 @@ Codex：
 
 已知限制：
 
-- **生效需要重启**：预设与包的组合在 DSH 启动时装配，改动预设或本能力的代码后要重启 DSH 才生效；profile 的 `cordis.patch.yml` 是例外，它是 `patchReload: live`，改行热重载。
+- **生效时机**：预设与包的组合在每次 profile 重组时装配。保存 `cordis.patch.yml` 不触发重载——`dsh.profile.patchReload` 在 0.2.1-rc.5 中未实现（该安装包全量搜索命中 0 次），也没有代码注册 `hmr.watchConfig`；Plugin Manager 的写操作会触发 `hmr.reconcileProfile()`，但已链接包存在时一律返回 `restart-required` / `unmanaged-plugin`，所以本 profile 的接线改动实际生效点就是下一次进程启动。
 - **每轮一个进程**：续轮复用 CLI 的会话号而不是常驻进程，每轮都有冷启动延迟，长会话的总耗时包含这段延迟。
 - **成本是估值**：`cost_usd` 是 CLI 内置价表估算，不是网关账单；工具返回与面板都标注为估值。
 - **宿主需要有 `claude`**：解析规则见 §9；解析不到时本轮返回 `provider-missing`。
+- **`claude` 版本决定可选模型**：`--model` 送到 CLI 之后，模型能不能用由 CLI 版本决定。实测 `kaon/claude-opus-5-5` 在 Claude Code 2.1.177 上返回 400（要求 ≥ 2.1.280），升级到 2.1.318 后同一命令返回 `assistant.model = anthropic/claude-opus-5.5`。默认档配到一个当前 CLI 不支持的模型时，每一轮都会是 `provider-error`，而不是静默换模型。
 - **同步阻塞**：工具在本轮结束才返回，长任务的对话卡片只显示运行中，实时进度只在面板可见。
 - **互斥门 fail-closed**：原生外部 provider 没关时本能力完全不挂载，`/api/external-session/*` 返回 404（规则见 §12），不会与原生并存，也不会抢工具名。
   - 自查：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3080/api/external-session/list` 回 `404` 说明没挂载（已挂载但调用方不在围栏内是 `403`，正常是 `200`）；宿主日志里 external-session 的装配拒绝消息会点名 `tool-subagent-claude-code` 与 `tool-subagent-codex`；`grep externalSession ~/.dsh/profiles/web/cordis.patch.yml` 为空说明就是还没迁移。

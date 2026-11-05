@@ -96,11 +96,15 @@ const LIMIT_PATTERN = /usage limit|rate limit|quota exceeded|too many requests|c
  * @param providerSessionId - conversation id to continue, when continuing.
  * @returns the argument vector after `argv[0]`.
  */
-export function codexTurnArgv(prompt: string, providerSessionId?: string): string[] {
+export function codexTurnArgv(prompt: string, providerSessionId?: string, model?: string): string[] {
+  // `-c` is a CLI-level override, so it precedes the subcommand; a resume inherits
+  // the thread's policy but not necessarily its model, which is why both shapes
+  // carry the same override when the caller pinned one.
+  const head = model !== undefined && model.length > 0 ? ['-c', `model=${model}`] : []
   if (providerSessionId !== undefined && providerSessionId.length > 0) {
-    return ['exec', 'resume', '--json', '--skip-git-repo-check', providerSessionId, prompt]
+    return [...head, 'exec', 'resume', '--json', '--skip-git-repo-check', providerSessionId, prompt]
   }
-  return ['exec', '--json', '--approve-for-me', '--skip-git-repo-check', prompt]
+  return [...head, 'exec', '--json', '--approve-for-me', '--skip-git-repo-check', prompt]
 }
 
 /** Read one non-empty string field. */
@@ -223,6 +227,20 @@ function diagnostic(exit: ExternalProcessOutcome | undefined, stderr: string, ca
 }
 
 /**
+ * Full spawn argv for one turn.
+ *
+ * The model is threaded here rather than at the call site, because a builder that
+ * accepts a model and a spawn that forgets to pass it looks identical in review and
+ * silently falls back to the CLI's own configured model.
+ * @param executable - resolved CLI path.
+ * @param request - the turn being run.
+ * @returns the argument vector, executable first.
+ */
+export function spawnArgv(executable: string, request: TurnRequest): string[] {
+  return [executable, ...codexTurnArgv(request.prompt, request.providerSessionId, request.model)]
+}
+
+/**
  * Build the Codex adapter.
  * @param deps - host process port, plus the clock and cancellation seams.
  * @param config - the resolved binary override or default.
@@ -263,7 +281,7 @@ export function createCodexAdapter(deps: ExternalAdapterDeps, config: ExternalAd
       let handle: ExternalProcessHandle
       try {
         handle = deps.process.spawn({
-          argv: [executable, ...codexTurnArgv(request.prompt, request.providerSessionId)],
+          argv: spawnArgv(executable, request),
           cwd: request.cwd,
           graceMs: deps.cancelGraceMs,
           signal: request.signal,

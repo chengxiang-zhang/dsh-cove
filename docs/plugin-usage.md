@@ -48,6 +48,8 @@
 
 只读清单。上半部分是各 Agent 预设的组合，默认展开；下半部分是全局插件，默认收起；搜索会同时展开两边。
 
+这一页由 `ui-settings-plugins`（设置里的导航与标签外壳）和 `ui-settings-plugin-inventory`（清单页）渲染，数据来自只读的 `plugin-inventory` 行；它读的是 Loader 的实际装配结果，所以显示的是求值后的生效状态，而不是配置文件里的字面量。
+
 字段含义：「已启用」是当前生效，「已停用」是该行被停用，「条件启用」是按表达式决定（例如只在 macOS 上启用、只在 desktop profile 启用），「来自」说明这行由哪个 bundle 或预设带来，「完整名称」是 npm 包名。一行显示多个来源时，说明多个预设都带了这一行。
 
 这一页**不改配置**：卡片没有开关，安装因 pnpm 构建脚本被拦时才有「允许这些脚本并重试」。要改配置去侧栏的插件页。
@@ -144,6 +146,7 @@
 - 标题（`session-title`）：来源三种取最新——首条人话自动截取的兜底、模型生成、你自己改名。当前生效的模型方案是「用全部消息生成标题」（`optional-session-title-all-prompts`），你每发一条新消息都会修一次标题；「用首条消息生成标题」（`session-title-llm`）在全局平面停用且不在任何预设里，属于本 profile 真正没启用的能力。
 - 统计（`session-stats`）：会话界面统计条显示回合数、步数、模型耗时、工具耗时、首字延迟、解码耗时与 token 数，数字来自完整日志，翻页与压缩都不改变。
 - 轨迹（`ui-trajectory`）：会话视图的「轨迹」标签页是事件账本加时间轴，按用户 / 助手 / 工具 / 嵌套子调用 / 压缩分组，点某条记录看 token 用量、耗时、输入输出；时间轴可拖选区间、滚轮缩放。
+- 回合大纲（`session-turn-outline`）：给整个会话每个回合的目录（回合号、提示预览、已结算回答预览），可以跳到还没加载的回合，也可以按事件序号往回翻页把该回合载进来。不装它时只能在已加载的历史里翻。
 
 ### 回合运行底座
 
@@ -302,7 +305,9 @@
 
 控制工具 `send_message`、`interrupt_agent`、`list_agents` 由 `tool-subagent-control`（含 `list-agents` 子行）提供：`send_message` 只返回受理、绝不返回回复；`interrupt_agent` 只停当前轮，已排队消息保留、后代继续；`list_agents` 默认只列直接子级，`descendants` 递归列。
 
-限制在「设置 → 内置插件 → 子智能体」页：`maxDepth` 默认 1、`maxActiveSubagents` 默认 8，超额以 `ACTIVATION_LIMIT_REACHED` 拒绝（不排队，避免父等自己占的名额而死锁）。同一页还能配「子智能体可选模型」——只有开了 `modelSelectionSettings` 的委派工具才把 `provider` / `model` / `reasoning_effort` 暴露给模型。
+限制在「设置 → 内置插件 → 子智能体」页：`maxDepth` 默认 1、`maxActiveSubagents` 默认 8，超额以 `ACTIVATION_LIMIT_REACHED` 拒绝（不排队，避免父等自己占的名额而死锁）。同一页还能配「子智能体可选模型」——只有开了 `modelSelectionSettings` 的委派工具才把 `provider` / `model` / `reasoning_effort` 暴露给模型；对应行是 `subagent-model-selection-settings`。
+
+会话里的子代理导航由 `ui-subagent` 提供：在会话里列出子代理目录、进入它的可继续子会话，`@` 引用里也能选到子代理会话。
 
 外部后端都是 **one-shot**：只回最终答案，不能继续发消息、不能冷恢复、看不到中间过程。前置条件逐个是：
 
@@ -311,10 +316,10 @@
 | `subagent_claude_code` | `~/.claude/settings.json` 与 Claude Code 原生登录可用；本 profile `permissionMode: auto` |
 | `subagent_codex` | 本机原生 Codex 配置与登录；本 profile 固定 `model: gpt-6-astra`，`permissionMode` 默认 `never` |
 | `subagent_cursor` | `/Users/leo/.local/bin/cursor-agent` 存在且 `CURSOR_API_KEY` 有效；`permission: allow` 等于无人值守批准它每个权限请求（含写文件与执行 shell） |
-| `subagent_astra` | `/Users/leo/tools/acp-agents/node_modules/.bin/codex-acp` 存在，模型由 `CODEX_CONFIG` 决定 |
-| `subagent_opus55` | `/Users/leo/tools/acp-agents/node_modules/.bin/claude-agent-acp` 存在，模型由 `ANTHROPIC_MODEL` 决定 |
 
 注意许愿式编程预设把 `tool-subagent-claude-code` 与 `tool-subagent-codex` 各自置成停用，所以在那个预设的会话里看不到这两个外部工具；进程内的 `subagent` / `subagent_fork` 不受影响。
+
+现在这两行由本仓 external-session 能力承担，不再走官方 provider：它直接起 `claude` / `codex` CLI，因此多一个可选 `session_id` 用于续同一段对话，并额外提供 `external_session_list` 与 `external_session_stop`；模型可以用调用参数 `model` 当场选，候选目录与默认档在实体行的 `config.externalSession.tools` 里配、逐个带说明，不给 `model` 时用默认档。工具由 `web-all` 这个 Loader 条目注册，所以每个预设、每个会话都看得到。细节与迁移见 [external-session.md](external-session.md)。
 
 ### Agent Teams
 

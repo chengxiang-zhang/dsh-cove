@@ -43,6 +43,14 @@ export interface ExternalUsage {
   output: number
 }
 
+/** One model the operator lets one provider's delegation tool select. */
+export interface ExternalModelOption {
+  /** Exact model id handed to the CLI. */
+  id: string
+  /** One line the model reads while choosing: what this model is for. */
+  description: string
+}
+
 /** One turn: one child process from start to exit. */
 export interface ExternalTurnRecord {
   /** 1-based turn number inside this session. */
@@ -54,6 +62,8 @@ export interface ExternalTurnRecord {
   startedAt: string
   durationMs: number
   usage?: ExternalUsage
+  /** Model this turn ran on: the caller's choice, or the CLI's own default when absent. */
+  model?: string
   /** The CLI's own price-table estimate. Never a bill. */
   costUsd?: number
   /** Final text of the turn; a diagnostic summary when the turn failed. */

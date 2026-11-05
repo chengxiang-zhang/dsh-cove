@@ -10,18 +10,28 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { apply as applyPresetTools } from '../../../preset-tools.ts'
 import { register } from './index.ts'
-import { assertNoNativeProvider, describeConflict, findNativeProviderConflict } from './mutex.ts'
+import {
+  NATIVE_PROVIDER_ROWS, NATIVE_TOOL_ROWS,
+  assertNoNativeProvider, describeConflict, findNativeProviderConflict, watchNativeProviders,
+} from './mutex.ts'
 import type { ExternalSessionGateway } from '../../../core/external-session/gateway.ts'
 
-/** A tools registry that records what a plugin registers. */
-function fakeTools() {
+/**
+ * A tools registry that records what a plugin registers.
+ *
+ * `taken` reproduces the one behaviour of the real registry this domain has to
+ * survive: a name that is already owned throws instead of replacing, so whoever
+ * registered first keeps the tool.
+ */
+function fakeTools(options: { taken?: readonly string[] } = {}) {
   const registered = new Map<string, ToolDefinition>()
+  const taken = new Set(options.taken ?? [])
   return {
     registered,
     service: {
       register(tool: ToolDefinition): () => void {
+        if (taken.has(tool.name)) throw new Error(`tool "${tool.name}" is already registered`)
         registered.set(tool.name, tool)
         return () => { registered.delete(tool.name) }
       },
@@ -30,6 +40,16 @@ function fakeTools() {
       },
     },
   }
+}
+
+/** Collect every message this context reports through its host logger channel. */
+function captureWarnings(ctx: Context): string[] {
+  const warnings: string[] = []
+  Object.defineProperty(ctx, 'logger', {
+    value: () => ({ warn: (message: unknown) => { warnings.push(String(message)) } }),
+    configurable: true,
+  })
+  return warnings
 }
 
 /** A web server that accepts route registrations and forgets them. */
@@ -104,45 +124,111 @@ describe('external-session mutex against the native providers', () => {
   it('describes a conflict with the operator action', () => {
     expect(describeConflict({ providers: ['codex'] })).toContain('Turn off the native external subagent providers')
   })
-})
 
-describe('preset-tools visibility', () => {
-  it('stands down with no tool and one warning when the engine is absent', () => {
-    const tools = fakeTools()
-    const ctx = contextWith({ subagents: 'absent', tools })
-    // Capture the host logger channel the stand-down reports through.
-    const warnings: unknown[] = []
-    Object.defineProperty(ctx, 'logger', {
-      value: () => ({ warn: (message: unknown) => { warnings.push(message) } }),
-      configurable: true,
-    })
-    expect(() => applyPresetTools(ctx, { provider: 'claude', toolName: 'subagent_claude_code' })).not.toThrow()
-    // D14: an inert row is the point — the live host may still own that name.
-    expect([...tools.registered.keys()]).toEqual([])
-    expect(warnings).toHaveLength(1)
-    expect(String(warnings[0])).toContain('not registered')
+  it('names the provider rows that decide the refusal, not only the tool rows', () => {
+    // The probe reads the provider registry, so a hint that only lists the tool
+    // rows sends the operator to a switch that cannot clear the refusal. Both
+    // faces have to appear, plus the bundle that re-ships the provider row.
+    const message = describeConflict({ providers: ['claude-code'] })
+    for (const row of NATIVE_PROVIDER_ROWS) expect(message).toContain(row)
+    for (const row of NATIVE_TOOL_ROWS) expect(message).toContain(row)
+    expect(message).toContain('@deepseek-ai/dsh-subagent-claude-code')
+    expect(message).toContain('@deepseek-ai/dsh-subagent-codex')
   })
 
-  it('registers exactly one delegation tool per row and skips control tools when told to', () => {
+  it('reports a native provider that registers after the mount', () => {
+    // The Web profile mounts this entity before the native bundles, so the
+    // mount-time probe sees an empty registry. Without the second phase the
+    // native provider appears afterwards in silence.
+    const ctx = contextWith({ subagents: 'absent' })
+    const reported: string[] = []
+    const stop = watchNativeProviders(ctx, message => reported.push(message))
+    // The subagent service declares `subagent/provider-added`; a bare Context
+    // types only the events it owns, so the test drives the name directly.
+    const emit = (name: string, payload: unknown): void => {
+      (ctx as unknown as { emit: (event: string, value: unknown) => void }).emit(name, payload)
+    }
+
+    emit('subagent/provider-added', { name: 'claude-code' })
+    // One provider, one report: an operator does not need it per registration.
+    emit('subagent/provider-added', { name: 'claude-code' })
+    // A local provider is not a conflict and must stay silent.
+    emit('subagent/provider-added', { name: 'spawn' })
+    expect(reported).toHaveLength(1)
+    expect(reported[0]).toContain('claude-code')
+    expect(reported[0]).toContain('subagent-claude-code')
+
+    stop()
+    emit('subagent/provider-added', { name: 'codex' })
+    expect(reported).toHaveLength(1)
+  })
+
+  it('keeps working on a context that cannot carry events', () => {
+    const ctx = contextWith({ subagents: 'absent' })
+    Object.defineProperty(ctx, 'on', { value: undefined, configurable: true })
+    const stop = watchNativeProviders(ctx, () => { throw new Error('unreachable') })
+    expect(() => stop()).not.toThrow()
+  })
+})
+
+describe('delegation surface on the host domain', () => {
+  it('registers both providers and one control pair when the engine mounts', () => {
     const tools = fakeTools()
     const ctx = contextWith({ subagents: 'absent', tools })
-    const dispose = register(ctx, { config: { storePath: '/tmp/external-session-mount-test-3.json' } })
-    applyPresetTools(ctx, { provider: 'codex', toolName: 'subagent_codex', control: false })
-    expect([...tools.registered.keys()]).toEqual(['subagent_codex'])
+    const dispose = register(ctx, { config: { storePath: '/tmp/external-session-mount-test-6.json' } })
+    expect([...tools.registered.keys()].sort())
+      .toEqual(['external_session_list', 'external_session_stop', 'subagent_claude_code', 'subagent_codex'])
     dispose()
   })
 
-  it('registers all three tools once the host service is mounted', async () => {
+  it('skips a disabled provider and keeps the control tools', () => {
     const tools = fakeTools()
     const ctx = contextWith({ subagents: 'absent', tools })
-    const dispose = register(ctx, { config: { storePath: '/tmp/external-session-mount-test-4.json' } })
-    applyPresetTools(ctx, { provider: 'claude', toolName: 'subagent_claude_code' })
+    const dispose = register(ctx, {
+      config: { storePath: '/tmp/external-session-mount-test-7.json', tools: { codex: { enabled: false } } },
+    })
     expect([...tools.registered.keys()].sort())
       .toEqual(['external_session_list', 'external_session_stop', 'subagent_claude_code'])
+    dispose()
+  })
 
-    const list = tools.registered.get('external_session_list') as ToolDefinition
-    // An empty store answers with an empty list: the tools now reach the engine.
-    expect(await list.execute({}, {} as never)).toEqual({ sessions: [] })
+  it('carries the configured catalogue into the tool schema', () => {
+    const tools = fakeTools()
+    const ctx = contextWith({ subagents: 'absent', tools })
+    const dispose = register(ctx, {
+      config: {
+        storePath: '/tmp/external-session-mount-test-8.json',
+        tools: {
+          claude: {
+            models: [
+              { id: 'kaon/claude-opus-5-5', description: 'strongest' },
+              { id: 'kaon/claude-haiku-5-5', description: 'cheapest' },
+            ],
+          },
+        },
+      },
+    })
+    const tool = tools.registered.get('subagent_claude_code') as ToolDefinition
+    const properties = (tool.parameters as Record<string, unknown>)['properties'] as Record<string, unknown>
+    const model = properties['model'] as { oneOf: Array<{ const: string; description: string }> }
+    expect(model.oneOf[0]?.const).toBe('kaon/claude-opus-5-5')
+    expect(model.oneOf[0]?.description).toBe('strongest')
+    dispose()
+  })
+
+  it('reports a name it could not take instead of standing down silently', () => {
+    // A half-finished migration leaves the native row owning the name. The domain
+    // must keep the rest of the surface and say which rows still hold it.
+    const tools = fakeTools({ taken: ['subagent_claude_code'] })
+    const ctx = contextWith({ subagents: 'absent', tools })
+    const warnings = captureWarnings(ctx)
+    const dispose = register(ctx, { config: { storePath: '/tmp/external-session-mount-test-9.json' } })
+    expect([...tools.registered.keys()].sort())
+      .toEqual(['external_session_list', 'external_session_stop', 'subagent_codex'])
+    const shadow = warnings.find(message => message.includes('subagent_claude_code'))
+    expect(shadow).toBeDefined()
+    expect(shadow).toContain('already registered')
+    expect(shadow).toContain('subagent-claude-code')
     dispose()
   })
 })

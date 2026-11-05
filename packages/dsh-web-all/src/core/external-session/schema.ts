@@ -115,6 +115,7 @@ function parseTurn(input: unknown, path: string, expected: number): ExternalTurn
   if (!isDuration(turn.durationMs)) return `${path}.durationMs must be a finite non-negative number`
   if (typeof turn.result !== 'string') return `${path}.result must be a string`
   if (turn.usage !== undefined && !isExternalUsage(turn.usage)) return `${path}.usage must hold finite non-negative input and output counts`
+  if (turn.model !== undefined && nonEmptyString(turn.model) === null) return `${path}.model must be a non-empty string when present`
   if (turn.costUsd !== undefined && !isDuration(turn.costUsd)) return `${path}.costUsd must be a finite non-negative number`
   const record: ExternalTurnRecord = {
     n: expected,
@@ -126,6 +127,7 @@ function parseTurn(input: unknown, path: string, expected: number): ExternalTurn
   }
   if (turn.usage !== undefined) record.usage = turn.usage as ExternalTurnRecord['usage']
   if (typeof turn.costUsd === 'number') record.costUsd = turn.costUsd
+  if (typeof turn.model === 'string') record.model = turn.model
   return record
 }
 
