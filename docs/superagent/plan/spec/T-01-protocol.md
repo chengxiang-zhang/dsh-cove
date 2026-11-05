@@ -234,7 +234,8 @@ export interface LedgerTx {
 export interface LedgerReader { get<T>(sql: string, ...params: SqlParam[]): T | undefined; all<T>(sql: string, ...params: SqlParam[]): T[] }
 export type SqlParam = string | number | null
 export const TABLE_OWNERS: Readonly<Record<string, 'kernel' | 'world' | 'memory' | 'rules' | 'desk' | 'judgment' | 'timing' | 'executors' | 'recovery'>>
-// kernel: intake commitment journal outbox lease deliberation subscription inbox_events(owner 列)
+// kernel: intake commitment journal outbox lease inbox_events(owner 列)
+// desk: deliberation；judgment: subscription（归属以 02 对象目录为准）
 // world: party world_entity world_alias world_addr mandate workspace
 // memory: memory doc_index ； rules: rule rule_replay rule_conflict work_class autonomy
 // desk: desk ； judgment: assumption ； timing: speculation ； executors: attempt ； recovery: degrade_event
@@ -305,7 +306,7 @@ export const TABLE_OWNERS: Readonly<Record<string, 'kernel' | 'world' | 'memory'
 
 | 命令 | 期望读数 | 负控 |
 | --- | --- | --- |
-| `VT tests/superagent-db.spec.ts` | passed=16，failed=0，退出码 0 | 去掉 `sa_outbox` 的 `words <= 100` CHECK → 第 5 条红 |
+| `VT tests/superagent-db.spec.ts` | passed=18，failed=0，退出码 0 | 去掉 `sa_outbox` 的 `words <= 100` CHECK → 第 5 条红 |
 | `VT tests/lark-inbox-inbound.spec.ts tests/lark-inbox-retention.spec.ts` | 与 W1 末读数相同的 passed 数，failed=0（证明加列不影响旧表行为） | 在 `migrate` 里对 `inbox_events` 加 `NOT NULL` 无默认值列 → 两个 spec 红 |
 | `grep -nE "homedir\|DSH_HOME\|\.dsh/" packages/dsh-web-all/src/host/services/superagent/protocol/db.ts` | 空输出（库路径只由调用方传入；真实库迁移只在用户重启后发生） | 在 db.ts 写 `join(homedir(), '.dsh')` → 输出非空 |
 | G1–G6 | 见 T-00 | 见 T-00 |

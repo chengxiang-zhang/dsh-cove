@@ -20,7 +20,7 @@
 | `VT <file>` | `pnpm --filter @dsh-cove/dsh-web-all exec vitest run <file>` |
 | `TC` | `pnpm --filter @dsh-cove/dsh-web-all typecheck` |
 | `DEPS` | `VT tests/superagent-deps.spec.ts` |
-| `F22` | `grep -c -- '- id:' packages/dsh-web-all/cordis.patch.yml`，期望输出 `1` |
+| `F22` | `grep -cE '^\s*- id:' packages/dsh-web-all/cordis.patch.yml`，期望输出 `1`（不要用 `grep -c -- '- id:'`：注释行也会被数到，实测输出 4） |
 
 vitest 的读数口径：输出末尾 `Tests  <passed> passed (<total>)` 与退出码。验收里写"passed=N"指 N 等于该 spec"单测清单"的条数，`failed=0`，退出码 0。
 
@@ -28,7 +28,7 @@ vitest 的读数口径：输出末尾 `Tests  <passed> passed (<total>)` 与退�
 
 | 编号 | 命令 | 期望读数 | 负控 |
 | --- | --- | --- | --- |
-| G1 | `TC` | 退出码 0 | 在本任务新文件里写一处类型错误（如把 `CommitmentState` 赋给 `number`），退出码变 2 |
+| G1 | `TC` | 退出码 0 | 在本任务新文件里写一处类型错误（如把 `CommitmentState` 赋给 `number`），退出码变 1（经 pnpm 包装；直接 `tsc -b` 时为 2，两者都算红） |
 | G2 | `DEPS` | passed=全部、退出码 0 | 在 `SA/kernel/` 任一文件加 `import '../desk/dossier.ts'`，DEPS 变红 |
 | G3 | `F22` | `1` | 在 cordis.patch.yml 复制一行 `- id: web-all`，输出 `2` 且 `VT tests/capability-parity.spec.ts` 变红 |
 | G4 | 写域检查：`git diff --name-only dev...HEAD \| grep -vE '<本任务写域正则>'` | 空输出（grep 退出码 1） | 在写域外改一个文件，输出非空 |
