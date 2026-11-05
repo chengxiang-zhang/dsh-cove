@@ -127,10 +127,10 @@ verdict 初始为 **FAIL**：R1 用可复现 probe 打穿 3 条不变量并找�
 ## 最终验收读数（Lead 复跑，2026-11-06 02:22）
 
 - `pnpm typecheck` → 退出码 0，error TS 0
-- `pnpm test` → `shared` 4 files / 37 passed + `packages/dsh-web-all` 134 files / **1906 passed** / 4 skipped，退出码 0
+- `pnpm test` → `shared` 4 files / 37 passed + `packages/dsh-web-all` 134 files / **1908 passed** / 4 skipped，退出码 0
 - `pnpm docs:check` → all documentation gates passed
 - `pnpm test:scripts` → **608 pass / 0 fail**
-- `vitest run tests/superagent-` → 31 files / **341 passed**（在 `e83c811` 上复跑；`d282aac` 上为 340，差的一条是 I3 竞态用例）
+- `vitest run tests/superagent-` → 31 files / **343 passed**（`79ca1ed`，含 I3 竞态用例与两条围栏自检）
 - `grep -cE '^\s*- id:' packages/dsh-web-all/cordis.patch.yml` → 1
 - 七步链 e2e → 7/7
 
@@ -142,8 +142,14 @@ verdict **PASS-WITH-NITS**，判据对象 `e83c811`（干净树）：DONE-1..5 �
 
 四条 nit 的处置：
 1. FREEZE 的读数过期（340 → 341、漏记 shared 4/37）——已按本节上面的数字改正。
-2. **`superagent-deps.spec.ts` 会假绿**：`walk()` 在目录不存在时返回 `[]`，四条断言对空集恒真（把 `superagent/` 整体移走仍 4/4 绿）。真实规模 132 文件 / 515 条边。已派工补正断言（必须 `saEdges.length > 400` 且目录缺失即红）。
+2. **`superagent-deps.spec.ts` 会假绿**：`walk()` 在目录不存在时返回 `[]`，四条断言对空集恒真（把 `superagent/` 整体移走仍 4/4 绿）。已修（`79ca1ed`）：`walk` 缺目录抛 `refusing to scan nothing`，并加两条规模断言（实测 132 文件 / 515 条边，下限 >100 / >400）。负控：目录改名后整份 spec 以文件级错误红、退出码 1；边数下限抬到 1000 时第 5 条红。现在 6 passed。
 3. `PLAN.md` 的 DONE-4 命令数注释——已改为 `grep -cE '^\s*- id:'`。
 4. P1 的边界要说准（写入交付报告）：命名 `KernelTx` 方法对任何已声明 module 开放（`memory` 也能 `tx.append`/`tx.transition`），P1 的机械边界是"模块拿不到裸连接 + 裸 SQL 按声明 module 白名单"。
 
 另有三条限制必须写进交付报告：`answer` 判据可只凭 summary 结案（设计如此）；七步链第 3 步本身不断言证据来自会话事件（来源校验在 `closure.ts` 与 hardening A11 的用例里）；三档开关没有设置页入口，只能改 profile 的 `lark-inbox` 命名空间。
+
+## 交付后仍在册的两件事（都不阻塞交付，需用户或下一轮决定）
+
+1. **DONE-6**：用户重启 DSH 服务 → 把 `lark-inbox.superagentMode` 切到 `shadow` → 跑满 72 小时 → `node scripts/superagent-check.mjs --shadow --since-hours 72` 退出码 0，且 `shadow_owner_mismatch=0`、`shadow_outbox_rows=0`、`intake_shadow>=30`。
+2. **退役 `responder.ts` / `reply-machine.ts` 的判断部分**：账本已达 `accounted=67/67`（57 migrated + 10 not-applicable，0 retired），但 PLAN §8 把退役列为需老板授权的不可逆动作，且要求接管档稳定运行后再做。
+3. **围栏只拦"整块消失"不拦"整块缺项"**：删掉一个模块（如 `timing/`）后文件数 132→~123 仍过。补法是加"模块覆盖断言"（对每个已存在模块断言其文件存在），属新增判据，留给下一轮。
