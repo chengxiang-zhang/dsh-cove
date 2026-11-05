@@ -391,9 +391,11 @@ try {
     };
     const close = find('关闭页签');
     const opened = find('跳到服务…');
+    const refresh = find('刷新');
     return {
       hasCloseTab: Boolean(close?.accelerator),
       hasPalette: Boolean(opened?.accelerator),
+      refreshAccelerator: refresh?.accelerator ?? '',
       tabCountBefore: (globalThis.__awSnapshot?.tabs?.items ?? []).length,
       titlesBefore: (globalThis.__awSnapshot?.tabs?.items ?? []).map((tab) => tab.title),
       winId: win.id,
@@ -401,6 +403,9 @@ try {
   });
   check('the close-tab command has an accelerator', commands.hasCloseTab, String(commands.hasCloseTab));
   check('the jump-to-service command has an accelerator', commands.hasPalette, String(commands.hasPalette));
+  // The menu is the layer a focused page cannot swallow, so the shortcut outlives the
+  // control that names it: ⌘R has to exist here as well as on the strip.
+  check('the refresh command keeps its menu accelerator', commands.refreshAccelerator, 'CommandOrControl+R');
   await app.evaluate(({ Menu }) => {
     const menu = Menu.getApplicationMenu();
     const click = (label) => {

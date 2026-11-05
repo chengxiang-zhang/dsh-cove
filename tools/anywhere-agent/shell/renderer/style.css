@@ -238,6 +238,17 @@ html[data-platform="darwin"] .traffic {
   color: var(--aw-text);
 }
 
+/* A disabled control still occupies its place: hiding it would make the strip's
+   controls move under the pointer each time this machine starts preparing itself. */
+.ghost:disabled {
+  opacity: 0.45;
+}
+
+.ghost:disabled:hover {
+  background: transparent;
+  color: var(--aw-text-faint);
+}
+
 @media (max-width: 760px) {
   .ghost#open-palette {
     display: none;

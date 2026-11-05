@@ -208,6 +208,53 @@ try {
   check('the closed page was destroyed', (await alive(a0.id)) === false);
   check('the other tab kept its page', await alive(b0.id));
 
+  // The one command that replaces a wedged page is a control, not only a menu item: a
+  // person who does not know the shortcut still has to find it on screen. This runs
+  // last because it moves the pointer and replaces the page it is looking at.
+  process.stdout.write('\nthe refresh control is on screen and reachable\n');
+  await activate('svc:machine:dsh.b.netbird');
+  const control = await page.evaluate(() => {
+    const button = document.getElementById('refresh');
+    const style = button ? getComputedStyle(button) : null;
+    return {
+      present: Boolean(button),
+      visible: Boolean(button) && !button.hidden && style.display !== 'none' && style.visibility !== 'hidden',
+      disabled: button ? button.disabled : true,
+    };
+  });
+  check('the refresh control is present', control.present, true);
+  check('the refresh control is visible', control.visible, true);
+  check('the refresh control is enabled on a live page', control.disabled === false, String(control.disabled));
+
+  process.stdout.write('\nthe control is the command, and it reloads the page on screen\n');
+  const stripBefore = await page.evaluate(() => ({
+    tabs: [...document.querySelectorAll('.tab')].map((tab) => tab.dataset.tabId),
+    active: document.querySelector('.tab[data-active="true"]')?.dataset.tabId ?? null,
+  }));
+  await page.click('#refresh');
+  await sleep(900);
+  check('the control reloaded the page', countOf('/b') === 2, String(countOf('/b')));
+  const b1 = await viewOf();
+  check('refresh kept the page identity', b1 !== null && b1.id === b0.id, JSON.stringify(b1));
+  // Refreshing a page is not a reason to rebuild the strip around it, and the reading a
+  // refresh returns must not replace the window's own tab state.
+  const stripAfter = await page.evaluate(() => ({
+    tabs: [...document.querySelectorAll('.tab')].map((tab) => tab.dataset.tabId),
+    active: document.querySelector('.tab[data-active="true"]')?.dataset.tabId ?? null,
+  }));
+  check('the strip is unchanged by a refresh', JSON.stringify(stripAfter), JSON.stringify(stripBefore));
+  check('the active tab survives a refresh', stripAfter.active, 'svc:machine:dsh.b.netbird');
+
+  process.stdout.write('\nthe keyboard asks for the same command\n');
+  // Focus is where a shortcut is pressed from here: this document's keydown, and the
+  // page behind a native view is the other layer that gets its own keystrokes.
+  await page.evaluate(() => document.getElementById('refresh').focus());
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+R' : 'Control+R');
+  await sleep(900);
+  check('the shortcut reloaded the page once', countOf('/b') === 3, String(countOf('/b')));
+  const b2 = await viewOf();
+  check('the shortcut kept the page identity', b2 !== null && b2.id === b0.id, JSON.stringify(b2));
+
   await page.screenshot({ path: join(args.out, 'tab-strip.png') });
 } finally {
   stderrLog.end();

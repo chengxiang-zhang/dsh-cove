@@ -17,6 +17,7 @@ const el = Object.fromEntries(
     'tabbar',
     'tabs',
     'tab-new',
+    'refresh',
     'open-palette',
     'open-settings',
     'page',
@@ -133,6 +134,25 @@ function activeTab(tabs) {
   return tabs.items.find((tab) => tab.id === tabs.activeId) ?? tabs.items[0] ?? null;
 }
 
+/**
+ * The window's refresh command.
+ *
+ * One command for the control and the keyboard, and it only asks: the main process owns
+ * every page, so re-reading is what replaces the screen - the same call the View menu
+ * makes. Whether a page is reloaded, and which one, is decided there
+ * (`reloadActiveWorkspace`), never here.
+ *
+ * The answer is deliberately not assigned back to `snapshot`: that reading is the agent's
+ * half, and the strip's own state is pushed separately. Replacing what this file holds
+ * with it dropped the tabs off the screen until the next push put them back.
+ */
+async function refreshScreen() {
+  if (typeof api.refresh !== 'function') {
+    return;
+  }
+  await api.refresh();
+}
+
 /* ------------------------------------------------------------------ rendering */
 
 function apply() {
@@ -152,6 +172,13 @@ function apply() {
   const services = servicesOf(snapshot, model);
   const tabs = tabsOf(snapshot);
   const tab = activeTab(tabs);
+
+  // While this machine is still being prepared, a press re-runs that preparation instead
+  // of re-reading the screen; the states that means are named once, in view.js, so the
+  // control and the keydown cannot drift apart. The View menu's item is deliberately not
+  // gated by it - the banner's own retry is the way forward in those states, and the menu
+  // exists to work while a page has focus.
+  el.refresh.disabled = (window.AWView?.REFRESH_LOCKED ?? []).includes(model.state);
 
   renderTabs(tabs, services);
   renderBanner();
@@ -912,6 +939,7 @@ function renderPalette(query) {
 /* ---------------------------------------------------------------- interactions */
 
 el['tab-new'].addEventListener('click', () => call('openHome'));
+el.refresh.addEventListener('click', () => void refreshScreen());
 el['open-settings'].addEventListener('click', () => call('openSettings'));
 el['open-palette'].addEventListener('click', openPalette);
 
@@ -1024,6 +1052,15 @@ document.addEventListener('keydown', (event) => {
   if (meta && key.toLowerCase() === 't') {
     event.preventDefault();
     call('openHome');
+    return;
+  }
+  if (meta && !event.shiftKey && !event.altKey && key.toLowerCase() === 'r') {
+    event.preventDefault();
+    // The same lock the control carries, read from the same place: while this machine is
+    // being prepared, a press would re-run the preparation rather than re-read.
+    if (!el.refresh.disabled) {
+      void refreshScreen();
+    }
     return;
   }
   if (meta && key.toLowerCase() === 'w') {
