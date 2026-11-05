@@ -67,8 +67,13 @@
 | W2 | 完成 | T04 18、T05 12、T06 11、T07 8；commit 50777f3 | 2026-11-05 23:47 |
 | W3 | 完成 | T08 12、T09 10、T10 13、T11 11、T18 11；`tests/superagent-` 18 files / 200 passed | 2026-11-06 00:07 |
 | W4 | 完成 | T12 11、T13 8、T14 12、T15 10、T16 13 | 2026-11-06 00:07 |
-| W5 | 进行中 | T17 12、T19 14、T20 14、T28 53 + 608；T21/T22/T23/T24 在跑 | 2026-11-06 00:40 |
-| W6–W9 | 未开 | T25/T26 → T27 → T29/T30 | — |
+| W5 | 完成 | T17 12、T19 14、T20 14、T28 53 + 608；commit 4fbbe1d | 2026-11-06 00:40 |
+| W6 | 完成 | T21 12、T22 13；commit 5a1d3c1 | 2026-11-06 01:10 |
+| W7 | 完成 | T23 12、T24 8、T25 14、T26 16；commit 5a1d3c1 | 2026-11-06 01:10 |
+| W8 | 完成 | T27 9（全包 1864 passed / 0 failed）、T29 6 断言（migrated 46/67，21 条缺口已逐条列出）；commit 6c1e2f0 | 2026-11-06 01:49 |
+| W9 | 完成 | T30 7/7 七步链；全包 131 files / 1877 passed / 4 skipped；F22 = 1；线程键双重前缀已修 | 2026-11-06 01:49 |
+
+DONE-1 四个命令（`pnpm typecheck` / `pnpm test` / `pnpm docs:check` / `pnpm test:scripts`）退出码全 0；DONE-2 七步链 7/7；DONE-3 账本检查脚本 exit 0 且 I1–I4 与 E1–E7 全 ok；DONE-4 F22 = 1；DONE-5 依赖边 4 passed。**DONE-6 待用户重启 DSH 服务并切 shadow 跑满 72 小时后复核**（命令 `node scripts/superagent-check.mjs --shadow --since-hours 72`，门槛见 N12）。
 
 ## W0 spike 的结论（比 SPIKES.md 原文更权威，实现按这里）
 
