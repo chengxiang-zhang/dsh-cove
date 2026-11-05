@@ -79,7 +79,7 @@ sqlite3 $DB "SELECT trigger_kind, count(*), round(avg(ops=0),2) FROM sa_delibera
 
 ### P3（第 7–10 周）：替老板对别人
 
-范围：`sa_parties` 的同事与群成员；群桌子与受众快照；三态授权（v1 §8.2 的表保留：同事 read allow、写 draft、生产/发布/许诺 deny）；两个回执；承诺词检测（v1 §8.4 的词表保留）；身份前缀（R16）；记忆扩权走简报；金丝雀；跨机第二声音探测。
+范围：`sa_parties` 的同事与群成员；群桌子与受众快照；三态授权（§8.2 的表：同事 read allow、写 draft、生产/发布/许诺 deny）；两个回执；承诺词检测（v1 §8.4 的词表保留）；身份前缀（R16）；记忆扩权走简报；金丝雀；跨机第二声音探测。
 
 ```bash
 sqlite3 $DB "SELECT count(*) FROM sa_commitments c WHERE c.on_behalf_of IS NOT NULL AND c.state IN ('fulfilled','unverified','broken','released') AND (SELECT count(DISTINCT audience) FROM sa_outbox o WHERE o.commitment_id=c.commitment_id AND moment='deliver')<>2;"   # 0
