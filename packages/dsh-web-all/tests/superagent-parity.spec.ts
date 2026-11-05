@@ -64,6 +64,8 @@ const rows = manifest.cases as LedgerRow[]
 const responderRows = rows.filter(row => row.class === 'responder')
 const migrated = responderRows.filter(row => row.status === 'migrated')
 const unmigrated = responderRows.filter(row => row.status !== 'migrated')
+/** Ruled out by the Lead with a reason: not migrated, but accounted for. */
+const ruled = responderRows.filter(row => row.status === 'not-applicable')
 
 describe('T29 ledger: the inventory is the sources', () => {
   it('covers exactly the eleven lark-inbox specs and every one of their cases, once', () => {
@@ -141,12 +143,19 @@ describe('T29 ledger: the retirement reading', () => {
     // Printed, not just asserted: this line is the reading the retirement decision
     // is taken on, and a bare number would hide which behaviour is missing.
     console.info(`parity migrated=${migrated.length}/${responderRows.length}`)
+    // The second reading: a responder case is either migrated or ruled not-applicable
+    // by the Lead with a reason. Both count as accounted for; only the first is a
+    // migration, and the two numbers are never merged into one.
+    console.info(`parity accounted=${migrated.length + ruled.length}/${responderRows.length} (migrated=${migrated.length}, not-applicable=${ruled.length})`)
     for (const row of unmigrated) console.info(`parity responder-unmigrated: ${row.suite}::${row.case} [${row.status}] ${row.why ?? ''}`)
     console.info(`parity responder-unmigrated=${unmigrated.length}`)
 
     expect(migrated.length + unmigrated.length).toBe(responderRows.length)
     expect(manifest.counts.responder).toBe(responderRows.length)
     expect(manifest.counts.responderMigrated).toBe(migrated.length)
+    expect(manifest.counts.responderNotApplicable).toBe(ruled.length)
+    expect(manifest.counts.responderAccounted).toBe(migrated.length + ruled.length)
+    expect(unmigrated.every(row => row.status === 'not-applicable' && (row.why ?? '').trim() !== '')).toBe(true)
     expect(`parity migrated=${migrated.length}/${responderRows.length}`).toMatch(/^parity migrated=\d+\/\d+$/u)
   })
 

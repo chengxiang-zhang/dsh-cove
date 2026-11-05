@@ -104,6 +104,6 @@ export function judgeTool(deps: JudgmentDeps) {
         }
       }
       return { ok: true }
-    }, { shadow: ctx.shadow })
+    }, { module: 'judgment', shadow: ctx.shadow })
   }
 }

@@ -56,12 +56,20 @@ export function createOutlet(ledger: Ledger, lease: Lease, holder: string): Outl
       return fail('REPLY_EXISTS', `event ${p.event_id} already has a reply`)
     }
     const note = p.payload === 'text' ? pendingNote(p.chat_id) : undefined
-    const row = ledger.open(tx => tx.recordOutbox({
+    let row: OutboxRow
+    try {
+      row = ledger.open(tx => tx.recordOutbox({
       idem_key: p.idem_key, chat_id: p.chat_id, reply_to: p.reply_to ?? null, event_id: p.event_id ?? null,
       commitment_id: p.commitment_id ?? null, payload: p.payload, body: note ? `${verdict.text}\n${note}` : verdict.text,
       moment: p.moment, tier: verdict.tier, audience: p.audience, words, expects_reply: p.expects_reply ? 1 : 0,
       lease_epoch: current.epoch,
-    }))
+    }), { module: 'kernel' })
+    } catch (error) {
+      // R1 A10: two concurrent submits both pass the read above; the second meets the
+      // unique reply index and gets the protocol code, not a raw constraint error.
+      if ((error as { code?: unknown }).code === 'REPLY_EXISTS') return fail('REPLY_EXISTS', `event ${p.event_id ?? '?'} already has a reply`)
+      throw error
+    }
     return { ok: true, outboxId: row.outbox_id, tier: row.tier, words: row.words }
   }
 
@@ -92,7 +100,7 @@ export function createOutlet(ledger: Ledger, lease: Lease, holder: string): Outl
           result.failed += 1
         }
       }
-    })
+    }, { module: 'kernel' })
   }
 
   /** Claim-before-send: attempts + 1 and a provisional retry time are durable before the sender runs. */
@@ -102,7 +110,7 @@ export function createOutlet(ledger: Ledger, lease: Lease, holder: string): Outl
       if (!row || !holds(lease.current(), holder, now) || lease.current()?.epoch !== epoch) return undefined
       tx.run(`UPDATE ${O} SET attempts = attempts + 1, next_attempt_at = ?, updated_at = ? WHERE outbox_id = ?`, now + RETRY_BASE_MS, now, id)
       return { ...row, attempts: row.attempts + 1 }
-    })
+    }, { module: 'kernel' })
   }
 
   async function flush(now: number, sender: SenderPort): Promise<FlushResult> {
@@ -121,12 +129,12 @@ export function createOutlet(ledger: Ledger, lease: Lease, holder: string): Outl
           ? (await sender.react(row.reply_to ?? '', row.body), row.reply_to)
           : (await sender.send(row.chat_id, row.body, row.idem_key, row.reply_to ?? undefined)).messageId
         ledger.open(tx => tx.run(`UPDATE ${O} SET state = 'sent', message_id = ?, sent_at = ?, error = NULL, updated_at = ? WHERE outbox_id = ?`,
-          messageId ?? null, now, now, id))
+          messageId ?? null, now, now, id), { module: 'kernel' })
         result.sent += 1
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         ledger.open(tx => tx.run(`UPDATE ${O} SET next_attempt_at = ?, error = ?, updated_at = ? WHERE outbox_id = ?`,
-          now + backoff(row.attempts), message.slice(0, 500), now, id))
+          now + backoff(row.attempts), message.slice(0, 500), now, id), { module: 'kernel' })
       }
     }
     return result

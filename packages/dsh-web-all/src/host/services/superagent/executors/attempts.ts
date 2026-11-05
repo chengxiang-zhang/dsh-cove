@@ -31,6 +31,13 @@ const C = PHYSICAL.commitment
 const J = PHYSICAL.journal
 const MAX_ATTEMPTS = 3
 const PROMPT_TIMEOUT_MS = 60_000
+/**
+ * Appended inputs delivered into one attempt before the rest wait for the next one.
+ * A person talking continuously must not be able to interleave an unbounded number
+ * of steers into a single attempt; past the cap the input keeps its journal row
+ * (unique request_id) and rides the next attempt's brief.
+ */
+export const MAX_STEER_PER_ATTEMPT = 5
 const SLOT = '1'
 
 /** The narrow world surface executors use (T15). */
@@ -99,6 +106,8 @@ interface SessionState {
 export function createExecutors(deps: ExecutorDeps): Executors {
   const { ledger, profiles, log } = deps
   const sessions = new Map<string, SessionState>()
+  /** Steers delivered per attempt (process-local); the queue path stays safe regardless. */
+  const steers = new Map<string, number>()
   const stateOf = (sessionId: string): SessionState => {
     let s = sessions.get(sessionId)
     if (!s) { s = { ranges: new TurnRanges(), calls: [] }; sessions.set(sessionId, s) }
@@ -278,6 +287,7 @@ export function createExecutors(deps: ExecutorDeps): Executors {
       tx.updateAttempt(attemptId, { state: 'ended', end_reason: 'aborted', cancel_origin: origin })
       tx.append(a.commitment_id, { actor: 'executors', kind: 'state', body: { cancelled: attemptId, origin } })
     })
+    steers.delete(attemptId)
     if (a.lifetime === 'oneshot') rmSync(oneshotDir(deps.seatRoot, attemptId), { recursive: true, force: true })
   }
 
@@ -288,7 +298,15 @@ export function createExecutors(deps: ExecutorDeps): Executors {
     if (!known) write(tx => tx.append(a.commitment_id, { actor: 'executors', kind: 'amend', request_id: requestId, body: { text } }))
     // No live session: the next attempt carries it as context.
     if (a.state === 'ended' || !a.session_id) return { mode: 'queue' }
-    const mode = stateOf(a.session_id).ranges.isOpen() ? 'steer' : 'queue'
+    const open = stateOf(a.session_id).ranges.isOpen()
+    const delivered = steers.get(attemptId) ?? 0
+    if (open && delivered >= MAX_STEER_PER_ATTEMPT) {
+      // Cap reached: the journal row written above stays unconsumed, so the next
+      // attempt's brief carries the input exactly once (R23). Nothing is dropped.
+      log.warn(`executors: attempt ${attemptId} took ${delivered} steers; queued ${requestId} for the next attempt`)
+      return { mode: 'queue' }
+    }
+    const mode = open ? 'steer' : 'queue'
     try {
       await deps.controller().prompt({ requestId, sessionId: a.session_id, mode,
         content: [{ type: 'text', text: `${text}\n${inputMarker(requestId)}` }] }, AbortSignal.timeout(PROMPT_TIMEOUT_MS))
@@ -296,6 +314,7 @@ export function createExecutors(deps: ExecutorDeps): Executors {
       log.warn(`executors: input ${requestId} not delivered: ${error instanceof Error ? error.message : String(error)}`)
       return { mode: 'queue' }
     }
+    if (mode === 'steer') steers.set(attemptId, delivered + 1)
     return { mode }
   }
 

@@ -76,7 +76,7 @@ export function createDeskTools(deps: DeskToolDeps): DeskTool[] {
       disposition: input.disposition as Disposition, reason: input.reason, class: input.class, confidence: input.confidence,
       ...(input.new_thread === undefined ? {} : { new_thread: input.new_thread }), deliberation_id: ctx.deliberationId,
       ...(input.about ? { about: input.about } : {}), ...(input.corrects ? { corrects: input.corrects } : {}),
-    }), { shadow: ctx.shadow })
+    }), { module: 'desk', shadow: ctx.shadow })
     ctx.judged.add(event.event_id)
     return { ok: true }
   }

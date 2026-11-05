@@ -113,11 +113,11 @@ export function createClaim(ledger: Ledger): Claim {
           body: { event_id: event.event_id, message_id: event.message_id, text: event.text } })
         tx.advanceSubscription(keys.threadKey)
         return { status: 'claimed', owner: 'superagent', route: 'passthrough', disposition: 'passthrough', ...keys }
-      })
+      }, { module: 'kernel' })
     },
 
     shadow(event) {
-      ledger.open(tx => writeShadow(tx, event, keysOf(event)))
+      ledger.open(tx => writeShadow(tx, event, keysOf(event)), { module: 'kernel' })
     },
 
     unowned(now, olderThanMs) {

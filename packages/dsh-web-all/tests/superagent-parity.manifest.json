@@ -28,7 +28,9 @@
   "counts": {
     "cases": 174,
     "responder": 67,
-    "responderMigrated": 54
+    "responderMigrated": 57,
+    "responderNotApplicable": 10,
+    "responderAccounted": 67
   },
   "cases": [
     {
@@ -658,8 +660,8 @@
       "class": "responder",
       "responder": true,
       "status": "not-applicable",
-      "reading": "no equivalent: 设计取消：桌子的文本只经工具面产生，从不转发模型流，半条 assistant 消息没有到达人的通道",
-      "why": "设计取消：桌子的文本只经工具面产生，从不转发模型流，半条 assistant 消息没有到达人的通道"
+      "reading": "no equivalent: 案卷从账本重建、不转发会话原文，半条流不进入任何出站。",
+      "why": "案卷从账本重建、不转发会话原文，半条流不进入任何出站。"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
@@ -735,8 +737,8 @@
       "class": "responder",
       "responder": true,
       "status": "not-applicable",
-      "reading": "no equivalent: 设计取消：会话归属每轮由账本重建（resolveRole + presence），没有进程内名单需要重新注册",
-      "why": "设计取消：会话归属每轮由账本重建（resolveRole + presence），没有进程内名单需要重新注册"
+      "reading": "no equivalent: desk 会话懒创建 + 从账本重建，不需要重注册；跨进程重启由 recovery 的 resolveRole 处理。",
+      "why": "desk 会话懒创建 + 从账本重建，不需要重注册；跨进程重启由 recovery 的 resolveRole 处理。"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
@@ -782,8 +784,8 @@
       "class": "responder",
       "responder": true,
       "status": "not-applicable",
-      "reading": "no equivalent: 设计取消：桌子以 chat id 为键（deskIdOf），\"对方正在用的会话\"就是唯一的那个桌子，无需记忆",
-      "why": "设计取消：桌子以 chat id 为键（deskIdOf），\"对方正在用的会话\"就是唯一的那个桌子，无需记忆"
+      "reading": "no equivalent: desk 每 chat 一个、chat_id 在 desk 行上，不需要\"记住最近用的\"；推送目标归 notify 域。",
+      "why": "desk 每 chat 一个、chat_id 在 desk 行上，不需要\"记住最近用的\"；推送目标归 notify 域。"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
@@ -839,9 +841,10 @@
       "case": "retries a session bind that hangs, then explains itself when attempts run out",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: 缺陷：ensureSession 只 create 一次，失败靠 tick 重排批次（无次数上限）且从不向人解释；会话创建持续失败时消息永久排队，人只有 ack 模板",
-      "why": "缺陷：ensureSession 只 create 一次，失败靠 tick 重排批次（无次数上限）且从不向人解释；会话创建持续失败时消息永久排队，人只有 ack 模板"
+      "status": "migrated",
+      "reading": "migrated: MAX_SESSION_FAILURES (3) bounds session-creation retries; at the cap the person gets one explanatory cannot line, the batch is kept and marked pending_close, and the queue backs off one agenda window instead of looping",
+      "target": "tests/superagent-timeout-closure.spec.ts::4. three failed session creates explain once, keep the batch, and stop looping",
+      "module": "desk"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
@@ -938,8 +941,8 @@
       "class": "responder",
       "responder": true,
       "status": "not-applicable",
-      "reading": "no equivalent: 设计取消：responder 的宽限期保护的是一次在途的平台发送；桌子在回合结束后经 outbox 发送，没有需要抢救的在途窗口",
-      "why": "设计取消：responder 的宽限期保护的是一次在途的平台发送；桌子在回合结束后经 outbox 发送，没有需要抢救的在途窗口"
+      "reading": "no equivalent: 新设计用 turn_open + 事件 seq 区间判回合归属，aborted 后到达的 tool/result 仍归该回合，由 closure 按同一张表判——机制吸收，不是取消。",
+      "why": "新设计用 turn_open + 事件 seq 区间判回合归属，aborted 后到达的 tool/result 仍归该回合，由 closure 按同一张表判——机制吸收，不是取消。"
     },
     {
       "suite": "lark-inbox-responder.spec.ts",
@@ -1440,9 +1443,10 @@
       "case": "gives up on the wait, and says so, when no turn ever comes",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: the behaviour is replaced by the ledger",
-      "why": "the responder waited for a turn that never came; a desk turn is bounded by presence tick, and no case pins the give-up message yet"
+      "status": "migrated",
+      "reading": "migrated: a turn abandoned by TURN_TIMEOUT_MS now sends one closing line (moment=cannot) and records the abandonment as journal body {closed:\"timeout\"} plus rule_trace.closed; END_REASONS stays closed (N6) so end_reason remains unknown (treated as failure downstream)",
+      "target": "tests/superagent-timeout-closure.spec.ts::1. a timed-out turn still closes: one cannot line and a closed:timeout journal row",
+      "module": "desk"
     },
     {
       "suite": "lark-inbox-steer.spec.ts",
@@ -1470,8 +1474,8 @@
       "class": "responder",
       "responder": true,
       "status": "not-applicable",
-      "reading": "no equivalent: 设计取消：superagent 没有 steer 开关（直通由规则层逐条决定），不存在\"关掉后仍在结算\"的状态",
-      "why": "设计取消：superagent 没有 steer 开关（直通由规则层逐条决定），不存在\"关掉后仍在结算\"的状态"
+      "reading": "no equivalent: 新设计没有 steer 开关，passthrough 是逐消息决策且受 thread 活订阅约束，在途输入由 journal.request_id 唯一性保证只吃一次。",
+      "why": "新设计没有 steer 开关，passthrough 是逐消息决策且受 thread 活订阅约束，在途输入由 journal.request_id 唯一性保证只吃一次。"
     },
     {
       "suite": "lark-inbox-steer.spec.ts",
@@ -1479,8 +1483,8 @@
       "class": "responder",
       "responder": true,
       "status": "not-applicable",
-      "reading": "no equivalent: 设计取消：reply_jobs 的 collecting/inflight 记账已不存在；桌子一桌一回合的规则由 desk-presence #4 覆盖",
-      "why": "设计取消：reply_jobs 的 collecting/inflight 记账已不存在；桌子一桌一回合的规则由 desk-presence #4 覆盖"
+      "reading": "no equivalent: 由 intake(shadow=0) 唯一 + turn_open 互斥 + 3 秒收集窗替代。",
+      "why": "由 intake(shadow=0) 唯一 + turn_open 互斥 + 3 秒收集窗替代。"
     },
     {
       "suite": "lark-inbox-steer.spec.ts",
@@ -1547,9 +1551,10 @@
       "case": "stops steering a turn that has taken its limit",
       "class": "responder",
       "responder": true,
-      "status": "retired",
-      "reading": "no equivalent: 缺陷：sendInput 没有每回合的 steer 上限，每条 passthrough 决策都能再注入一次；responder 有上限。影响是 token 与回合抖动，不是正确性",
-      "why": "缺陷：sendInput 没有每回合的 steer 上限，每条 passthrough 决策都能再注入一次；responder 有上限。影响是 token 与回合抖动，不是正确性"
+      "status": "migrated",
+      "reading": "migrated: sendInput caps delivered steers per attempt at MAX_STEER_PER_ATTEMPT (5); past it the journal row (unique request_id) stays unconsumed and rides the next attempt's brief, so nothing is lost",
+      "target": "tests/superagent-timeout-closure.spec.ts::3. one attempt takes five steers, then the input waits for the next attempt brief",
+      "module": "executors"
     },
     {
       "suite": "lark-inbox-steer.spec.ts",

@@ -146,7 +146,9 @@ describe('agenda sources', () => {
 
   it('does not ask for a goal round while proposals are still unanswered', () => {
     const t = setup()
-    const goal = seedCommitment(t, { kind: 'goal', next_look_at: NOW - MINUTE })
+    const goal = seedCommitment(t, { kind: 'goal' })
+    // R1 A9: the ledger no longer writes a past look; the due state is set on the row directly.
+    t.db.prepare('UPDATE sa_commitment SET next_look_at = ? WHERE commitment_id = ?').run(NOW - MINUTE, goal.commitment_id)
     expect(agendaSignal(t.ledger.read, goal.commitment_id, NOW)?.kind).toBe('goal')
 
     t.ledger.open((tx) => tx.createCommitment({

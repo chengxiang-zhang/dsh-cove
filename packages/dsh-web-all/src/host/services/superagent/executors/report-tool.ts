@@ -12,6 +12,8 @@ import type { ReportInput, ToolResult } from '../protocol/tools.ts'
 
 export const SUMMARY_MAX = 2000
 export const READING_MAX = 500
+const REPORT_KEYS: ReadonlySet<string> = new Set(['state', 'summary', 'evidence', 'question'])
+const EVIDENCE_KEYS: ReadonlySet<string> = new Set(['command', 'exit', 'reading'])
 
 export interface ToolDefinitionLike {
   name: 'report'
@@ -26,6 +28,9 @@ export function parseReport(raw: unknown): ReportParse {
   const bad = (message: string): ReportParse => ({ ok: false, code: 'INVALID', message })
   if (typeof raw !== 'object' || raw === null) return bad('report input must be an object')
   const r = raw as Record<string, unknown>
+  // R1 A11: no extra keys - a stray `command` on the report call must never look like evidence.
+  const extra = Object.keys(r).filter(k => !REPORT_KEYS.has(k))
+  if (extra.length) return bad(`unknown report fields: ${extra.join(', ')}`)
   if (typeof r.state !== 'string' || !(REPORT_STATES as readonly string[]).includes(r.state)) return bad(`state must be one of ${REPORT_STATES.join('/')}`)
   if (typeof r.summary !== 'string' || r.summary.length > SUMMARY_MAX) return bad(`summary must be a string of at most ${SUMMARY_MAX} characters`)
   const evidence: NonNullable<ReportInput['evidence']> = []
@@ -34,6 +39,7 @@ export function parseReport(raw: unknown): ReportParse {
     for (const e of r.evidence as unknown[]) {
       const item = e as Record<string, unknown>
       if (typeof item?.command !== 'string' || typeof item.exit !== 'number' || typeof item.reading !== 'string') return bad('evidence items are { command, exit, reading }')
+      if (Object.keys(item).some(k => !EVIDENCE_KEYS.has(k))) return bad('evidence items carry only command, exit, reading')
       if (item.reading.length > READING_MAX) return bad(`evidence reading must be at most ${READING_MAX} characters`)
       evidence.push({ command: item.command, exit: item.exit, reading: item.reading })
     }
@@ -49,6 +55,7 @@ export function createReportTool(accept: (sessionId: string, report: ReportInput
     description: 'Report the state of the delegated work: ready, progress, blocked (with one question), failed or dropped. Attach evidence as the commands you ran and their exit codes.',
     parameters: {
       type: 'object',
+      additionalProperties: false,
       required: ['state', 'summary'],
       properties: {
         state: { type: 'string', enum: [...REPORT_STATES] },

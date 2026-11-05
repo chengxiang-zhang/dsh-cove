@@ -47,11 +47,11 @@ export function createLease(ledger: Ledger): Lease {
           return { held: true, epoch, holder }
         }
         return { held: false, epoch: row.epoch, holder: row.holder }
-      })
+      }, { module: 'kernel' })
     },
     heartbeat(holder, now) {
       return ledger.open(tx => tx.run(`UPDATE ${L} SET heartbeat_at = ?, expires_at = ?, updated_at = ? WHERE name = 'outlet' AND holder = ?`,
-        now, now + LEASE_EXPIRY_MS, now, holder).changes > 0)
+        now, now + LEASE_EXPIRY_MS, now, holder).changes > 0, { module: 'kernel' })
     },
     current() {
       return ledger.read.get<LeaseRow>(`SELECT * FROM ${L} WHERE name = 'outlet'`)

@@ -214,6 +214,11 @@ const TABLE_SPECS: readonly TableSpec[] = [
     },
     triggers: {
       sa_commit_terminal: `BEFORE UPDATE ON ${T.commitment} WHEN OLD.state IN (${TERMINAL}) BEGIN SELECT RAISE(ABORT, 'TERMINAL'); END`,
+      // R1 A6: REPLACE deletes the conflicting row without its triggers; refuse the insert instead.
+      sa_commit_no_rebuild_terminal: `BEFORE INSERT ON ${T.commitment} WHEN EXISTS (SELECT 1 FROM ${T.commitment} WHERE commitment_id = NEW.commitment_id AND state IN (${TERMINAL})) BEGIN SELECT RAISE(ABORT, 'TERMINAL'); END`,
+      sa_commit_no_replace: `BEFORE INSERT ON ${T.commitment} WHEN EXISTS (SELECT 1 FROM ${T.commitment} WHERE (commitment_id = NEW.commitment_id OR n = NEW.n OR origin_ref = NEW.origin_ref) AND NOT (commitment_id = NEW.commitment_id AND state IN (${TERMINAL}))) BEGIN SELECT RAISE(ABORT, 'UNIQUE constraint failed: sa_commitment (no replace)'); END`,
+      sa_commit_thread_no_replace: `BEFORE INSERT ON ${T.commitment} WHEN NEW.kind = 'deliver' AND NEW.parent_id IS NULL AND NEW.state IN (${OPEN}) AND EXISTS (SELECT 1 FROM ${T.commitment} WHERE thread_key = NEW.thread_key AND debtor = NEW.debtor AND kind = 'deliver' AND parent_id IS NULL AND state IN (${OPEN})) BEGIN SELECT RAISE(ABORT, 'UNIQUE constraint failed: ux_sa_commit_thread (no replace)'); END`,
+      sa_commit_slot_no_replace: `BEFORE INSERT ON ${T.commitment} WHEN NEW.slot IS NOT NULL AND NEW.state IN ('open', 'at_risk') AND EXISTS (SELECT 1 FROM ${T.commitment} WHERE slot = NEW.slot AND state IN ('open', 'at_risk')) BEGIN SELECT RAISE(ABORT, 'UNIQUE constraint failed: ux_sa_commit_slot (no replace)'); END`,
     },
   },
   {
@@ -243,6 +248,11 @@ const TABLE_SPECS: readonly TableSpec[] = [
     triggers: {
       // I3: a deliver commitment may only run with both stop-loss lines set.
       sa_attempt_running_budget: `BEFORE UPDATE OF state ON ${T.attempt} WHEN NEW.state = 'running' AND OLD.state IS NOT 'running' AND EXISTS (SELECT 1 FROM ${T.commitment} c WHERE c.commitment_id = NEW.commitment_id AND c.kind = 'deliver' AND (c.budget_wall_ms IS NULL OR c.budget_turns IS NULL)) BEGIN SELECT RAISE(ABORT, 'NO_BUDGET'); END`,
+      // R1 A4: a running attempt belongs to an open commitment; an ended attempt stays ended.
+      sa_attempt_running_open: `BEFORE UPDATE OF state ON ${T.attempt} WHEN NEW.state = 'running' AND NOT EXISTS (SELECT 1 FROM ${T.commitment} c WHERE c.commitment_id = NEW.commitment_id AND c.state IN ('open', 'at_risk')) BEGIN SELECT RAISE(ABORT, 'ATTEMPT_ON_CLOSED'); END`,
+      sa_attempt_running_open_ins: `BEFORE INSERT ON ${T.attempt} WHEN NEW.state = 'running' AND NOT EXISTS (SELECT 1 FROM ${T.commitment} c WHERE c.commitment_id = NEW.commitment_id AND c.state IN ('open', 'at_risk')) BEGIN SELECT RAISE(ABORT, 'ATTEMPT_ON_CLOSED'); END`,
+      sa_attempt_ended_final: `BEFORE UPDATE OF state ON ${T.attempt} WHEN OLD.state = 'ended' AND NEW.state IS NOT 'ended' BEGIN SELECT RAISE(ABORT, 'ATTEMPT_ENDED'); END`,
+      sa_attempt_owner_exists: `BEFORE INSERT ON ${T.attempt} WHEN NOT EXISTS (SELECT 1 FROM ${T.commitment} c WHERE c.commitment_id = NEW.commitment_id) BEGIN SELECT RAISE(ABORT, 'ATTEMPT_ORPHAN'); END`,
       sa_attempt_running_budget_ins: `BEFORE INSERT ON ${T.attempt} WHEN NEW.state = 'running' AND EXISTS (SELECT 1 FROM ${T.commitment} c WHERE c.commitment_id = NEW.commitment_id AND c.kind = 'deliver' AND (c.budget_wall_ms IS NULL OR c.budget_turns IS NULL)) BEGIN SELECT RAISE(ABORT, 'NO_BUDGET'); END`,
     },
   },
@@ -253,6 +263,8 @@ const TABLE_SPECS: readonly TableSpec[] = [
     triggers: {
       sa_journal_no_delete: rejectDelete(T.journal),
       // P2: the only permitted update is consumed_turn going from NULL to a value.
+      // R1 A2: REPLACE on the key or on request_id would rewrite a row; an insert never displaces one.
+      sa_journal_no_replace: `BEFORE INSERT ON ${T.journal} WHEN EXISTS (SELECT 1 FROM ${T.journal} WHERE commitment_id = NEW.commitment_id AND seq = NEW.seq) OR (NEW.request_id IS NOT NULL AND EXISTS (SELECT 1 FROM ${T.journal} WHERE request_id = NEW.request_id)) BEGIN SELECT RAISE(ABORT, 'UNIQUE constraint failed: sa_journal (append-only, no replace)'); END`,
       sa_journal_no_update: onlyChange(T.journal, [...JOURNAL_COLUMNS, ['created_at', INT_NN]], [], ['consumed_turn'], 'APPEND_ONLY'),
     },
   },
@@ -288,6 +300,9 @@ const TABLE_SPECS: readonly TableSpec[] = [
     unique: { ux_sa_memory_active: `(topic, kind) WHERE state = 'active'` },
     triggers: {
       sa_memory_no_delete: rejectDelete(T.memory),
+      sa_memory_no_replace: `BEFORE INSERT ON ${T.memory} WHEN EXISTS (SELECT 1 FROM ${T.memory} WHERE memory_id = NEW.memory_id) OR (NEW.state = 'active' AND EXISTS (SELECT 1 FROM ${T.memory} WHERE topic = NEW.topic AND kind = NEW.kind AND state = 'active')) BEGIN SELECT RAISE(ABORT, 'UNIQUE constraint failed: sa_memory (append-only, no replace)'); END`,
+      // R1 A5: corrections are new rows; a row's state only moves forward (active -> superseded | retired).
+      sa_memory_state_one_way: `BEFORE UPDATE OF state ON ${T.memory} WHEN NEW.state IS NOT OLD.state AND NOT (OLD.state = 'active' AND NEW.state IN ('superseded', 'retired')) BEGIN SELECT RAISE(ABORT, 'MEMORY_STATE_ONE_WAY'); END`,
       sa_memory_no_update: onlyChange(T.memory, [...MEMORY_COLUMNS, ['created_at', INT_NN]], ['state', 'last_used_at', 'updated_at'], [], 'APPEND_ONLY'),
     },
   },
@@ -345,6 +360,7 @@ const TABLE_SPECS: readonly TableSpec[] = [
     columns: MANDATE_COLUMNS,
     triggers: {
       sa_mandate_no_delete: rejectDelete(T.mandate),
+      sa_mandate_no_replace: `BEFORE INSERT ON ${T.mandate} WHEN EXISTS (SELECT 1 FROM ${T.mandate} WHERE mandate_id = NEW.mandate_id) BEGIN SELECT RAISE(ABORT, 'IMMUTABLE'); END`,
       sa_mandate_no_update: onlyChange(T.mandate, [...MANDATE_COLUMNS, ['created_at', INT_NN]], ['updated_at'], ['revoked_at', 'revoked_by'], 'IMMUTABLE'),
     },
   },
@@ -418,6 +434,8 @@ function allColumns(spec: TableSpec): readonly Column[] {
 }
 
 const INBOX_OWNER_DEF = `TEXT CHECK (owner IS NULL OR owner IN (${list(OWNERS)}))`
+/** R1 O3: REPLACE on inbox_events would swap the owner without the CAS trigger; the insert is dropped instead. */
+const INBOX_NO_REPLACE_TRIGGER = `BEFORE INSERT ON ${T.inbox_event} WHEN EXISTS (SELECT 1 FROM ${T.inbox_event} WHERE event_id = NEW.event_id) OR (NEW.message_id <> '' AND EXISTS (SELECT 1 FROM ${T.inbox_event} WHERE message_id = NEW.message_id)) BEGIN SELECT RAISE(IGNORE); END`
 const INBOX_OWNER_TRIGGER = `BEFORE UPDATE OF owner ON ${T.inbox_event} WHEN OLD.owner IS NOT NULL AND NEW.owner IS NOT OLD.owner BEGIN SELECT RAISE(ABORT, 'OWNER_ALREADY_SET'); END`
 
 /**
@@ -499,6 +517,7 @@ function migrateBody(db: Db): string[] {
     added.push(`${T.inbox_event}.owner`)
   }
   db.exec(`CREATE TRIGGER IF NOT EXISTS sa_inbox_owner_cas ${INBOX_OWNER_TRIGGER}`)
+  if (columnNames(db, T.inbox_event).has('message_id')) db.exec(`CREATE TRIGGER IF NOT EXISTS sa_inbox_no_replace ${INBOX_NO_REPLACE_TRIGGER}`)
   return added
 }
 

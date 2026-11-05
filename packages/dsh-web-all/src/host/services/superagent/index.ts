@@ -206,7 +206,7 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       disclosures: (text, audience) => disclosuresOf(read, text, audience),
       retireStale: now => ledger.open(tx => retireStale(tx, now), { module: 'memory' }),
     }
-    const rules = createRuleRegistry({ open: (fn, o) => ledger.open(fn, o), read })
+    const rules = createRuleRegistry({ open: (fn, o) => ledger.open(fn, { module: o?.module ?? 'rules' }), read })
     try { ledger.open(tx => rules.checkConflicts(tx), { module: 'rules' }) } catch (error) { log.warn(`superagent rules: ${String(error)}`) }
 
     const deskOfChat = (chatId: string): DeskRow | undefined => read.get<DeskRow>(`SELECT * FROM ${PHYSICAL.desk} WHERE chat_id = ?`, chatId)
@@ -425,7 +425,7 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
         if (result.state === 'fulfilled' || result.state === 'unverified' || result.state === 'broken') {
           // The host's report signal (10): one desk turn on the commitment says the delivery.
           const requestId = `report:${a.attempt_id}`
-          const did = m.ledger.open(tx => tx.requestTurn({ trigger_kind: 'report', commitment_id: a.commitment_id, request_id: requestId }))
+          const did = m.ledger.open(tx => tx.requestTurn({ trigger_kind: 'report', commitment_id: a.commitment_id, request_id: requestId }), { module: 'desk' })
           if (did) void m.presence.runTurn({ deliberation_id: did, request_id: requestId, commitment_id: a.commitment_id, trigger_kind: 'report' })
             .catch(err => log.warn(`superagent report turn: ${String(err)}`))
         } else if (result.state === 'escalate') {

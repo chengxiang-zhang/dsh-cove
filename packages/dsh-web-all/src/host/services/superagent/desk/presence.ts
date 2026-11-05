@@ -79,12 +79,20 @@ export interface Presence {
 export const AGENDA_DEFER_MS = 60_000
 export const AGENDA_DEFER_MAX = 5
 export const TURN_TIMEOUT_MS = 600_000
+/** Said when a turn is abandoned by the timeout: the person gets a closing line, not silence. */
+export const TURN_TIMEOUT_MESSAGE = '这条我处理超时了，要我重试吗'
+/** Consecutive session-creation failures before the desk stops trying and explains (T31). */
+export const MAX_SESSION_FAILURES = 3
+/** After the failure cap the batch waits one agenda window instead of looping. */
+export const PENDING_CLOSE_RETRY_MS = AGENDA_DEFER_MS
+export const sessionFailureMessage = (reason: string): string => `这个对话我起不来（原因：${reason}），稍后再试`
 export const ACK_REACT_MS = 20_000
 export const ACK_TEMPLATE_MS = 60_000
 export const ACK_TEMPLATE = '收到，正在判断'
 export const FALLBACK_REACTION = 'OK'
 
 const D = PHYSICAL.desk
+const C = PHYSICAL.commitment
 
 export const deskIdOf = (event: InboundEvent): string => `${event.chat.type}:${event.chat.id}`
 export const deskSessionId = (deskId: string, generation: number): string => `sa-desk-${deskId.replace(/:/g, '')}-g${generation}`
@@ -110,6 +118,10 @@ export function createPresence(deps: DeskDeps): Presence {
   const disabled = new Set<string>()
   const lastAlert = new Map<string, number>()
   const deferrals = new Map<string, number>()
+  /** Consecutive session-creation failures per desk (T31). */
+  const sessionFailures = new Map<string, number>()
+  /** Desks whose batch is marked pending_close: the queue waits until this timestamp. */
+  const pendingClose = new Map<string, number>()
   let agendaRetries: { at: number; trigger: TurnRequest }[] = []
   let requestSeq = 0
 
@@ -155,7 +167,7 @@ export function createPresence(deps: DeskDeps): Presence {
     || [...inflight.values()].some(t => t.deskId === deskId && t.human)
 
   function finish(deliberationId: string, r: Parameters<import('../kernel/ledger.ts').KernelTx['finishTurn']>[1]): void {
-    ledger.open(tx => tx.finishTurn(deliberationId, r))
+    ledger.open(tx => tx.finishTurn(deliberationId, r), { module: 'desk' })
   }
 
   /** Events of the batch nobody judged: back to the queue once, host fallback on the second miss. */
@@ -171,13 +183,41 @@ export function createPresence(deps: DeskDeps): Presence {
       ctx.toolErrors += 1
       if (streak < 2) { retry.push(event); continue }
       unjudgedStreak.delete(event.event_id)
-      ledger.open(tx => tx.disposeIntake(event.event_id, shadow, { disposition: 'acknowledge', reason: 'host fallback: not judged in two turns' }), { shadow: ctx.shadow })
+      ledger.open(tx => tx.disposeIntake(event.event_id, shadow, { disposition: 'acknowledge', reason: 'host fallback: not judged in two turns' }), { module: 'desk', shadow: ctx.shadow })
       if (!ctx.shadow) {
         deps.outlet.submit({ event_id: event.event_id, chat_id: ctx.chatId, reply_to: event.message_id, moment: 'ack', audience: 'requester',
           payload: 'react', text: FALLBACK_REACTION, idem_key: `sa:fb:${event.event_id}`.slice(0, 50) }, deps.outletPolicy, deps.mode())
       }
     }
     if (retry.length) queued.set(ctx.deskId, [retry, ...(queued.get(ctx.deskId) ?? [])])
+  }
+
+  /**
+   * A turn abandoned by the timeout must not leave the person with only the ack.
+   * `END_REASONS` is a closed protocol set (N6), so the abandonment is recorded in
+   * the journal body (`{closed:'timeout'}`) and in the turn's rule trace; the
+   * deliberation row keeps `end_reason='unknown'`, which downstream already treats
+   * as a failure.
+   */
+  function closeTimedOut(deskId: string, trigger: TurnRequest, ctx: TurnContext): void {
+    const target = trigger.commitment_id ?? ledger.read.get<CommitmentRow>(
+      `SELECT * FROM ${C} WHERE desk_id = ? ORDER BY n DESC LIMIT 1`, deskId)?.commitment_id
+    if (target !== undefined) {
+      ledger.open(tx => tx.append(target, {
+        actor: 'desk', kind: 'state',
+        body: { closed: 'timeout', deliberation_id: trigger.deliberation_id },
+      }), { module: 'desk' })
+    }
+    if (ctx.shadow) return
+    const first = ctx.batch[0]
+    // No `event_id`: that event already got its ack, and one inbound allows one
+    // reply-tier line. The closing line is a new line in the same chat.
+    deps.outlet.submit({
+      ...(first ? { reply_to: first.message_id } : {}),
+      chat_id: ctx.chatId, moment: 'cannot', audience: 'requester', payload: 'text',
+      text: TURN_TIMEOUT_MESSAGE,
+      idem_key: `sa:to:${trigger.deliberation_id}`.slice(0, 50),
+    }, deps.outletPolicy, deps.mode())
   }
 
   async function runTurn(trigger: TurnRequest, batch: readonly InboundEvent[] = []): Promise<TurnOutcome> {
@@ -216,11 +256,35 @@ export function createPresence(deps: DeskDeps): Presence {
     let sessionId: string
     try {
       sessionId = await ensureSession(deskId, now)
+      sessionFailures.delete(deskId)
     } catch (error) {
-      deps.degrade({ reason: 'desk_unavailable', scope: deskId, now })
-      finish(trigger.deliberation_id, { ops: 0, tool_errors: 0, tokens: 0, end_reason: 'error', rule_trace: { reason: String(error) } })
+      const reason = error instanceof Error ? error.message : String(error)
+      const failures = (sessionFailures.get(deskId) ?? 0) + 1
+      sessionFailures.set(deskId, failures)
+      const capped = failures >= MAX_SESSION_FAILURES
+      // One error row per turn: the degradation is recorded on the first failure and
+      // again at the cap, never once per retry.
+      if (failures === 1 || capped) deps.degrade({ reason: 'desk_unavailable', scope: deskId, now })
+      log.warn(`desk ${deskId}: session create failed ${failures}/${MAX_SESSION_FAILURES}: ${reason}`)
+      finish(trigger.deliberation_id, {
+        ops: 0, tool_errors: 0, tokens: 0, end_reason: 'error',
+        rule_trace: { reason, session_failures: failures, pending_close: capped },
+      })
       closeDesk()
+      if (capped) sessionFailures.delete(deskId)
       if (human) queued.set(deskId, [batch.slice(), ...(queued.get(deskId) ?? [])])
+      if (!capped) return out('error')
+      // Cap reached: stop looping, tell the person once, and let the agenda retry the
+      // kept batch after a window. `pending_close` is the marker the tick honours.
+      if (human) pendingClose.set(deskId, ledger.nowMs() + PENDING_CLOSE_RETRY_MS)
+      if (human && deps.mode() !== 'shadow') {
+        deps.outlet.submit({
+          ...(batch[0] ? { event_id: batch[0].event_id, reply_to: batch[0].message_id } : {}),
+          chat_id: chatOf(deskId), moment: 'cannot', audience: 'requester', payload: 'text',
+          text: sessionFailureMessage(reason),
+          idem_key: `sa:dc:${deskId.replace(/:/g, '')}:${windowOf(now)}`.slice(0, 50),
+        }, deps.outletPolicy, deps.mode())
+      }
       return out('error')
     }
 
@@ -263,11 +327,13 @@ export function createPresence(deps: DeskDeps): Presence {
 
     const endKind = await ended
     turns.delete(sessionId)
+    if (endKind === 'timeout') closeTimedOut(deskId, trigger, ctx)
     settleUnjudged(ctx)
     const finishedAt = ledger.nowMs()
     finish(trigger.deliberation_id, {
       ops: ctx.ops, tool_errors: ctx.toolErrors, tokens: 0, end_reason: endKind,
-      rule_trace: { tools: ctx.trace, ...(ctx.shadow ? { shadow_ops: ctx.shadowOps } : {}), truncated: dossier.truncated, alarms: dossier.alarms },
+      rule_trace: { tools: ctx.trace, ...(ctx.shadow ? { shadow_ops: ctx.shadowOps } : {}),
+        ...(endKind === 'timeout' ? { closed: 'timeout' } : {}), truncated: dossier.truncated, alarms: dossier.alarms },
       pub_hash: projection.pubHash, dossier_hash: dossierFingerprint(projection.pubHash, projection.audienceClass),
       audience_class: projection.audienceClass, dossier_tokens: dossier.tokens, window_id: windowOf(finishedAt),
     })
@@ -319,11 +385,17 @@ export function createPresence(deps: DeskDeps): Presence {
     }
     for (const [deskId, batches] of [...queued]) {
       if (!batches.length) { queued.delete(deskId); continue }
+      const closeAt = pendingClose.get(deskId)
+      if (closeAt !== undefined) {
+        // pending_close: the batch is kept, the desk is not relaunched before the window.
+        if (closeAt > now) continue
+        pendingClose.delete(deskId)
+      }
       if ([...inflight.values()].some(t => t.deskId === deskId) || deskRow(deskId)?.turn_open === 1) continue
       const batch = batches[0]
       requestSeq += 1
       const requestId = `in:${batch[0].event_id}:${requestSeq}`
-      const deliberationId = ledger.open(tx => tx.requestTurn({ trigger_kind: 'intake', desk_id: deskId, request_id: requestId }), { shadow: deps.mode() === 'shadow' })
+      const deliberationId = ledger.open(tx => tx.requestTurn({ trigger_kind: 'intake', desk_id: deskId, request_id: requestId }), { module: 'desk', shadow: deps.mode() === 'shadow' })
       if (deliberationId === undefined) continue
       batches.shift()
       if (!batches.length) queued.delete(deskId)

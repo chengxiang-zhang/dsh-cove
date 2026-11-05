@@ -22,7 +22,7 @@ import {
 
 export type LedgerErrorCode = 'ILLEGAL_TRANSITION' | 'LEDGER_ASYNC_TX' | 'LEDGER_NESTED_TX' | 'SHADOW_NO_WRITE'
   | 'TABLE_NOT_OWNED' | 'HOST_PROPOSE_KIND' | 'THREAD_BUSY' | 'ALREADY_DISPOSED' | 'MISSING' | 'BAD_COLUMN'
-  | 'MULTI_STATEMENT'
+  | 'MULTI_STATEMENT' | 'MODULE_REQUIRED' | 'REPLY_EXISTS' | 'IDEM_EXISTS'
 
 export class LedgerError extends Error {
   readonly code: LedgerErrorCode
@@ -106,7 +106,8 @@ export const PATCHABLE_COMMITMENT_COLUMNS = ['slot', 'used_wall_ms', 'used_turns
 export type CommitmentPatch = Partial<Pick<CommitmentRow, (typeof PATCHABLE_COMMITMENT_COLUMNS)[number]>>
 
 export interface Ledger {
-  open<T>(fn: (tx: KernelTx) => T, opts?: { module?: OwnerModule; shadow?: boolean }): T
+  /** `module` is required (R1 A3): an omitted module would otherwise inherit the kernel's write rights. */
+  open<T>(fn: (tx: KernelTx) => T, opts: { module: OwnerModule; shadow?: boolean }): T
   read: LedgerReader
   nowMs(): number
 }
@@ -129,6 +130,16 @@ const D = PHYSICAL.deliberation
 
 const WRITE_TARGET = /^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+["`[]?(\w+)/i
 /** The one approved shape (Lead ruling): the claim CAS on inbox_events.owner. */
+/**
+ * R1 A2/A6: REPLACE deletes the conflicting row without firing its delete triggers
+ * (recursive_triggers is off), so it rewrites append-only and terminal rows. No
+ * statement may carry REPLACE semantics through tx.run; the DDL repeats the refusal.
+ */
+const REPLACE_SHAPE = /^\s*(?:REPLACE\s+INTO|INSERT\s+OR\s+REPLACE|UPDATE\s+OR\s+REPLACE)\b/i
+/** Audit and state tables: rows are appended or moved through named methods, never replaced. */
+const NO_REPLACE_TABLES: ReadonlySet<string> = new Set([PHYSICAL.journal, PHYSICAL.memory, PHYSICAL.mandate, PHYSICAL.commitment,
+  PHYSICAL.attempt, PHYSICAL.outbox, PHYSICAL.intake, PHYSICAL.deliberation, PHYSICAL.assumption, PHYSICAL.doc_index, PHYSICAL.inbox_event])
+/** The one approved shape (Lead ruling): the claim CAS on inbox_events.owner. */
 const KERNEL_OWNER_CAS = 'update inbox_events set owner = ? where event_id = ? and owner is null'
 const normalized = (sql: string): string => sql.trim().replace(/\s+/g, ' ').replace(/\s*;$/, '').toLowerCase()
 const READ_ONLY = /^\s*(?:SELECT|WITH)\b/i
@@ -147,6 +158,9 @@ function assertSingle(sql: string): void {
 function assertOwned(sql: string, module: OwnerModule): void {
   assertSingle(sql)
   const target = WRITE_TARGET.exec(sql)?.[1]
+  if (REPLACE_SHAPE.test(sql) && target !== undefined && NO_REPLACE_TABLES.has(target)) {
+    throw new LedgerError('TABLE_NOT_OWNED', `REPLACE semantics are refused on ${target}: ${sql.slice(0, 60)}`)
+  }
   if (!target) throw new LedgerError('TABLE_NOT_OWNED', `tx.run accepts INSERT/UPDATE/DELETE only: ${sql.slice(0, 60)}`)
   if (TABLE_OWNERS[target] === module) return
   // The kernel owns exactly one column of the channel's table: the claim CAS on owner.
@@ -164,10 +178,14 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
     && typeof (value as { then?: unknown }).then === 'function'
 }
 
+/** The earliest a look may be: one clock round ahead. */
+export const MIN_LOOK_AHEAD_MS = 60_000
+
 /** I1: non-goal commitments are looked at within 24 hours, goals within 7 days. */
 function clampLook(kind: string, nextLookAt: number | null | undefined, now: number): number | null {
   if (nextLookAt === null || nextLookAt === undefined) return null
-  return Math.min(nextLookAt, now + (kind === 'goal' ? GOAL_LOOK_CAP_MS : LOOK_CAP_MS))
+  // R1 A9: never before the next round either; a past look is due every round.
+  return Math.max(now + MIN_LOOK_AHEAD_MS, Math.min(nextLookAt, now + (kind === 'goal' ? GOAL_LOOK_CAP_MS : LOOK_CAP_MS)))
 }
 
 /** Kernel-side copy of the 02 table constraints; the DDL repeats them. */
@@ -265,6 +283,8 @@ export function createLedger(db: DatabaseSync, clock: LedgerClock): Ledger {
       now,
       run(sql, ...params) {
         live()
+        // R1 A8: a shadow turn writes nothing but intake(shadow=1), which named methods do.
+        noShadow('tx.run')
         assertOwned(sql, module)
         return { changes: exec(sql, ...params) }
       },
@@ -338,6 +358,15 @@ export function createLedger(db: DatabaseSync, clock: LedgerClock): Ledger {
         const current = get<AttemptRow>(`SELECT * FROM ${A} WHERE attempt_id = ?`, id)
         if (!current) throw new LedgerError('MISSING', `attempt ${id}`)
         const { attempt_id: _id, commitment_id: _c, created_at: _x, ...rest } = patch
+        if (current.state === 'ended' && rest.state !== undefined && rest.state !== 'ended') {
+          throw new LedgerError('ILLEGAL_TRANSITION', `attempt ${id} has ended`, 'attempt_ended')
+        }
+        if (rest.state === 'running') {
+          // I3 (R1 A4): a running attempt belongs to an open commitment with its stop-loss line.
+          const owner = commitmentById(current.commitment_id)
+          if (owner.state !== 'open' && owner.state !== 'at_risk') throw new LedgerError('ILLEGAL_TRANSITION', `running attempt on ${owner.state} ${owner.commitment_id}`, 'attempt_on_closed')
+          if (owner.kind === 'deliver' && (owner.budget_wall_ms == null || owner.budget_turns == null)) throw new LedgerError('ILLEGAL_TRANSITION', `no stop-loss on ${owner.commitment_id}`, 'no_budget')
+        }
         const next: Partial<AttemptRow> = { ...rest, updated_at: now }
         if (rest.state === 'running' && current.started_at === null && rest.started_at === undefined) next.started_at = now
         if (rest.state === 'ended' && rest.ended_at === undefined) next.ended_at = now
@@ -388,6 +417,24 @@ export function createLedger(db: DatabaseSync, clock: LedgerClock): Ledger {
         if (TERMINAL.has(current.state)) throw new LedgerError('ILLEGAL_TRANSITION', `patch on ${current.state} ${id}`, 'patch_closed')
         const allowed: readonly string[] = PATCHABLE_COMMITMENT_COLUMNS
         for (const key of Object.keys(patch)) if (!allowed.includes(key)) throw new LedgerError('BAD_COLUMN', `${C}.${key} is not patchable`)
+        const refuse = (constraint: string, message: string): never => { throw new LedgerError('ILLEGAL_TRANSITION', `${id}: ${message}`, constraint) }
+        // R1 A7: every patchable column moves one way only.
+        if (patch.extended !== undefined && patch.extended !== current.extended && !(current.extended === 0 && patch.extended === 1)) refuse('extended_once', 'extended only goes 0 -> 1')
+        for (const k of ['budget_wall_ms', 'budget_turns'] as const) {
+          const v = patch[k]
+          if (v !== undefined && current[k] !== null && (v === null || v < (current[k] as number))) refuse('budget_grows', `${k} may only grow`)
+        }
+        for (const k of ['used_wall_ms', 'used_turns'] as const) {
+          const v = patch[k]
+          if (v !== undefined && (v === null || v < current[k])) refuse('used_grows', `${k} may only grow`)
+        }
+        if (patch.slot !== undefined && patch.slot !== current.slot) {
+          if (current.slot !== null && patch.slot !== null) refuse('slot_fixed', 'a held slot is not swapped')
+          if (current.slot !== null && patch.slot === null
+            && get(`SELECT 1 FROM ${A} WHERE commitment_id = ? AND lifetime = 'durable' AND state IN ('pending', 'running')`, id)) {
+            refuse('slot_live', 'the slot is not released while durable work is live')
+          }
+        }
         const next = { ...current, ...patch }
         checkCommitment(next)
         updateRow(C, 'commitment_id', id, { ...patch, updated_at: now })
@@ -404,7 +451,15 @@ export function createLedger(db: DatabaseSync, clock: LedgerClock): Ledger {
       recordOutbox(row) {
         live(); noShadow('recordOutbox')
         const outboxId = row.outbox_id ?? `O:${row.idem_key}`
-        insertRow(PHYSICAL.outbox, { ...row, outbox_id: outboxId, state: 'queued', attempts: 0, created_at: now, updated_at: now })
+        try {
+          insertRow(PHYSICAL.outbox, { ...row, outbox_id: outboxId, state: 'queued', attempts: 0, created_at: now, updated_at: now })
+        } catch (error) {
+          // R1 A10: a concurrent second reply surfaces as the 02 code, not a raw constraint.
+          const message = error instanceof Error ? error.message : String(error)
+          if (/UNIQUE/.test(message) && /event_id/.test(message)) throw new LedgerError('REPLY_EXISTS', `event ${row.event_id ?? '?'} already has a reply`)
+          if (/UNIQUE/.test(message)) throw new LedgerError('IDEM_EXISTS', `idem_key ${row.idem_key} already queued`)
+          throw error
+        }
         return get<OutboxRow>(`SELECT * FROM ${PHYSICAL.outbox} WHERE outbox_id = ?`, outboxId) as OutboxRow
       },
 
@@ -419,12 +474,17 @@ export function createLedger(db: DatabaseSync, clock: LedgerClock): Ledger {
   }
 
   return {
-    open<T>(fn: (tx: KernelTx) => T, opts: { module?: OwnerModule; shadow?: boolean } = {}): T {
+    open<T>(fn: (tx: KernelTx) => T, opts: { module: OwnerModule; shadow?: boolean }): T {
+      // R1 A3: no default module; the caller names whose tables it writes.
+      const module = (opts as { module?: OwnerModule } | undefined)?.module
+      if (module === undefined) throw new LedgerError('MODULE_REQUIRED', 'Ledger.open needs { module }')
       if (active) throw new LedgerError('LEDGER_NESTED_TX', 'Ledger.open is not re-entrant')
       let open = true
-      const tx = makeTx(opts.module ?? 'kernel', opts.shadow === true, clock.now(), () => open)
-      active = true
+      const tx = makeTx(module, opts.shadow === true, clock.now(), () => open)
+      // R1 A1: BEGIN can fail (SQLITE_BUSY after busy_timeout); the re-entrancy flag is
+      // only raised once a transaction actually exists, and always lowered in finally.
       db.exec('BEGIN IMMEDIATE')
+      active = true
       try {
         const result = fn(tx)
         if (isThenable(result)) {
@@ -435,7 +495,7 @@ export function createLedger(db: DatabaseSync, clock: LedgerClock): Ledger {
         db.exec('COMMIT')
         return result
       } catch (error) {
-        db.exec('ROLLBACK')
+        try { db.exec('ROLLBACK') } catch { /* the transaction may already be gone; the original error wins */ }
         throw error
       } finally {
         open = false

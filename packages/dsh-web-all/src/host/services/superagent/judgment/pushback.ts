@@ -136,7 +136,7 @@ export function pushbackTool(deps: JudgmentDeps) {
       kind: 'pushback',
       request_id: `pb:${input.event_id}`,
       body: { concern: input.concern, grounds, alternative: input.alternative },
-    }), { shadow: false })
+    }), { module: 'judgment', shadow: false })
 
     const said = deps.outletSay(ctx, {
       event_id: input.event_id,

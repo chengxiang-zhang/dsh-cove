@@ -70,12 +70,12 @@ export function amendTool(deps: AmendReleaseDeps): (ctx: JudgmentTurn, input: Am
 /** The release path shared by the tool and the fast path. */
 export async function releaseCommitment(deps: AmendReleaseDeps, ctx: JudgmentTurn, c: CommitmentRow, reason: string): Promise<ReleaseOutput> {
   const by = senderOf(ctx)
-  deps.ledger.open(tx => tx.append(c.commitment_id, { actor: by, kind: 'state', body: { release_intent: reason, by } }))
+  deps.ledger.open(tx => tx.append(c.commitment_id, { actor: by, kind: 'state', body: { release_intent: reason, by } }), { module: 'judgment' })
   const live = deps.ledger.read.all<AttemptRow>(`SELECT * FROM ${PHYSICAL.attempt} WHERE commitment_id = ? AND state IN ('pending', 'running') ORDER BY n`, c.commitment_id)
   const stoppedAt = live.map(a => `${a.attempt_id} 第 ${a.turns} 回合（${a.state}）`)
   for (const a of live) await deps.executors.cancel(a.attempt_id, 'release')
   const ws = deps.workspace ? deps.workspace.settle(c.commitment_id) : defaultSettle(deps.ledger, c.commitment_id)
-  deps.ledger.open(tx => tx.transition(c.commitment_id, 'released', { ball: 'me' }))
+  deps.ledger.open(tx => tx.transition(c.commitment_id, 'released', { ball: 'me' }), { module: 'judgment' })
   deps.say?.(ctx, {
     commitment_id: c.commitment_id, chat_id: chatOfDesk(c.desk_id ?? ctx.deskId), moment: 'deliver', audience: 'requester', payload: 'text',
     text: `停了 ${c.commitment_id}：${stoppedAt.length ? `停在 ${stoppedAt.join('、')}` : '还没开始执行'}。${ws.changes}。`,

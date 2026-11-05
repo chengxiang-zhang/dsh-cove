@@ -13,14 +13,31 @@ import { createManualClock, type ManualClock } from './manual-clock.ts'
 import { openTestLedgerDb } from './memdb.ts'
 
 export interface TestLedger {
+  /** For test code: an omitted module means the test seeds as the kernel. Components still pass their own. */
   ledger: Ledger
+  /** The ledger exactly as production builds it: `module` is required (R1 A3). */
+  raw: Ledger
   db: DatabaseSync
   clock: ManualClock
 }
 
+/**
+ * Test seeding convenience only. Production callers are held to an explicit module by
+ * the type of `Ledger.open` and by `MODULE_REQUIRED` at runtime; test code that builds
+ * rows directly is treated as the kernel. A module the caller does pass is never changed.
+ */
+export function seedingLedger(raw: Ledger): Ledger {
+  return {
+    open: (fn, opts) => raw.open(fn, { ...(opts as object | undefined), module: (opts as { module?: never } | undefined)?.module ?? 'kernel' }),
+    read: raw.read,
+    nowMs: () => raw.nowMs(),
+  }
+}
+
 export function openTestLedger(clock: ManualClock = createManualClock(1_762_300_000_000)): TestLedger {
   const db = openTestLedgerDb()
-  return { ledger: createLedger(db, clock), db, clock }
+  const raw = createLedger(db, clock)
+  return { ledger: seedingLedger(raw), raw, db, clock }
 }
 
 let origin = 0

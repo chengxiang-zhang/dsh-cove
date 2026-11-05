@@ -110,7 +110,7 @@ const ready = (over: Partial<ReportInput> = {}): ReportInput => ({ state: 'ready
 describe('superagent executors closure', () => {
   it('1. unconsumed input means the commitment is not judged at all', () => {
     const r = rig()
-    const c = seedCommitment(r.t, { check_kind: 'command', done_when: 'pnpm test passes' })
+    const c = seedCommitment(r.t, { check_kind: 'command', done_when: '`pnpm test` 期望退出码 0' })
     const a = seedAttempt(r.t, c.commitment_id)
     r.t.ledger.open(tx => tx.append(c.commitment_id, { actor: 'owner', kind: 'amend', request_id: 'req-1', body: { text: 'also cover X' } }))
 
@@ -123,7 +123,7 @@ describe('superagent executors closure', () => {
 
   it('2. a command report is verified against the session tool log, not believed', () => {
     const r = rig()
-    const c = seedCommitment(r.t, { check_kind: 'command', done_when: 'pnpm test passes' })
+    const c = seedCommitment(r.t, { check_kind: 'command', done_when: '`pnpm test` 期望退出码 0' })
     const a = seedAttempt(r.t, c.commitment_id)
     r.facts.call(a.attempt_id, 'pnpm test', 0)
 
@@ -144,7 +144,7 @@ describe('superagent executors closure', () => {
 
   it('3. the same command with a different exit code is only unverified', () => {
     const r = rig()
-    const c = seedCommitment(r.t, { check_kind: 'command', done_when: 'pnpm test passes' })
+    const c = seedCommitment(r.t, { check_kind: 'command', done_when: '`pnpm test` 期望退出码 0' })
     const a = seedAttempt(r.t, c.commitment_id)
     // The session actually failed; the report claims success.
     r.facts.call(a.attempt_id, 'pnpm test', 1)
@@ -157,13 +157,13 @@ describe('superagent executors closure', () => {
 
   it('4. ready without evidence is unverified, never fulfilled', () => {
     const r = rig()
-    const c = seedCommitment(r.t, { check_kind: 'command', done_when: 'pnpm test passes' })
+    const c = seedCommitment(r.t, { check_kind: 'command', done_when: '`pnpm test` 期望退出码 0' })
     const a = seedAttempt(r.t, c.commitment_id)
     r.facts.call(a.attempt_id, 'pnpm test', 0)
 
     expect(r.closure.close(a.attempt_id, { reason: 'completed' }, ready())).toEqual({ state: 'unverified', evidenceOk: false })
     // A completed turn with no terminal report at all lands in the same place.
-    const second = seedCommitment(r.t, { check_kind: 'command', done_when: 'pnpm test passes' })
+    const second = seedCommitment(r.t, { check_kind: 'command', done_when: '`pnpm test` 期望退出码 0' })
     const b = seedAttempt(r.t, second.commitment_id)
     expect(r.closure.close(b.attempt_id, { reason: 'completed' })).toEqual({ state: 'unverified', evidenceOk: false })
   })
@@ -221,7 +221,7 @@ describe('superagent executors closure', () => {
 
   it('8. a ready report before its turn end waits, then the sweep judges it', () => {
     const r = rig()
-    const c = seedCommitment(r.t, { check_kind: 'command', done_when: 'pnpm test passes' })
+    const c = seedCommitment(r.t, { check_kind: 'command', done_when: '`pnpm test` 期望退出码 0' })
     const a = seedAttempt(r.t, c.commitment_id)
     r.facts.call(a.attempt_id, 'pnpm test', 0)
 
@@ -239,7 +239,7 @@ describe('superagent executors closure', () => {
 
   it('9. escalation walks retry then upgrade then broken, without any interrupt', () => {
     const r = rig()
-    const c = seedCommitment(r.t, { check_kind: 'command', done_when: 'pnpm test passes' })
+    const c = seedCommitment(r.t, { check_kind: 'command', done_when: '`pnpm test` 期望退出码 0' })
     const first = seedAttempt(r.t, c.commitment_id, { executor: 'durable-full', lifetime: 'durable' })
     r.t.ledger.open(tx => tx.updateAttempt(first.attempt_id, { state: 'ended', end_reason: 'interrupted' }))
 
@@ -265,7 +265,7 @@ describe('superagent executors closure', () => {
 
   it('10. a loop goes straight to a higher tier, and with no higher tier it breaks', () => {
     const r = rig()
-    const c = seedCommitment(r.t, { check_kind: 'command', done_when: 'pnpm test passes' })
+    const c = seedCommitment(r.t, { check_kind: 'command', done_when: '`pnpm test` 期望退出码 0' })
     const a = seedAttempt(r.t, c.commitment_id, { executor: 'durable-full', lifetime: 'durable' })
     r.t.ledger.open(tx => tx.updateAttempt(a.attempt_id, { state: 'ended', end_reason: 'error' }))
 
@@ -273,7 +273,7 @@ describe('superagent executors closure', () => {
     expect(upgrade.action).toBe('upgrade')
     expect(attemptOf(r.t, String(upgrade.attemptId)).executor).toBe('durable-full-strong')
 
-    const top = seedCommitment(r.t, { check_kind: 'command', done_when: 'pnpm test passes' })
+    const top = seedCommitment(r.t, { check_kind: 'command', done_when: '`pnpm test` 期望退出码 0' })
     const topAttempt = seedAttempt(r.t, top.commitment_id, { executor: 'durable-full-strong', lifetime: 'durable' })
     r.t.ledger.open(tx => tx.updateAttempt(topAttempt.attempt_id, { state: 'ended', end_reason: 'error' }))
     expect(r.escalation.escalate(top.commitment_id, 'loop')).toEqual({ action: 'broken' })
@@ -282,7 +282,7 @@ describe('superagent executors closure', () => {
 
   it('11. a stop-loss abort parks the commitment at risk with the ball back', () => {
     const r = rig()
-    const c = seedCommitment(r.t, { check_kind: 'command', done_when: 'pnpm test passes' })
+    const c = seedCommitment(r.t, { check_kind: 'command', done_when: '`pnpm test` 期望退出码 0' })
     const a = seedAttempt(r.t, c.commitment_id)
     r.t.ledger.open(tx => tx.updateAttempt(a.attempt_id, { state: 'ended', end_reason: 'aborted', cancel_origin: 'budget' }))
 

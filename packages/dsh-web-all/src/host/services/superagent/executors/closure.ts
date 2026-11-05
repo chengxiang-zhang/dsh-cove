@@ -93,19 +93,43 @@ function normalized(text: string): string {
   return text.replace(/\s+/g, ' ').trim().toLowerCase()
 }
 
-/** The command a `tool/call` ran: the `command`/`cmd` key of its arguments JSON, else the raw text. */
+/**
+ * Tools whose calls are never evidence (R1 A11): the executor's own report and the
+ * host-side tools. A command is only ever what a command-running tool was asked to run.
+ */
+export const NON_EVIDENCE_TOOLS: ReadonlySet<string> = new Set(['report', 'judge', 'commit', 'amend', 'release', 'pushback', 'look', 'remember', 'propose', 'say'])
+
+/**
+ * The command a `tool/call` ran: the explicit `command`/`cmd` key of its arguments JSON.
+ * No fallback to the raw text, and never from a non-evidence tool (R1 A11).
+ */
 export function commandOf(entry: ToolLogEntry): string | undefined {
-  const raw = entry.arguments
+  if (NON_EVIDENCE_TOOLS.has(entry.name) || entry.callId === '') return undefined
   try {
-    const parsed: unknown = JSON.parse(raw)
+    const parsed: unknown = JSON.parse(entry.arguments)
     if (typeof parsed === 'object' && parsed !== null) {
       const pick = (parsed as Record<string, unknown>).command ?? (parsed as Record<string, unknown>).cmd
-      if (typeof pick === 'string') return pick
+      if (typeof pick === 'string' && pick.trim() !== '') return pick
     }
   } catch {
-    // Raw, non-JSON arguments are compared as they arrived.
+    // Non-JSON arguments carry no command key: not evidence.
   }
-  return raw.length > 0 ? raw : undefined
+  return undefined
+}
+
+/**
+ * The command `done_when` names (B1): the first backtick span. Without one, a command
+ * criterion cannot be checked mechanically and closes at most as unverified.
+ */
+export function expectedCommand(doneWhen: string): string | undefined {
+  const m = /`([^`]+)`/.exec(doneWhen)
+  return m && m[1].trim() !== '' ? m[1].trim() : undefined
+}
+
+/** The exit code `done_when` expects: `退出码 N` / `exit N` / `exit code N`; 0 when it states none. */
+export function expectedExit(doneWhen: string): number {
+  const m = /(?:退出码|exit(?:\s*code)?)\s*[:=：为是]?\s*(-?\d+)/i.exec(doneWhen.replace(/`[^`]*`/g, ''))
+  return m ? Number(m[1]) : 0
 }
 
 /** `done_when` elements for answer/observation criteria: separated by ';', ',', '、'. */
@@ -139,15 +163,20 @@ export function createClosure(deps: ClosureDeps): Closure {
     const evidence = report.evidence ?? []
     if (commitment.check_kind === 'command') {
       if (evidence.length === 0) return outcome('unverified', 'ready without evidence')
+      // B1: the evidence must be the command done_when names, with the exit it expects.
+      const wanted = expectedCommand(commitment.done_when)
+      if (wanted === undefined) return outcome('unverified', 'done_when names no command to check')
+      const wantedExit = expectedExit(commitment.done_when)
       const calls = facts.toolLog(attempt.attempt_id)
       for (const item of evidence) {
+        if (normalized(item.command) !== normalized(wanted) || item.exit !== wantedExit) continue
+        // A11: only a real command-running tool call counts - never the report call itself.
         const matched = calls.find(call => commandOf(call) !== undefined
-          && normalized(commandOf(call) as string) === normalized(item.command)
-          && call.exit !== undefined && call.exit === item.exit)
-        // Same command, same exit code, both from the session itself: that is the fact.
-        if (matched !== undefined) return outcome('fulfilled', 'command matched the tool log', { evidence: item })
+          && normalized(commandOf(call) as string) === normalized(wanted)
+          && call.exit !== undefined && call.exit === wantedExit)
+        if (matched !== undefined) return outcome('fulfilled', 'command matched done_when and the tool log', { evidence: item })
       }
-      return outcome('unverified', 'no tool call matches the reported command and exit code')
+      return outcome('unverified', 'no tool call runs the done_when command with the expected exit code')
     }
     if (commitment.check_kind === 'artifact') {
       const branch = `sa/${commitment.commitment_id}`
@@ -261,11 +290,17 @@ export function createClosure(deps: ClosureDeps): Closure {
     },
 
     pendingSweep(now: number): number {
-      const rows = ledger.read.all<{ commitment_id: string; body_json: string | null }>(
-        `SELECT commitment_id, body_json FROM ${J} WHERE kind = 'state' AND body_json IS NOT NULL AND created_at <= ?`,
+      const rows = ledger.read.all<{ commitment_id: string; seq: number; body_json: string | null }>(
+        `SELECT commitment_id, seq, body_json FROM ${J} WHERE kind = 'state' AND body_json IS NOT NULL AND created_at <= ? ORDER BY seq`,
         now - PENDING_CLOSE_MS)
+      // R1 A12: the journal is append-only, so a judged waiting row is marked by a later
+      // `{ swept_of: <seq> }` row; a marked row is never judged again.
+      const swept = new Set(ledger.read.all<{ commitment_id: string; body_json: string }>(
+        `SELECT commitment_id, body_json FROM ${J} WHERE kind = 'state' AND body_json LIKE '%"swept_of"%'`)
+        .map(r => { try { return `${r.commitment_id}#${String((JSON.parse(r.body_json) as { swept_of?: unknown }).swept_of)}` } catch { return '' } }))
       let judged = 0
       for (const row of rows) {
+        if (swept.has(`${row.commitment_id}#${row.seq}`)) continue
         let body: Record<string, unknown>
         try {
           const parsed: unknown = JSON.parse(row.body_json as string)
@@ -285,6 +320,7 @@ export function createClosure(deps: ClosureDeps): Closure {
         if (report === undefined || report.state !== 'ready') continue
         // Missing `turn/end` is not failure (10): the report said done, so the table is
         // read from the `completed` row and the missing fact decides nothing.
+        record(commitment.commitment_id, { swept_of: row.seq, attempt: body.attempt })
         commitOutcome(attempt, commitment, 'completed', judge(attempt, commitment, 'completed', report))
         judged += 1
       }

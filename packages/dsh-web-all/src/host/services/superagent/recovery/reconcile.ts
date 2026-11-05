@@ -133,7 +133,7 @@ export function createReconciler(deps: ReconcileDeps): Reconciler {
       tx.updateAttempt(attempt.attempt_id, { state: 'ended', end_reason: 'orphaned', cancel_origin: 'reconcile', ended_at: now, turn_open: 0 })
       tx.append(attempt.commitment_id, { actor: 'recovery', kind: 'state',
         body: { orphaned: attempt.attempt_id, session: attempt.session_id, at: now } })
-    })
+    }, { module: 'recovery' })
   }
 
   const orphanBrief = (commitment: CommitmentRow, attemptId: string): void => {
@@ -161,7 +161,7 @@ export function createReconciler(deps: ReconcileDeps): Reconciler {
     if (session.kind !== 'missing') {
       // The session came back: whatever was lost is not lost.
       ledger.open(tx => tx.append(commitment.commitment_id, { actor: 'recovery', kind: 'state',
-        body: { healed: attempt.attempt_id, session: attempt.session_id, at: now } }))
+        body: { healed: attempt.attempt_id, session: attempt.session_id, at: now } }), { module: 'recovery' })
       return true
     }
     if (attempt.lifetime === 'durable') {
@@ -172,7 +172,7 @@ export function createReconciler(deps: ReconcileDeps): Reconciler {
         question: `${commitment.commitment_id} 的执行会话已经不存在。重派会覆盖工作目录里未提交的改动。`,
         fallback: '保留工作目录现场，不重派',
       })
-      ledger.open(tx => tx.transition(commitment.commitment_id, 'orphaned', { ball: 'me' }))
+      ledger.open(tx => tx.transition(commitment.commitment_id, 'orphaned', { ball: 'me' }), { module: 'recovery' })
       log.warn(`superagent/recovery: ${commitment.commitment_id} orphaned with a work tree; asked the owner, keeping the scene`)
       return false
     }

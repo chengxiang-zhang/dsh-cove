@@ -55,11 +55,11 @@ export function createClock(ledger: Ledger): Clock {
       try {
         if (safeSignal(signal, id, now) === null) {
           const remaining = Math.max(0, (eta ?? now) - now)
-          ledger.open(tx => tx.touch(id, now + Math.max(MIN_PUSH_MS, remaining / 2)))
+          ledger.open(tx => tx.touch(id, now + Math.max(MIN_PUSH_MS, remaining / 2)), { module: 'kernel' })
           continue
         }
         const requestId = `tick:${id}:${now}`
-        const deliberationId = ledger.open(tx => tx.requestTurn({ trigger_kind: 'agenda', commitment_id: id, request_id: requestId }))
+        const deliberationId = ledger.open(tx => tx.requestTurn({ trigger_kind: 'agenda', commitment_id: id, request_id: requestId }), { module: 'kernel' })
         if (deliberationId === undefined) deferred.push(id)
         else requested.push({ deliberation_id: deliberationId, request_id: requestId, commitment_id: id, trigger_kind: 'agenda' })
       } catch {
@@ -85,7 +85,7 @@ export function createClock(ledger: Ledger): Clock {
       return () => host.clearInterval(handle)
     },
     finish(deliberationId, readings) {
-      ledger.open(tx => tx.finishTurn(deliberationId, readings))
+      ledger.open(tx => tx.finishTurn(deliberationId, readings), { module: 'kernel' })
     },
   }
 }
