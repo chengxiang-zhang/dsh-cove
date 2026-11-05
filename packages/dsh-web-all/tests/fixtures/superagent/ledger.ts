@@ -1,0 +1,44 @@
+/**
+ * Kernel ledger fixture (T08): a `Ledger` over the in-memory test database.
+ *
+ * `seedCommitment` and `seedAttempt` give later kernel tasks (T12, T13, T14)
+ * valid rows with one call; every default satisfies the 02 table constraints.
+ */
+
+import type { DatabaseSync } from 'node:sqlite'
+import { createLedger, type Ledger, type NewAttempt, type NewCommitment } from '../../../src/host/services/superagent/kernel/ledger.ts'
+import type { AttemptRow, CommitmentRow } from '../../../src/host/services/superagent/protocol/objects.ts'
+import { createManualClock, type ManualClock } from './manual-clock.ts'
+import { openTestLedgerDb } from './memdb.ts'
+
+export interface TestLedger {
+  ledger: Ledger
+  db: DatabaseSync
+  clock: ManualClock
+}
+
+export function openTestLedger(clock: ManualClock = createManualClock(1_762_300_000_000)): TestLedger {
+  const db = openTestLedgerDb()
+  return { ledger: createLedger(db, clock), db, clock }
+}
+
+let origin = 0
+
+/** An open deliver commitment with both stop-loss lines and a look time one hour out. */
+export function deliverSpec(over: Partial<NewCommitment> = {}): NewCommitment {
+  origin += 1
+  return {
+    kind: 'deliver', debtor: 'me', creditor: 'ou_owner', ball: 'me', thread_key: `p2p:oc_1:m${origin}`,
+    origin_ref: `evt-seed-${origin}`, what: 'do the thing', intent: 'thing done', check_kind: 'command',
+    done_when: 'test passes', budget_wall_ms: 1_800_000, budget_turns: 20, next_look_at: undefined, ...over,
+  } as NewCommitment
+}
+
+export function seedCommitment(t: TestLedger, over: Partial<NewCommitment> = {}): CommitmentRow {
+  const spec = deliverSpec(over)
+  return t.ledger.open(tx => tx.createCommitment({ ...spec, next_look_at: spec.next_look_at ?? tx.now + 3_600_000 }))
+}
+
+export function seedAttempt(t: TestLedger, commitmentId: string, over: Partial<NewAttempt> = {}): AttemptRow {
+  return t.ledger.open(tx => tx.recordAttempt({ commitment_id: commitmentId, executor: 'codex', reason: 'repo work', lifetime: 'oneshot', ...over }))
+}

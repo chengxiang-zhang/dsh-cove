@@ -1,5 +1,5 @@
 /**
- * Assembly wiring for the remote-access domain.
+ * Assembly wiring for the remote-access domain, and the mounted-domain names.
  *
  * The three fixes that make a reverse-proxied entry work (per-request Host
  * ownership, the posture readout, the plain-HTTP shims) are only reachable if
@@ -8,11 +8,20 @@
  * server-mode gateway. This test pins that wiring against a context that
  * provides nothing beyond the route/inject seats, so dropping or reordering the
  * mount turns red here instead of on a remote browser.
+ *
+ * The second test pins the one thing a `toContain` check cannot: the name a
+ * domain is mounted under. `capability-parity` only asserts that a manifest name
+ * appears somewhere in `src`, and a retired domain name keeps appearing there
+ * for as long as its settings namespace, its wizard route and its settings page
+ * stay supported, so that check passes whether or not the domain was renamed.
+ * Mount names are the capability inventory, so they are read back from the
+ * assembly and compared against the manifest list in both directions.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { describe, expect, it } from 'vitest'
 import { assembleServices } from '../src/host/services/index.ts'
+import manifest from './capability-parity.manifest.json'
 import {
   CLIPBOARD_SHIM_SCRIPT,
   HOST_ACCESS_BOOT_PATH,
@@ -31,11 +40,13 @@ function harness(): {
   routes: WebRoute[]
   inject(): InjectionRow[]
   diagnostics: Array<{ service: string; phase: string }>
+  mounted: string[]
 } {
   const store = new Map<string, unknown>()
   const routes: WebRoute[] = []
   const listeners: Array<(table: InjectionRow[]) => void> = []
   const diagnostics: Array<{ service: string; phase: string }> = []
+  const mounted: string[] = []
   const ctx = {
     get: (name: string, strict?: boolean) => {
       if (store.has(name)) return store.get(name)
@@ -71,6 +82,7 @@ function harness(): {
       return table
     },
     diagnostics,
+    mounted,
   }
 }
 
@@ -92,6 +104,31 @@ describe('remote-access assembly wiring', () => {
     ])
 
     expect(built.diagnostics.filter(row => row.service === 'remote-access')).toEqual([])
+    await expect(dispose()).resolves.toBeUndefined()
+  })
+})
+
+describe('mounted domain inventory', () => {
+  it('mounts the superagent domain and the parity manifest names that same domain', async () => {
+    const built = harness()
+    const dispose = assembleServices(built.ctx, {
+      noBrowserAuth: true,
+      onMount: name => built.mounted.push(name),
+    })
+
+    // The assembly is the fact source: this is the name the owner holds the
+    // domain's disposer under, so it is the name an operator and the assembly
+    // diagnostics see.
+    expect(built.mounted).toContain('superagent')
+    expect(built.mounted).not.toContain('lark-inbox')
+
+    // The manifest is the inventory a reader trusts, so it has to agree. Without
+    // this half the rename is unguarded: `capability-parity` cannot tell the two
+    // names apart because the retired name legitimately survives in the settings
+    // namespace, the wizard route and the client settings page.
+    expect(manifest.hostServices).toContain('superagent')
+    expect(manifest.hostServices).not.toContain('lark-inbox')
+
     await expect(dispose()).resolves.toBeUndefined()
   })
 })

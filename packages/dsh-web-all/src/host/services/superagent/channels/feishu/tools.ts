@@ -15,10 +15,10 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool, type GenericCallView, type ToolDefinition } from '@deepseek-ai/dsh-tools'
-import type { LarkInboxEnvelope } from '../../../core/lark-inbox/queue.ts'
+import type { LarkInboxEnvelope } from '../../../../../core/lark-inbox/queue.ts'
 import type { InboxItem, InboxStore, InboxSettleStatus } from './inbox-store.ts'
 import type { GatewayHealth } from './gateway.ts'
-import { registerResources } from '../resources.ts'
+import { registerResources } from '../../../resources.ts'
 
 const NOT_RUNNING = 'dsh-lark-inbox 未运行：请在「飞书」设置页填写应用凭据（appId/appSecret）并启用插件'
 const NO_REPLY_TARGET = 'lark_inbox_reply 需要 event_id（从 lark_inbox_peek/pop 得到）或 chat_id 之一'

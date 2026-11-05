@@ -43,7 +43,7 @@
     "family-namespaces",
     "feishu",
     "git-graph",
-    "lark-inbox",
+    "superagent",
     "lifecycle",
     "no-browser-auth",
     "playwright-sessions",

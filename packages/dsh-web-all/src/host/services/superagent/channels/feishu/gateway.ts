@@ -22,7 +22,7 @@
  */
 
 import { Client, Domain, EventDispatcher, WSClient } from '@larksuiteoapi/node-sdk'
-import { mentionsBot } from '../../../core/lark-inbox/gating.ts'
+import { mentionsBot } from '../../../../../core/lark-inbox/gating.ts'
 
 export type LarkDomain = 'feishu' | 'lark'
 

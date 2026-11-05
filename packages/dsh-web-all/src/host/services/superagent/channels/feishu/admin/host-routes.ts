@@ -12,7 +12,7 @@ import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { WizardSettingsUnavailableError, type LarkWizard, type WizardPhase } from './wizard.ts'
-import { isLoopbackRequest } from '../access-trust/trust.ts'
+import { isLoopbackRequest } from '../../../../access-trust/trust.ts'
 
 export const LARK_WIZARD_PREFIX = '/lark-inbox/wizard'
 const BODY_LIMIT = 16 * 1024

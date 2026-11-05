@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { REPAIR_COOLDOWN_MS, createResponderWatchdog } from '../src/host/services/lark-inbox/responder-watchdog.ts'
+import { REPAIR_COOLDOWN_MS, createResponderWatchdog } from '../src/host/services/superagent/channels/feishu/admin/responder-watchdog.ts'
 
 /** A watchdog over mutable flags, so a test can express "the repair worked". */
 function harness(options: { expected?: boolean; present?: boolean; repairWorks?: boolean } = {}) {

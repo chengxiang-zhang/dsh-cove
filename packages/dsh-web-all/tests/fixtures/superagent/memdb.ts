@@ -20,10 +20,17 @@ export const INBOX_EVENTS_DDL = `CREATE TABLE IF NOT EXISTS inbox_events (
   message_id TEXT NOT NULL DEFAULT ''
 )`
 
+/** The two indexes InboxStore creates next to the table (channels/feishu/inbox-store.ts). */
+export const INBOX_EVENTS_INDEXES = [
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_events_message ON inbox_events(message_id) WHERE message_id <> ''",
+  'CREATE INDEX IF NOT EXISTS idx_inbox_events_claim ON inbox_events(status, received_at)',
+] as const
+
 /** A database holding only the channel's `inbox_events`, as before any superagent migration. */
 export function openInboxOnlyDb(): DatabaseSync {
   const db = new DatabaseSync(':memory:')
   db.exec(INBOX_EVENTS_DDL)
+  for (const sql of INBOX_EVENTS_INDEXES) db.exec(sql)
   return db
 }
 

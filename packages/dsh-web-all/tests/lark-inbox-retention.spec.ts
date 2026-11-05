@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { INBOX_EVENT_TYPE, type LarkInboxEnvelope } from '../src/core/lark-inbox/queue.ts'
 import { replyJobId, replySessionId } from '../src/core/lark-inbox/reply-machine.ts'
-import { InboxStore } from '../src/host/services/lark-inbox/inbox-store.ts'
+import { InboxStore } from '../src/host/services/superagent/channels/feishu/inbox-store.ts'
 
 const OWNER = 'ou_owner'
 const CHAT = 'oc_chat'

@@ -23,8 +23,8 @@
  * fake clock and a fake sender.
  */
 
-import { clearBotSessions, isBotSession, markBotSession } from '../feishu/index.ts'
-import type { LarkInboxEnvelope } from '../../../core/lark-inbox/queue.ts'
+import { clearBotSessions, isBotSession, markBotSession } from '../../../feishu/index.ts'
+import type { LarkInboxEnvelope } from '../../../../../core/lark-inbox/queue.ts'
 import {
   PROACTIVE_MAX_PER_HOUR,
   PROACTIVE_MIN_RUN_MS,
@@ -34,7 +34,7 @@ import {
   REPLY_STEER_MAX_PER_JOB,
   REPLY_STEER_MIN_DEADLINE_LEFT_MS,
   REPLY_STEER_RETRIES,
-} from './config.ts'
+} from './admin/config.ts'
 import {
   ACK_REPLY_TOKEN,
   admitReply,
@@ -56,9 +56,9 @@ import {
   type RouterMode,
   type SteerMode,
   type SteerVerdict,
-} from '../../../core/lark-inbox/reply-machine.ts'
-import type { AutoReplyConfig } from './config.ts'
-import type { AuditEvent, AuditSink } from './audit.ts'
+} from '../../../../../core/lark-inbox/reply-machine.ts'
+import type { AutoReplyConfig } from './admin/config.ts'
+import type { AuditEvent, AuditSink } from './admin/audit.ts'
 import type { InboxStore } from './inbox-store.ts'
 import type { ReplyJob } from './reply-store.ts'
 

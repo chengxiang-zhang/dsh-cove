@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { bindReplySession } from '../src/host/services/lark-inbox/session-binding.ts'
+import { bindReplySession } from '../src/host/services/superagent/channels/feishu/session-binding.ts'
 
 describe('bindReplySession', () => {
   it('reports a fresh create as not adopted', async () => {

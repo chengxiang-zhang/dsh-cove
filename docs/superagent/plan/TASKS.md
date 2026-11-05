@@ -78,7 +78,7 @@
 
 写域：`SA/protocol/db.ts`、`FX/memdb.ts`、`TS/superagent-db.spec.ts`
 
-1. `VT tests/superagent-db.spec.ts` → passed=16、failed=0 → 去掉 `sa_outbox` 的 `words <= 100` CHECK，第 5 条红。
+1. `VT tests/superagent-db.spec.ts` → passed=18、failed=0 → 去掉 `sa_outbox` 的 `words <= 100` CHECK，第 5 条红。
 2. `VT tests/lark-inbox-inbound.spec.ts tests/lark-inbox-retention.spec.ts` → passed 与 W1 末相同、failed=0 → migrate 给 `inbox_events` 加无默认值的 `NOT NULL` 列，两个 spec 红。
 3. `grep -nE "homedir|DSH_HOME|\.dsh/" packages/dsh-web-all/src/host/services/superagent/protocol/db.ts` → 空输出 → 在 db.ts 写 `join(homedir(), '.dsh')`，非空。
 

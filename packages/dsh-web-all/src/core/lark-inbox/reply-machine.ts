@@ -14,7 +14,7 @@
  *    failure this repository already paid for was a bot that looked configured
  *    and never answered.
  * 2. A batch is keyed by a message, not by an event. Feishu redelivers under a
- *    new event id after a reconnect (see `host/services/lark-inbox/inbox-store.ts`),
+ *    new event id after a reconnect (see `host/services/superagent/channels/feishu/inbox-store.ts`),
  *    so an idempotency key derived from the event id would answer twice while
  *    one derived from the first message id stays stable across the retry.
  */

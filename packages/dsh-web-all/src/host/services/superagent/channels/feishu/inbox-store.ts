@@ -35,7 +35,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { envelopeToLine, inboxFilePath, type LarkInboxEnvelope } from '../../../core/lark-inbox/queue.ts'
+import { envelopeToLine, inboxFilePath, type LarkInboxEnvelope } from '../../../../../core/lark-inbox/queue.ts'
 import { ReplyStore } from './reply-store.ts'
 
 const DEFAULT_MAX_ATTEMPTS = 5

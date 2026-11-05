@@ -80,7 +80,7 @@ function fakeEntry(value: Record<string, unknown>, options: { writable?: boolean
 
 describe('Feishu settings field inventory', () => {
   it('covers every lark-inbox schema field except the read-only legacy credentials', async () => {
-    const declared = schemaFields(await source('src/host/services/lark-inbox/config.ts'), 'export const Config = z.object({')
+    const declared = schemaFields(await source('src/host/services/superagent/channels/feishu/admin/config.ts'), 'export const Config = z.object({')
     // `appId` / `appSecret` stay in the old namespace only so an installation
     // configured before the shared namespace keeps working; the page never
     // writes them (the wizard owns the automatic path, the credential form owns

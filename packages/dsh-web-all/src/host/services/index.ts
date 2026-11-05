@@ -7,7 +7,7 @@ import * as worktree from './worktree/index.ts'
 import * as gitGraph from './git-graph/index.ts'
 import * as rightPane from './right-pane/index.ts'
 import * as feishu from './feishu/index.ts'
-import * as larkInbox from './lark-inbox/index.ts'
+import * as superagent from './superagent/index.ts'
 import * as notify from './notify/index.ts'
 import * as playwrightSessions from './playwright-sessions/index.ts'
 import * as noBrowserAuth from './no-browser-auth/index.ts'
@@ -28,6 +28,16 @@ export interface ServiceAssemblyDeps {
   externalSession?: import('./external-session/config.ts').ExternalSessionConfig
   /** Structured registration/disposal diagnostics, primarily for tests. */
   onDiagnostic?: (diagnostic: ServiceRegistrationDiagnostic) => void
+  /**
+   * Called with each domain name as it is mounted, in mount order.
+   *
+   * A successful mount otherwise leaves no trace: the owner keeps the domain
+   * name only inside its disposer table, so a test cannot tell which names the
+   * assembly actually used. Renaming a domain is a user-visible contract change
+   * (the name is the row in the capability inventory), so the name has to be
+   * observable without a registration failing first.
+   */
+  onMount?: (service: string) => void
 }
 
 function warn(ctx: Context, diagnostic: ServiceRegistrationDiagnostic): void {
@@ -47,7 +57,10 @@ export function assembleServices(ctx: Context, deps: ServiceAssemblyDeps = {}): 
       deps.onDiagnostic?.(diagnostic)
     },
   })
-  const mount = (name: string, register: () => () => void | Promise<void>): void => owner.mount(name, register)
+  const mount = (name: string, register: () => () => void | Promise<void>): void => {
+    deps.onMount?.(name)
+    owner.mount(name, register)
+  }
 
   // The admission decision every privileged host route family consults. Mount
   // it first: the families resolve it lazily, but an earlier mount keeps the
@@ -63,7 +76,10 @@ export function assembleServices(ctx: Context, deps: ServiceAssemblyDeps = {}): 
   // Mounted before the two Feishu consumers: it owns the one answer to "which
   // application is this host talking to", which they both resolve through.
   mount('feishu', () => feishu.register(ctx))
-  mount('lark-inbox', () => larkInbox.register(ctx))
+  // The superagent domain owns the Feishu channel (the former standalone inbox
+  // domain) and will own the secretary modules beside it, so the assembly keeps
+  // one row per capability while the inside stays modular.
+  mount('superagent', () => superagent.register(ctx))
   // Mounted straight after the inbox because it is the same integration's
   // outbound half and borrows its credentials when it has none of its own.
   // It only subscribes and serves one read route, so it consults the fence
@@ -89,6 +105,7 @@ export function assembleServices(ctx: Context, deps: ServiceAssemblyDeps = {}): 
     dshHome: deps.dshHome,
   }))
 
+  deps.onMount?.('playwright-sessions')
   owner.track('playwright-sessions', playwrightSessions.register(ctx, deps.playwright ?? {}, owner.signal))
   return owner.dispose
 }

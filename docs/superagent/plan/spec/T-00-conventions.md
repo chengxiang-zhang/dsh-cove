@@ -35,6 +35,14 @@ vitest 的读数口径：输出末尾 `Tests  <passed> passed (<total>)` 与退�
 | G5 | `grep -rnP '[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}]' <本任务写域>` | 空输出 | 在注释里放一个 emoji，输出非空 |
 | G6 | `grep -rnE "new DatabaseSync\|\\.exec\\(['\"\`]BEGIN" SA --include=*.ts \| grep -vE 'SA/(protocol/db\|kernel/ledger)\\.ts'`（把 SA 展开） | 空输出（P1：只有协议建库、只有账本开写事务） | 在 `SA/memory/log.ts` 写 `db.exec('BEGIN')`，输出非空 |
 
+### G6 补丁（Lead 授权追加，原表不改）
+
+- `new DatabaseSync` 与 `.exec('BEGIN…')` 的白名单是三处：`SA/protocol/db.ts`（建库、迁移事务）、`SA/kernel/ledger.ts`（唯一账本写事务）、`SA/channels/**`（通道自带的遗留 store，如 `channels/feishu/inbox-store.ts`、`reply-store.ts`）。
+- 执行时把 G6 命令的排除正则换成 `grep -vE 'SA/(protocol/db\.ts|kernel/ledger\.ts|channels/)'`（把 SA 展开）。
+- G6 只是连接与事务的入口围栏。账本不变量是"只有 kernel 写 `sa_*` 表"，由两道机制承担：T08 运行时按 `TABLE_OWNERS` 校验 `tx.run` 的目标表（越权抛 `TABLE_NOT_OWNED`），以及 T28 静态扫描。通道的遗留 store 不得写任何 `sa_*` 表。
+
+Lead 裁定 2026-11-05：G6 白名单含 channels/**
+
 ## 测试夹具（FX）
 
 | 文件 | 由谁建 | 内容 |

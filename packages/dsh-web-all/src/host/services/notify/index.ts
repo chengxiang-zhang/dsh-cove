@@ -46,7 +46,7 @@ import { familyNamespace, onFamilyConfigChange } from '../family-config.ts'
 import { FEISHU_SETTINGS_NAMESPACE, type FeishuConfig } from '../feishu/config.ts'
 import { isBotSession } from '../feishu/bot-sessions.ts'
 import { describeFeishuCredentials } from '../feishu/credentials.ts'
-import { LARK_INBOX_SETTINGS_NAMESPACE, type LarkInboxConfig } from '../lark-inbox/config.ts'
+import { LARK_INBOX_SETTINGS_NAMESPACE, type LarkInboxConfig } from '../../../core/lark-inbox/config-shape.ts'
 import {
   NOTIFY_SETTINGS_NAMESPACE,
   effectiveConfig,

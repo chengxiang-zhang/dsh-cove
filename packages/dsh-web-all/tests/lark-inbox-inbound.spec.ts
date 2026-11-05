@@ -16,10 +16,10 @@ import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { gateEvent, mentionsBot } from '../src/core/lark-inbox/gating.ts'
 import { describeContent, toEnvelope } from '../src/core/lark-inbox/queue.ts'
 import { bindFamilyConfig, notifyFamilyConfigChange } from '../src/host/services/family-config.ts'
-import { LarkGateway, extractMentionOpenIds, type GatewaySdk } from '../src/host/services/lark-inbox/gateway.ts'
-import { register } from '../src/host/services/lark-inbox/index.ts'
-import { InboxStore } from '../src/host/services/lark-inbox/inbox-store.ts'
-import { createInboxTools, replyToInboxMessage, type InboxReplySender } from '../src/host/services/lark-inbox/tools.ts'
+import { LarkGateway, extractMentionOpenIds, type GatewaySdk } from '../src/host/services/superagent/channels/feishu/gateway.ts'
+import { register } from '../src/host/services/superagent/channels/feishu/index.ts'
+import { InboxStore } from '../src/host/services/superagent/channels/feishu/inbox-store.ts'
+import { createInboxTools, replyToInboxMessage, type InboxReplySender } from '../src/host/services/superagent/channels/feishu/tools.ts'
 
 /** The optional third argument a reply may carry, taken from the contract itself. */
 type SenderTarget = Parameters<InboxReplySender['send']>[2]

@@ -87,7 +87,7 @@
 | 按会话隔离的 agent 浏览器（Playwright/CDP/扩展租约、mcp__playwright__ 工具面） | `host/services/playwright-sessions` | 1,182 行 | `dsh-mcp-client` 只能挂静态 MCP，无法按会话拉起与回收 |
 | 自动化任务的「每次新会话」运行目标 | `host/services/schedule-mode` | 1,562 行 | 原生把投递冻结为 `ScheduleDeliveryMode = 'host'`，投递永不离开所属会话 |
 | 运行结束通知：feed、跨端徽章、飞书推送 | `host/services/notify` | 832 行 + 客户端 92 行 | 无通知包；`dsh-jobs` 只做会话内通知 |
-| 飞书 bot 入站收件箱与 peek/pop/ack 工具 | `host/services/lark-inbox` | 992 行 | 无 IM 入站 seam |
+| 飞书 bot 入站收件箱与 peek/pop/ack 工具 | `host/services/superagent/channels/feishu` | 992 行 | 无 IM 入站 seam |
 | 浏览器渲染的 web_fetch provider | `host/services/web-render` | 529 行 | 原生只有 `dsh-web-fetch-http`，无 JS 渲染 |
 | 只回 citation 的 search provider | `host/services/web-search-anthropic` | 637 行 | `dsh-web-search-deepseek` 在缺 `web_search_tool_result` 时直接报错，属判据 4 的暂存 workaround |
 | 项目持久记忆面板与记录工具 | `host/services/memoir` | 834 行 | `dsh-agent-instructions` 只读 AGENTS.md 链，无写入口 |

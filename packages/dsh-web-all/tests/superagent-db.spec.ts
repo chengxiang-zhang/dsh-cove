@@ -7,8 +7,9 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { PHYSICAL, SA_TABLES, migrate, selfCheck } from '../src/host/services/superagent/protocol/db.ts'
-import { openInboxOnlyDb, openTestLedgerDb, seedInbound } from './fixtures/superagent/memdb.ts'
+import { DatabaseSync as Sqlite } from 'node:sqlite'
+import { LedgerSchemaError, PHYSICAL, SA_TABLES, TABLE_OWNERS, migrate, selfCheck } from '../src/host/services/superagent/protocol/db.ts'
+import { INBOX_EVENTS_DDL, INBOX_EVENTS_INDEXES, openInboxOnlyDb, openTestLedgerDb, seedInbound } from './fixtures/superagent/memdb.ts'
 
 type Row = Record<string, string | number | null>
 
@@ -58,6 +59,21 @@ const attempt = (over: Row = {}): Row => ({
   state: 'pending', created_at: 1, ...over,
 })
 
+// The 02 object catalogue, column "归属模块", copied as data. workspace is N7 (world).
+// intake reads "内核创建、判断处置": the creator, the kernel, owns the row.
+const CATALOGUE_OWNERS: ReadonlyArray<readonly [logical: string, owner02: string]> = [
+  ['inbox_event', '通道'], ['party', '世界模型'], ['desk', '桌子'], ['intake', '内核'], ['commitment', '内核'],
+  ['assumption', '判断'], ['attempt', '执行体'], ['journal', '内核'], ['outbox', '内核'], ['lease', '内核'],
+  ['memory', '记忆'], ['rule', '规则'], ['rule_replay', '规则'], ['rule_conflict', '规则'],
+  ['world_entity', '世界模型'], ['world_alias', '世界模型'], ['world_addr', '世界模型'], ['mandate', '世界模型'],
+  ['workspace', '世界模型'], ['work_class', '规则'], ['autonomy', '规则'], ['speculation', '时机与措辞'],
+  ['deliberation', '桌子'], ['subscription', '判断'], ['doc_index', '记忆'], ['degrade_event', '恢复与降级'],
+]
+const MODULE_OF: Readonly<Record<string, string>> = {
+  通道: 'channels', 世界模型: 'world', 桌子: 'desk', 内核: 'kernel', 判断: 'judgment', 执行体: 'executors',
+  记忆: 'memory', 规则: 'rules', 时机与措辞: 'timing', 恢复与降级: 'recovery',
+}
+
 describe('superagent protocol DDL', () => {
   it('1. creates exactly the 25 sa_ tables named by PHYSICAL', () => {
     const db = openTestLedgerDb()
@@ -65,6 +81,11 @@ describe('superagent protocol DDL', () => {
     expect(expected).toHaveLength(25)
     expect(saTables(db)).toEqual(expected)
     expect([...SA_TABLES].sort()).toEqual(expected)
+    // Owners equal the 02 catalogue row by row, and no table is left out.
+    const fromCatalogue = Object.fromEntries(CATALOGUE_OWNERS.map(([logical, owner]) =>
+      [PHYSICAL[logical as keyof typeof PHYSICAL], MODULE_OF[owner]]))
+    expect(Object.keys(fromCatalogue)).toHaveLength(26)
+    expect({ ...TABLE_OWNERS }).toEqual(fromCatalogue)
   })
 
   it('2. a second migrate is a no-op: added=[] and the table count is unchanged', () => {
@@ -189,6 +210,39 @@ describe('superagent protocol DDL', () => {
     const check = selfCheck(db)
     expect(check.ok).toBe(false)
     expect(check.ok ? [] : check.missing).toContain('sa_outbox.words')
+  })
+
+  it('17. migrates a production-shaped inbox store with rows in place', () => {
+    // DDL and indexes copied from channels/feishu/inbox-store.ts (not imported).
+    const db = new Sqlite(':memory:')
+    db.exec(INBOX_EVENTS_DDL)
+    for (const sql of INBOX_EVENTS_INDEXES) db.exec(sql)
+    const statuses = ['pending', 'claimed', 'done', 'failed', 'done']
+    for (let i = 0; i < 5; i++) {
+      const payload = JSON.stringify({ eventId: `evt-${i}`, eventType: 'im.message.receive_v1', messageId: `om_${i}`,
+        chatId: 'oc_prod', chatType: i % 2 ? 'group' : 'p2p', senderOpenId: `ou_${i}`, text: `message ${i}`, receivedAt: 1_762_300_000_000 + i })
+      seedInbound(db, { event_id: `evt-${i}`, file: `/q/im.message.receive_v1/2026-11-05.jsonl`, status: statuses[i], attempts: i,
+        received_at: 1_762_300_000_000 + i, updated_at: 1_762_300_000_500 + i, payload: payload + '\n', message_id: `om_${i}` })
+    }
+    const before = db.prepare('SELECT * FROM inbox_events ORDER BY event_id').all() as Row[]
+    migrate(db)
+    const after = db.prepare('SELECT * FROM inbox_events ORDER BY event_id').all() as Row[]
+    expect(after).toHaveLength(5)
+    expect(after.every(row => row.owner === null)).toBe(true)
+    expect(after.map(({ owner: _o, ...rest }) => rest)).toEqual(before)
+    expect(saTables(db)).toHaveLength(25)
+    expect(selfCheck(db)).toEqual({ ok: true })
+  })
+
+  it('18. refuses to migrate a database without inbox_events, with a named error', () => {
+    const db = new Sqlite(':memory:')
+    let caught: unknown
+    try { migrate(db) } catch (error) { caught = error }
+    expect(caught).toBeInstanceOf(LedgerSchemaError)
+    expect((caught as LedgerSchemaError).code).toBe('INBOX_STORE_FIRST')
+    expect((caught as Error).message).toMatch(/InboxStore\.open/)
+    // Nothing was created: no silent table, no partial schema.
+    expect(db.prepare("SELECT count(*) AS n FROM sqlite_master").get()).toEqual({ n: 0 })
   })
 
   it('16. sa_attempt: running needs a budgeted deliver, and one live attempt per commitment', () => {

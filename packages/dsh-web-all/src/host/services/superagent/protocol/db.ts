@@ -47,7 +47,18 @@ export interface LedgerReader {
   all<T>(sql: string, ...params: SqlParam[]): T[]
 }
 
-export type OwnerModule = 'kernel' | 'world' | 'memory' | 'rules' | 'desk' | 'judgment' | 'timing' | 'executors' | 'recovery'
+/** Owning module per the 02 object catalogue ("归属模块"); `channels` owns the pre-existing inbox_events. */
+export type OwnerModule = 'channels' | 'kernel' | 'world' | 'memory' | 'rules' | 'desk' | 'judgment' | 'timing' | 'executors' | 'recovery'
+
+/** Named schema error; `code` is stable for callers that log a diagnostic and skip mounting. */
+export class LedgerSchemaError extends Error {
+  readonly code: 'INBOX_STORE_FIRST'
+  constructor(code: 'INBOX_STORE_FIRST', message: string) {
+    super(message)
+    this.name = 'LedgerSchemaError'
+    this.code = code
+  }
+}
 
 // ---------------------------------------------------------------------------
 // DDL helpers
@@ -366,7 +377,7 @@ const TABLE_SPECS: readonly TableSpec[] = [
     ],
   },
   {
-    logical: 'deliberation', owner: 'kernel', mutable: true, primaryKey: ['deliberation_id'],
+    logical: 'deliberation', owner: 'desk', mutable: true, primaryKey: ['deliberation_id'],
     columns: [
       ['deliberation_id', TEXT_NN], ['request_id', TEXT_NN], ['desk_id', TEXT], ['commitment_id', TEXT],
       ['trigger_kind', enumNN('trigger_kind', TRIGGER_KINDS)], ['state', enumNN('state', DELIBERATION_STATES)],
@@ -382,7 +393,7 @@ const TABLE_SPECS: readonly TableSpec[] = [
     },
   },
   {
-    logical: 'subscription', owner: 'kernel', mutable: true, primaryKey: ['thread_key'],
+    logical: 'subscription', owner: 'judgment', mutable: true, primaryKey: ['thread_key'],
     columns: [['thread_key', TEXT_NN], ['commitment_id', TEXT_NN], ['attempt_id', TEXT_NN], ['input_seq', COUNT]],
   },
   {
@@ -409,9 +420,13 @@ function allColumns(spec: TableSpec): readonly Column[] {
 const INBOX_OWNER_DEF = `TEXT CHECK (owner IS NULL OR owner IN (${list(OWNERS)}))`
 const INBOX_OWNER_TRIGGER = `BEFORE UPDATE OF owner ON ${T.inbox_event} WHEN OLD.owner IS NOT NULL AND NEW.owner IS NOT OLD.owner BEGIN SELECT RAISE(ABORT, 'OWNER_ALREADY_SET'); END`
 
-/** Physical table to the module allowed to write it (README edge table). */
+/**
+ * Physical table to its owning module, as listed in the 02 object catalogue.
+ * The kernel writes `inbox_events.owner` only (claim CAS); the ledger grants that
+ * single column, not the table.
+ */
 export const TABLE_OWNERS: Readonly<Record<string, OwnerModule>> = Object.freeze({
-  [T.inbox_event]: 'kernel',
+  [T.inbox_event]: 'channels',
   ...Object.fromEntries(TABLE_SPECS.map(spec => [T[spec.logical], spec.owner])),
 })
 
@@ -452,6 +467,12 @@ function addColumn(db: Db, table: string, [name, def]: Column): void {
 function migrateBody(db: Db): string[] {
   const added: string[] = []
   const tables = schemaNames(db, 'table')
+  // Start-order contract: the channel store creates inbox_events first, then the
+  // protocol migrates the same file. Never create the channel's table here.
+  if (!tables.has(T.inbox_event)) {
+    throw new LedgerSchemaError('INBOX_STORE_FIRST',
+      'superagent ledger: inbox_events not found; open the channel inbox store (InboxStore.open) on this database before protocol migrate')
+  }
   for (const spec of TABLE_SPECS) {
     const table = T[spec.logical]
     if (!tables.has(table)) {
@@ -473,13 +494,11 @@ function migrateBody(db: Db): string[] {
     }
   }
   // inbox_events belongs to the channel; only the owner column and its CAS trigger are ours.
-  if (tables.has(T.inbox_event)) {
-    if (!columnNames(db, T.inbox_event).has('owner')) {
-      db.exec(`ALTER TABLE ${T.inbox_event} ADD COLUMN owner ${INBOX_OWNER_DEF}`)
-      added.push(`${T.inbox_event}.owner`)
-    }
-    db.exec(`CREATE TRIGGER IF NOT EXISTS sa_inbox_owner_cas ${INBOX_OWNER_TRIGGER}`)
+  if (!columnNames(db, T.inbox_event).has('owner')) {
+    db.exec(`ALTER TABLE ${T.inbox_event} ADD COLUMN owner ${INBOX_OWNER_DEF}`)
+    added.push(`${T.inbox_event}.owner`)
   }
+  db.exec(`CREATE TRIGGER IF NOT EXISTS sa_inbox_owner_cas ${INBOX_OWNER_TRIGGER}`)
   return added
 }
 

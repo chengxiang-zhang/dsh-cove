@@ -32,9 +32,9 @@ import {
   effectiveConfig,
   withRouterContract,
   type AutoReplyConfig,
-} from '../src/host/services/lark-inbox/config.ts'
-import { InboxStore } from '../src/host/services/lark-inbox/inbox-store.ts'
-import { ACK_FALLBACK_TEXT, REPLY_ACK_EMOJI, ReplyResponder } from '../src/host/services/lark-inbox/responder.ts'
+} from '../src/host/services/superagent/channels/feishu/admin/config.ts'
+import { InboxStore } from '../src/host/services/superagent/channels/feishu/inbox-store.ts'
+import { ACK_FALLBACK_TEXT, REPLY_ACK_EMOJI, ReplyResponder } from '../src/host/services/superagent/channels/feishu/responder.ts'
 
 const OWNER = 'ou_owner'
 const CHAT = 'oc_chat'
