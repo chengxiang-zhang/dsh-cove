@@ -6,7 +6,7 @@
 
 ## 一句话
 
-它不是"更聪明的 bot"，是一台可托管的承诺事务机：内核只保证四件事（每条消息有人负责、每件承诺不丢、时间会推、出口唯一）；"像秘书"的全部内容（接不接、什么时候说、怎么说、记什么、能碰哪些机器、谁能让它干什么）都挂在扩展点上，改这些不动内核。
+它不是"更聪明的 bot"，是一台可托管的承诺事务机；飞书只是它的一种接入通道（原 lark-inbox 已并入 `channels/feishu`），CLI 与 Web 同样接得进来：内核只保证四件事（每条消息有人负责、每件承诺不丢、时间会推、出口唯一）；"像秘书"的全部内容（接不接、什么时候说、怎么说、记什么、能碰哪些机器、谁能让它干什么）都挂在扩展点上，改这些不动内核。
 
 ## 权威顺序
 
@@ -146,14 +146,15 @@ packages/dsh-web-all/src/host/services/superagent/
   surface/{templates,commands,panel}.ts       模板、命令、面板
   executors/{profiles,attempts,closure,escalate,probes/}.ts
   recovery/{reconcile,lease,degrade}.ts
-  channels/feishu/{inbound,send,react,audience}.ts  接入通道；飞书只是其一
+  channels/feishu/{inbound,send,react,audience,admin/}.ts  飞书通道（原 lark-inbox 并入）
+  channels/                                    其它入口：CLI、Web、API
   capabilities/                               能力插件
   index.ts                                    组合根
 
 scripts/superagent-check.mjs                  七步链机械检查（只读账本），归恢复与降级
 ```
 
-挂载：新服务域在 `host/services/index.ts` 的 lark-inbox 之后挂载；`cordis.patch.yml` 保持恰好一行 `- id: web-all`（F22）。上线需要用户重启 DSH 服务后生效，本仓库任何流程不重启 3080（F23）。
+挂载：用 `superagent` 一个服务域替换现在 `host/services/index.ts:66` 的 `lark-inbox` 挂载，服务域数量不变；`cordis.patch.yml` 保持恰好一行 `- id: web-all`（F22）。上线需要用户重启 DSH 服务后生效，本仓库任何流程不重启 3080（F23）。
 
 ## 三条阅读路径
 
