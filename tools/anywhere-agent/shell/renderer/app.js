@@ -138,9 +138,9 @@ function activeTab(tabs) {
  * The window's refresh command.
  *
  * One command for the control and the keyboard, and it only asks: the main process owns
- * every page, so re-reading is what replaces the screen - the same call the View menu
- * makes. Whether a page is reloaded, and which one, is decided there
- * (`reloadActiveWorkspace`), never here.
+ * every page, and it replaces the page on screen before it re-reads anything, so the
+ * answer to this call is not what makes the screen move. Whether a page is reloaded, and
+ * which one, is decided there (`refreshScreen`).
  *
  * The answer is deliberately not assigned back to `snapshot`: that reading is the agent's
  * half, and the strip's own state is pushed separately. Replacing what this file holds
@@ -150,7 +150,13 @@ async function refreshScreen() {
   if (typeof api.refresh !== 'function') {
     return;
   }
-  await api.refresh();
+  try {
+    await api.refresh();
+  } catch (error) {
+    // The main process already reports the read's own failure; a rejected IPC call here
+    // must not also become an unhandled rejection in the window.
+    console.error('refresh failed', error);
+  }
 }
 
 /* ------------------------------------------------------------------ rendering */
@@ -1109,6 +1115,14 @@ async function start() {
     api.onMenu('open-server-field', showServerField);
     api.onMenu('new-tab', () => call('openHome'));
     api.onMenu('close-tab', () => call('close', tabsOf(snapshot).activeId));
+    // The native layers (the View menu, the tray, a key pressed while a page has focus)
+    // only say that the person asked; the command and its lock are this window's, so a
+    // locked control cannot be bypassed by pressing the same key from somewhere else.
+    api.onMenu('refresh-key', () => {
+      if (!el.refresh.disabled) {
+        void refreshScreen();
+      }
+    });
   }
   if (typeof api.onSnapshot === 'function') {
     api.onSnapshot((next) => {

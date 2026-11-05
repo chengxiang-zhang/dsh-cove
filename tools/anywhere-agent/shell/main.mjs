@@ -1568,6 +1568,8 @@ function workspaceViewFor(entry) {
     webPreferences: { partition: PARTITION, contextIsolation: true, nodeIntegration: false },
   });
   view.setBackgroundColor(windowBackground());
+  // The page has focus most of the time, so this is the layer that has to answer ⌘R.
+  wireRefreshKey(view.webContents);
   // A machine's page is a page like any other: its links are routed by the same rule, so
   // an overlay link becomes a tab and a public one leaves for the platform browser.
   installPageLinkRouting(view);
@@ -1847,6 +1849,90 @@ function reloadActiveWorkspace() {
 }
 
 /**
+ * How close together two refresh commands may be before the second is a duplicate.
+ *
+ * The command has more than one entry point on purpose (control, window keydown, a page's
+ * own key layer, the View menu, the tray), and two of them can answer one keystroke: the
+ * accelerator is AppKit's, the key layer is ours. Collapsing that pair here is what keeps
+ * "one press, one reload" true whichever layer got there first, and it also absorbs a
+ * double click on the control.
+ */
+const SCREEN_REFRESH_DEBOUNCE_MS = 400;
+let lastScreenRefreshAt = 0;
+
+/**
+ * The one refresh command: replace the page now, bring the reading up to date after.
+ *
+ * The order is the whole point. `refreshAgent` probes this machine's host, its kernel and
+ * every machine in the list; on a network where one machine does not answer that takes
+ * seconds, and it can fail outright. A refresh is pressed because the screen already looks
+ * stuck, so waiting for that read before replacing the page made the control look dead -
+ * and a rejected read meant `then` never ran, so nothing happened at all. The page is
+ * replaced first, synchronously; the read follows in the background, its result arrives
+ * through the same snapshot push as every other read, and its failure is reported to
+ * stderr instead of cancelling the thing the person asked for.
+ *
+ * @returns {Promise<{reloaded: boolean, snapshot: object|null, error: string, skipped: boolean}>}
+ */
+async function refreshScreen() {
+  const now = Date.now();
+  if (now - lastScreenRefreshAt < SCREEN_REFRESH_DEBOUNCE_MS) {
+    return { reloaded: false, snapshot: null, error: '', skipped: true };
+  }
+  lastScreenRefreshAt = now;
+  const reloaded = reloadActiveWorkspace();
+  let snapshot = null;
+  let error = '';
+  try {
+    snapshot = await refreshAgent();
+  } catch (failure) {
+    error = String(failure?.message ?? failure);
+    process.stderr.write(`shell: the refresh read failed (${error}); the page was still replaced\n`);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('refreshed');
+  }
+  return { reloaded, snapshot, error, skipped: false };
+}
+
+/**
+ * ⌘R on the layer that actually receives it.
+ *
+ * The View menu carries the shortcut, but a page drawn in a native `WebContentsView` is
+ * its own first responder: a key pressed while that page has focus is delivered to that
+ * page and never reaches the menu item - the same reason the tab commands live in the menu
+ * *and* in the renderer. Catching the key here, before the page's own renderer sees it,
+ * makes the shortcut work wherever the focus is; `refreshScreen` collapses the case where
+ * the accelerator also fired.
+ */
+function wireRefreshKey(contents) {
+  contents.on('before-input-event', (event, input) => {
+    const accelerator = input.meta || input.control;
+    const plain = !input.shift && !input.alt;
+    if (input.type === 'keyDown' && accelerator && plain && String(input.key ?? '').toLowerCase() === 'r') {
+      event.preventDefault();
+      requestRefresh();
+    }
+  });
+}
+
+/**
+ * Asks the window to run the refresh command.
+ *
+ * The keystroke and the two menu surfaces do not run the command themselves: the window is
+ * where the lock lives (this machine still being prepared disables the control), and a key
+ * that bypassed that lock would re-run the preparation a second time. So the native
+ * layers only say "the person asked"; the window decides whether that is a refresh or a
+ * press on a control that is deliberately disabled. The banner's own retry keeps its
+ * separate path - repairing a half-installed host is exactly what the lock must not block.
+ */
+function requestRefresh() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('refresh-key');
+  }
+}
+
+/**
  * The tray is deliberately thin: connection state, open the list, quit. Anything
  * more would be a second place to look for the same information.
  */
@@ -1869,10 +1955,7 @@ function installTray() {
         { label: '打开机器列表', click: () => mainWindow?.show() },
         {
           label: '刷新',
-          click: () => refreshAgent().then(() => {
-            reloadActiveWorkspace();
-            mainWindow?.webContents.send('refresh');
-          }),
+          click: () => requestRefresh(),
         },
         { type: 'separator' },
         { label: '退出', role: 'quit' },
@@ -1993,14 +2076,7 @@ function installAppMenu() {
         {
           label: '刷新',
           accelerator: 'CommandOrControl+R',
-          click: () => {
-            // Refresh also replaces the page that is on screen: the list around it can be
-            // current while the page itself is frozen at a dead update socket.
-            refreshAgent().then(() => {
-              reloadActiveWorkspace();
-              mainWindow?.webContents.send('refreshed');
-            });
-          },
+          click: () => requestRefresh(),
         },
         {
           label: '跳到服务…',
@@ -2068,6 +2144,9 @@ function createMainWindow() {
     },
   });
   mainWindow.loadFile(join(HERE, 'renderer', 'index.html'));
+  // The renderer handles ⌘R itself while the chrome has focus; this catches the same key
+  // at the layer below, so both cases answer with the one command.
+  wireRefreshKey(mainWindow.webContents);
   // The renderer reports the page area whenever its layout changes, which is what keeps
   // the native page in step. These are the changes that happen *without* the renderer
   // being told anything, so they are also re-applied here: the frame between the window
@@ -2597,6 +2676,7 @@ function webViewFor(tabId, url) {
     webPreferences: { partition: PARTITION, contextIsolation: true, nodeIntegration: false },
   });
   view.setBackgroundColor(windowBackground());
+  wireRefreshKey(view.webContents);
   view.webContents.on('did-fail-load', (_event, code, description, failedUrl) => {
     if (code === -3) {
       return;
@@ -2846,13 +2926,14 @@ ipcMain.handle('state', async () => {
   return { ...snapshot, ...tabsPayload() };
 });
 ipcMain.handle('refresh', async (_event, select) => {
-  const snapshot = await refreshAgent(select);
-  // A plain refresh means "bring this screen up to date". It is not a connection
-  // command, so it also replaces the workspace page: the machine list can be current
-  // while the page is frozen at a dead update socket.
-  if (select === undefined || select === null || select === '') {
-    reloadActiveWorkspace();
+  // A select is a connection command (connect / disconnect), not a screen refresh: it
+  // changes the network and answers with the reading it produced.
+  if (select !== undefined && select !== null && select !== '') {
+    return refreshAgent(select);
   }
+  // A plain refresh is "this screen is stuck". The page is replaced before the slow
+  // read, so the control answers immediately; see refreshScreen().
+  const { snapshot } = await refreshScreen();
   return snapshot;
 });
 ipcMain.handle('login-status', async () => (supervisor ? supervisor.loginStatus() : { done: false, state: await currentSnapshot() }));

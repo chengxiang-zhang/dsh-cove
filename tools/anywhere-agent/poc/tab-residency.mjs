@@ -255,6 +255,24 @@ try {
   const b2 = await viewOf();
   check('the shortcut kept the page identity', b2 !== null && b2.id === b0.id, JSON.stringify(b2));
 
+  // The page itself is the layer that usually has focus, and a key pressed there never
+  // reaches the View menu: ⌘R has to be answered below the page's own renderer. The
+  // event is emitted on the view's webContents, which is the same hook a real key down
+  // takes; the renderer's own keydown above cannot answer this case.
+  process.stdout.write('\nthe page behind the chrome answers the same key\n');
+  await app.evaluate(() => {
+    const view = globalThis.__awWorkspace;
+    view.webContents.emit(
+      'before-input-event',
+      { preventDefault() {} },
+      { type: 'keyDown', key: 'r', code: 'KeyR', meta: true, control: false, shift: false, alt: false },
+    );
+  });
+  await sleep(900);
+  check('the page layer reloaded the page', countOf('/b') === 4, String(countOf('/b')));
+  const b3 = await viewOf();
+  check('the page layer kept the page identity', b3 !== null && b3.id === b0.id, JSON.stringify(b3));
+
   await page.screenshot({ path: join(args.out, 'tab-strip.png') });
 } finally {
   stderrLog.end();

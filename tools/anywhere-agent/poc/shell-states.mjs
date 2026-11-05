@@ -399,6 +399,21 @@ try {
   // knows it would try. Every read publishes, so zero publishes is "nothing was asked".
   const pushesAfterLockedPress = await page.evaluate(() => window.__awLockedPressPushes ?? -1);
   check('a locked refresh asks the main process for nothing', pushesAfterLockedPress, 0);
+
+  // The native layers (View menu, tray, a key pressed while a page has focus) do not run
+  // the sequence themselves: they hand the request to this window, which is where the
+  // lock lives. A request arriving that way must be dropped as well, or the disabled
+  // control could be bypassed from the menu the moment the page took focus.
+  const forwardedBefore = await page.evaluate(() => window.__awLockedPressPushes ?? 0);
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.webContents.send('refresh-key');
+  });
+  await page.waitForTimeout(600);
+  check(
+    'a forwarded refresh is dropped while the control is locked',
+    await page.evaluate(() => window.__awLockedPressPushes),
+    forwardedBefore,
+  );
   await page.screenshot({ path: join(args.out, `provisioning-${scheme}.png`) });
 
   // Every state, in this scheme, with its own screenshot. Order matters: `offline` runs

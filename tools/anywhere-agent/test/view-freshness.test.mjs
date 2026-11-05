@@ -83,10 +83,17 @@ test('exactly one reload path remains: the user asking for one', () => {
     1,
     `only reloadActiveWorkspace may replace a page, found ${reloads.length} reload call sites`,
   );
-  const refreshPaths = shellSource.match(/reloadActiveWorkspace\(\)/g) ?? [];
+  // One command, and the native layers only ask for it: a keystroke or a menu item that
+  // ran the sequence itself would also bypass the lock the control carries.
+  const asks = shellSource.match(/requestRefresh\(\)/g) ?? [];
   assert.ok(
-    refreshPaths.length >= 3,
-    `refresh must reload the page from the menu, the tray and the window; found ${refreshPaths.length} call sites`,
+    asks.length >= 4,
+    `the key layers, the View menu and the tray must ask the window for a refresh; found ${asks.length} references`,
+  );
+  assert.match(
+    shellSource,
+    /mainWindow\.webContents\.send\('refresh-key'\)/,
+    'the native layers hand the request to the window, where the lock lives',
   );
   const resumeAt = shellSource.indexOf("powerMonitor.on('resume'");
   assert.ok(resumeAt !== -1, 'a wake handler must still re-read the machine list');
@@ -94,6 +101,46 @@ test('exactly one reload path remains: the user asking for one', () => {
     shellSource.slice(resumeAt, resumeAt + 600),
     /reload\(/,
     'the wake handler may re-read the machine list, never replace the page',
+  );
+});
+
+test('the page is replaced before the reading that can take seconds', () => {
+  // A refresh is pressed because the screen already looks stuck, while re-reading probes
+  // the host, the kernel and every machine in the list - seconds on a network with one
+  // machine that does not answer, and a failure is possible. Reloading after that read is
+  // what made the control look dead; a rejected read also meant the reload never ran.
+  const start = shellSource.indexOf('async function refreshScreen()');
+  assert.notEqual(start, -1, 'the shell must have one refresh command');
+  const body = shellSource.slice(start, shellSource.indexOf('\n}\n', start));
+  const reloadAt = body.indexOf('reloadActiveWorkspace()');
+  const readAt = body.indexOf('refreshAgent()');
+  assert.ok(reloadAt !== -1, 'the command must replace the page');
+  assert.ok(readAt !== -1, 'the command must still bring the reading up to date');
+  assert.ok(reloadAt < readAt, 'the page must be replaced before the read that can take seconds');
+  assert.match(body, /catch/, 'a failed read must report itself instead of cancelling the replacement');
+});
+
+test('the shortcut is caught where the key is delivered, and one press reloads once', () => {
+  // The View menu carries ⌘R, but a page drawn in a native WebContentsView is its own first
+  // responder: the key goes to that page and never reaches the menu item. The key layer
+  // has to exist on the page itself.
+  const layers = shellSource.match(/wireRefreshKey\(/g) ?? [];
+  assert.ok(layers.length >= 3, `the machine page, the web page and the chrome must all answer ⌘R; found ${layers.length}`);
+  assert.match(shellSource, /before-input-event/, 'the key is caught below the page renderer');
+  assert.match(
+    shellSource,
+    /SCREEN_REFRESH_DEBOUNCE_MS/,
+    'two layers may both answer one keystroke, so the command must collapse the duplicate',
+  );
+  // The window is where the lock lives, so the forwarded request must respect it: a menu
+  // item or a keystroke must not re-run the preparation a disabled control refuses.
+  const renderer = readFileSync(fileURLToPath(new URL('../shell/renderer/app.js', import.meta.url)), 'utf8');
+  const handlerAt = renderer.indexOf("onMenu('refresh-key'");
+  assert.notEqual(handlerAt, -1, 'the renderer must answer the request the native layers forward');
+  assert.match(
+    renderer.slice(handlerAt, handlerAt + 260),
+    /el\.refresh\.disabled/,
+    'the forwarded request must honour the control lock',
   );
 });
 

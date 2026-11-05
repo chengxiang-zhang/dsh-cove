@@ -35,7 +35,7 @@ shell: reclaiming idle page dsh.a.netbird (0 min off screen)
 4. **页面只在这两种情况被销毁**：页签关闭；机器持续缺席机器列表超过 `VIEW_PRUNE_GRACE_MS`（`viewsToPrune`，目前 10 分钟，针对的是机器真的不在了，不是时间过去）。
 5. **没有任何自动重载。** 页面只在应用重启（从地址加载）、用户打开页签/点「新会话」（导航）、用户显式刷新（重载）这三种动作下被加载或替换；不按时间、不按睡眠、不按隐藏时长。判定只在 `src/view-freshness.mjs`，单测 `test/view-freshness.test.mjs`。
 6. **隐藏期间连接真断了的兜底**是 DSH 客户端自己的重连循环（500ms→10s，带抖动、持续），以及用户的显式刷新。壳不再用"屏外时长"代理"连接已死"。
-7. **刷新的入口多，重载路径只有一条。** 主进程里所有入口最后都落到 `refreshAgent` + `reloadActiveWorkspace`：`refresh` IPC（控件与窗口自身的 ⌘R 走它）、View 菜单项、托盘项各自调这两个函数（菜单和托盘是直接调的，不经过 IPC）。控件只是让"替换这个页面"在屏幕上看得见——菜单里的快捷键对不知道它的人等于不存在（2026-11-05 补）。验收拆在两处：控件在 chrome 行内、有可访问名、提示写 ⌘R、本机准备中禁用、锁定状态下按 ⌘R 不产生任何读取，在 `poc/shell-states.mjs`；点击控件替换一次屏幕上的页面、`⌘R` 只替换一次、页签条与激活页签不因刷新改变，在 `poc/tab-residency.mjs`（该脚本 24 条断言）。菜单项本身不随锁定状态变灰，本轮不动它。
+7. **刷新的入口多，命令只有一条，而且页面先换、读数后补。** 控件与窗口自身收到的 ⌘R 走 `refreshScreen` → `refresh` IPC；页面（原生视图）里的 ⌘R 在其 `before-input-event` 上接住，菜单项与托盘项也把请求转交给窗口（`requestRefresh`），窗口再按控件上的同一把锁决定是否执行——所以「本机准备中禁用」是真的禁用，不是只灰一个按钮。`refreshScreen` 的第一件事是 `reloadActiveWorkspace()`，之后才 `await refreshAgent()`：读列表要探测本机、内核与每台机器，秒级且可能失败，放在前面会让控件看起来没反应、失败时更是什么都不发生（2026-11-05 补，来自用户实测反馈）。一个按键被菜单与按键层同时看到时由 `SCREEN_REFRESH_DEBOUNCE_MS` 去重，保证「按一次、重载一次」。验收：控件在 chrome 行内、有可访问名、提示写 ⌘R、准备中禁用、锁定态按 ⌘R 与转交请求都不产生读取（`poc/shell-states.mjs`，含负控）；点击控件替换一次页面、`⌘R` 只替换一次、页面那层的 ⌘R 同样替换一次、页签条与激活页签不变（`poc/tab-residency.mjs`，26 条断言）；「先替换后读取」与按键层存在有静态断言（`test/view-freshness.test.mjs`）。
 
 ## 三、改动清单
 
