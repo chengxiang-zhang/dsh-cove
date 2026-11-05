@@ -144,3 +144,24 @@ export function createBrief(deps: BriefDeps): Brief {
 export function briefWords(body: BriefBody): number {
   return countWords(body.body)
 }
+/** What `brief --now` gets back: the submitted body, or null when there was nothing to say. */
+export interface BriefNowOutcome { body: string; items: readonly BriefItem[] }
+
+/**
+ * One-step entry for `brief --now` (T27 gap 6): build today's brief and hand it to
+ * the outlet. Null means nothing to say, which the command maps to exit 3.
+ */
+export function createBriefNow(deps: {
+  brief: Brief
+  now(): number
+  day(now: number): string
+  submit(body: BriefBody): void
+}): () => Promise<BriefNowOutcome | null> {
+  return async () => {
+    const now = deps.now()
+    const body = deps.brief.build(deps.day(now), now)
+    if (body === null) return null
+    deps.submit(body)
+    return { body: body.body, items: body.items }
+  }
+}

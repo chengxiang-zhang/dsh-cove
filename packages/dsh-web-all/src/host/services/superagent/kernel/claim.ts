@@ -86,7 +86,16 @@ export function createClaim(ledger: Ledger): Claim {
 
         if (decision.route === 'fastpath') {
           if (!decision.disposition) throw new Error(`claim: fastpath for ${event.event_id} needs a disposition`)
-          tx.disposeIntake(event.event_id, 0, { disposition: decision.disposition })
+          // decline must carry reason and alternative (intake CHECK, R4); the policy's detail
+          // supplies them, and a decline without them gets a fixed pair instead of a rollback.
+          const detail = decision.detail ?? {}
+          const reason = typeof detail.reason === 'string' ? detail.reason : undefined
+          const alternative = typeof detail.alternative === 'string' ? detail.alternative : undefined
+          tx.disposeIntake(event.event_id, 0, {
+            disposition: decision.disposition,
+            ...(reason !== undefined || decision.disposition === 'decline' ? { reason: reason ?? 'fastpath decline' } : {}),
+            ...(alternative !== undefined || decision.disposition === 'decline' ? { alternative: alternative ?? 'identity_notice' } : {}),
+          })
           return { status: 'claimed', owner: 'superagent', route: 'fastpath', disposition: decision.disposition, ...keys }
         }
 

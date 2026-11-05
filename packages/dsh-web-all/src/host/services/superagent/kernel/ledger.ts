@@ -62,6 +62,18 @@ export interface NewIntake {
 export type NewOutbox = Pick<OutboxRow, 'idem_key' | 'chat_id' | 'payload' | 'body' | 'moment' | 'tier' | 'audience' | 'words' | 'lease_epoch'>
   & Partial<Pick<OutboxRow, 'outbox_id' | 'reply_to' | 'event_id' | 'commitment_id' | 'expects_reply' | 'deliver'>>
 
+export interface IntakeDisposition {
+  disposition: Disposition
+  reason?: string
+  alternative?: string
+  about?: string
+  corrects?: string
+  class?: string
+  confidence?: number
+  new_thread?: boolean
+  deliberation_id?: string
+}
+
 export interface TurnFinish {
   ops: number; tool_errors: number; tokens: number; end_reason: string; rule_trace: unknown
   pub_hash?: string; dossier_hash?: string; audience_class?: AudienceClass; dossier_tokens?: number; window_id?: number
@@ -76,7 +88,8 @@ export interface KernelTx extends LedgerTx {
   updateAttempt(id: string, patch: Partial<AttemptRow>): AttemptRow
   propose(origin: 'host', spec: NewCommitment & { origin_ref: string }): CommitmentRow
   insertIntake(row: NewIntake): void
-  disposeIntake(eventId: string, shadow: 0 | 1, d: { disposition: Disposition; reason?: string; alternative?: string; about?: string; corrects?: string }): void
+  /** The judgment also lands `class`, `confidence`, `new_thread` and `deliberation_id` (T27 gap 2); nothing else. */
+  disposeIntake(eventId: string, shadow: 0 | 1, d: IntakeDisposition): void
   requestTurn(r: { trigger_kind: TriggerKind; desk_id?: string; commitment_id?: string; request_id: string }): string | undefined
   finishTurn(deliberationId: string, r: TurnFinish): void
   /** T13: the only way to push next_look_at without a state change; applies the I1 cap itself. */
@@ -341,8 +354,11 @@ export function createLedger(db: DatabaseSync, clock: LedgerClock): Ledger {
       disposeIntake(eventId, shadowFlag, d) {
         live()
         const changed = exec(`UPDATE ${I} SET disposition = ?, state = 'disposed', reason = coalesce(?, reason), alternative = coalesce(?, alternative),
-          about = coalesce(?, about), corrects = coalesce(?, corrects), updated_at = ? WHERE event_id = ? AND shadow = ? AND state <> 'disposed'`,
-          d.disposition, d.reason ?? null, d.alternative ?? null, d.about ?? null, d.corrects ?? null, now, eventId, shadowFlag)
+          about = coalesce(?, about), corrects = coalesce(?, corrects), class = coalesce(?, class), confidence = coalesce(?, confidence),
+          new_thread = coalesce(?, new_thread), deliberation_id = coalesce(?, deliberation_id), updated_at = ?
+          WHERE event_id = ? AND shadow = ? AND state <> 'disposed'`,
+          d.disposition, d.reason ?? null, d.alternative ?? null, d.about ?? null, d.corrects ?? null, d.class ?? null,
+          d.confidence ?? null, d.new_thread === undefined ? null : (d.new_thread ? 1 : 0), d.deliberation_id ?? null, now, eventId, shadowFlag)
         if (changed === 0) throw new LedgerError('ALREADY_DISPOSED', `intake ${eventId}/${shadowFlag} missing or already disposed`)
       },
 

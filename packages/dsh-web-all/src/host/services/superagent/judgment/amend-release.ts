@@ -97,3 +97,30 @@ export function releaseTool(deps: AmendReleaseDeps): (ctx: JudgmentTurn, input: 
     return { ok: true, ...(await releaseCommitment(deps, ctx, c, input.reason)) }
   }
 }
+
+/** What the host release path reports; the `stop` command maps it to an exit code. */
+export interface HostReleaseOutcome { ok: boolean; reason?: 'missing' | 'terminal' }
+
+/**
+ * Host entry for `stop C-n` (T27 gap 5): synchronous, no model, no clock.
+ *
+ * One transaction ends every live attempt as aborted/release and releases the
+ * commitment, so the ledger never shows a running attempt on a released
+ * commitment (I3). Cancelling the sessions themselves follows, fire and forget.
+ */
+export function releaseHost(deps: { ledger: Ledger; cancelSession?: (sessionId: string) => void }, commitmentId: string): HostReleaseOutcome {
+  const c = deps.ledger.read.get<CommitmentRow>(`SELECT * FROM ${PHYSICAL.commitment} WHERE commitment_id = ?`, commitmentId)
+  if (!c) return { ok: false, reason: 'missing' }
+  if (TERMINAL.includes(c.state)) return { ok: false, reason: 'terminal' }
+  const live = deps.ledger.open(tx => {
+    const rows = tx.all<AttemptRow>(`SELECT * FROM ${PHYSICAL.attempt} WHERE commitment_id = ? AND state IN ('pending', 'running')`, commitmentId)
+    tx.append(commitmentId, { actor: 'host', kind: 'state', body: { release_intent: 'stop command', by: 'host' } })
+    for (const a of rows) tx.updateAttempt(a.attempt_id, { state: 'ended', end_reason: 'aborted', cancel_origin: 'release' })
+    tx.transition(commitmentId, 'released', { ball: 'me' })
+    return rows
+  }, { module: 'executors' })
+  for (const a of live) if (a.session_id) {
+    try { deps.cancelSession?.(a.session_id) } catch { /* the session is already gone from the ledger's view */ }
+  }
+  return { ok: true }
+}

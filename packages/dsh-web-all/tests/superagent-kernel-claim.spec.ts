@@ -82,6 +82,17 @@ describe('kernel claim', () => {
     const r = claim.claim(e, policy({ owner: 'superagent', route: 'fastpath', disposition: 'release' }), 'superagent')
     expect(r).toMatchObject({ status: 'claimed', route: 'fastpath', disposition: 'release' })
     expect(t.db.prepare('SELECT state, disposition FROM sa_intake').get()).toEqual({ state: 'disposed', disposition: 'release' })
+    // T27 gap 3: a fast-path decline lands with reason and alternative (intake CHECK) instead of rolling the claim back.
+    const d = inboundEvent()
+    seedInbound(t.db, { event_id: d.event_id })
+    expect(claim.claim(d, policy({ owner: 'superagent', route: 'fastpath', disposition: 'decline', detail: { reason: 'not_authorized', alternative: 'identity_notice' } }), 'superagent'))
+      .toMatchObject({ status: 'claimed', disposition: 'decline' })
+    const bare = inboundEvent()
+    seedInbound(t.db, { event_id: bare.event_id })
+    expect(claim.claim(bare, policy({ owner: 'superagent', route: 'fastpath', disposition: 'decline' }), 'superagent')).toMatchObject({ status: 'claimed' })
+    expect(t.db.prepare(`SELECT event_id, reason, alternative FROM sa_intake WHERE disposition = 'decline' ORDER BY event_id`).all()).toEqual([
+      { event_id: d.event_id, reason: 'not_authorized', alternative: 'identity_notice' },
+      { event_id: bare.event_id, reason: 'fastpath decline', alternative: 'identity_notice' }].sort((x, y) => x.event_id.localeCompare(y.event_id)))
   })
 
   it('5. passthrough writes one journal row and bumps input_seq; no commitment, attempt or turn', () => {

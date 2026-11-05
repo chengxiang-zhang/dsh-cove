@@ -114,6 +114,11 @@ export function createExecutors(deps: ExecutorDeps): Executors {
       `SELECT body_json FROM ${J} WHERE commitment_id = ? AND kind = 'brief' ORDER BY seq DESC LIMIT 1`, c.commitment_id)
     const questions = ledger.read.all<{ question: string; taken: string; mode: string }>(
       `SELECT question, taken, mode FROM ${PHYSICAL.assumption} WHERE commitment_id = ? AND status = 'open' ORDER BY ordinal`, c.commitment_id)
+    // R23: input appended while no attempt ran (amend -> next-attempt, passthrough) rides the
+    // first prompt with its marker, so the consuming turn is recorded like any steered input.
+    const pendingInput = ledger.read.all<{ request_id: string | null; body_json: string | null }>(
+      `SELECT request_id, body_json FROM ${J} WHERE commitment_id = ? AND kind IN ('amend', 'passthrough')
+       AND consumed_turn IS NULL AND request_id IS NOT NULL ORDER BY seq`, c.commitment_id)
     return [
       `Commitment ${c.commitment_id}: ${c.what}`,
       `Intent: ${c.intent}`,
@@ -121,6 +126,7 @@ export function createExecutors(deps: ExecutorDeps): Executors {
       `Boundary: ${c.boundary ?? 'none stated'}`,
       `Context: ${brief?.body_json ?? 'none'}`,
       `Open assumptions: ${questions.length ? questions.map(q => `${q.question} -> ${q.taken} (${q.mode})`).join('; ') : 'none'}`,
+      ...pendingInput.map(p => `Added input: ${p.body_json ?? ''} ${inputMarker(p.request_id as string)}`),
       'Report through the report tool: report(state: ready|progress|blocked|failed|dropped, summary, evidence?: [{command, exit, reading}], question?).',
       'For ready, list the exact commands you ran and their exit codes; blocked needs one question.',
     ].join('\n')

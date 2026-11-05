@@ -247,7 +247,21 @@ export function autoReplyConfig(config: Required<LarkInboxConfig>): AutoReplyCon
   }
 }
 
-registerFamilyNamespace(LARK_INBOX_SETTINGS_NAMESPACE, Config)
+/**
+ * Superagent keys (T27, N29): the `superagent` prefix inside this namespace. Declared
+ * apart from `Config` on purpose: `Config` is the settings page's field list (the
+ * settings spec pins it field by field), and these keys are not edited on that page.
+ * The composition root validates the values again (superagent/config.ts); a bad
+ * value falls back to its default, the switch to `responder`.
+ */
+export const SuperagentKeys = z.object({
+  superagentMode: z.union(['responder', 'shadow', 'superagent'] as const).default('responder'),
+  superagentDesk: z.object({}).default({}),
+  superagentWorld: z.object({}).default({}),
+  superagentAttention: z.object({}).default({}),
+})
+
+registerFamilyNamespace(LARK_INBOX_SETTINGS_NAMESPACE, z.intersect([Config, SuperagentKeys]) as unknown as typeof Config)
 
 /**
  * Resolve the legacy per-namespace secret.

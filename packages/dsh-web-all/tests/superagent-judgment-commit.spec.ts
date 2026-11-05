@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createExecutors } from '../src/host/services/superagent/executors/attempts.ts'
 import { createProfileRegistry } from '../src/host/services/superagent/executors/profiles/index.ts'
-import { amendTool, releaseTool } from '../src/host/services/superagent/judgment/amend-release.ts'
+import { amendTool, releaseHost, releaseTool } from '../src/host/services/superagent/judgment/amend-release.ts'
 import { commitTool, type SayPort } from '../src/host/services/superagent/judgment/commit.ts'
 import { createDispatcher } from '../src/host/services/superagent/judgment/dispatch.ts'
 import { applyFastpath } from '../src/host/services/superagent/judgment/fastpath-apply.ts'
@@ -222,6 +222,13 @@ describe('judgment commit', () => {
     const other = arrive(r, { sender: COLLEAGUE })
     expect(await r.release(turn(other, { sender: 'on_col' }), { commitment_id: 'C-1', reason: 'stop' })).toMatchObject({ ok: false, code: 'NOT_PERMITTED' })
     expect(one(r, 'SELECT state FROM sa_commitment').state).toBe('open')
+    // T27 gap 5: the host's stop entry releases synchronously and ends the live attempt in the same transaction.
+    const cancelled: string[] = []
+    expect(releaseHost({ ledger: r.t.ledger, cancelSession: s => cancelled.push(s) }, 'C-1')).toEqual({ ok: true })
+    expect(rows(r, 'SELECT state, end_reason, cancel_origin FROM sa_attempt')).toEqual([{ state: 'ended', end_reason: 'aborted', cancel_origin: 'release' }])
+    expect(one(r, 'SELECT state FROM sa_commitment').state).toBe('released')
+    expect(releaseHost({ ledger: r.t.ledger }, 'C-1')).toEqual({ ok: false, reason: 'terminal' })
+    expect(releaseHost({ ledger: r.t.ledger }, 'C-99')).toEqual({ ok: false, reason: 'missing' })
   })
 
   it('13. propose: NOT_GOAL for a deliver; three proposals on the owner for a goal; PROPOSAL_OPEN the second time', () => {

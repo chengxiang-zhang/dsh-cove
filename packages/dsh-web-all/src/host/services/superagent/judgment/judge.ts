@@ -76,6 +76,10 @@ export function judgeTool(deps: JudgmentDeps) {
           reason: input.reason,
           about: input.about,
           corrects: input.corrects,
+          class: input.class,
+          confidence: input.confidence,
+          ...(input.new_thread === undefined ? {} : { new_thread: input.new_thread }),
+          deliberation_id: ctx.deliberationId,
         })
       } catch (error) {
         const code = (error as { code?: unknown }).code

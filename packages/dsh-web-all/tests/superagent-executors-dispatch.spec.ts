@@ -83,6 +83,8 @@ describe('executors dispatch', () => {
   it('2. dispatch: session sa-x-C-1-a1, attempt cwd, standard preset, first prompt queue with intent and done_when; running', async () => {
     const r = rig()
     const { c, a } = commit(r)
+    // T27 gap 4: an amend written while nothing ran reaches the first prompt with its marker.
+    r.t.ledger.open(tx => tx.append(c.commitment_id, { actor: 'desk', kind: 'amend', request_id: 'am:early', body: { text: 'also cover lint' } }))
     const out = await r.ex.dispatch(c.commitment_id)
     expect(out).toEqual({ attemptId: a.attempt_id, sessionId: 'sa-x-C-1-a1' })
     const create = r.controller.calls.find(x => x.method === 'create') as Extract<FakeController['calls'][number], { method: 'create' }>
@@ -91,6 +93,8 @@ describe('executors dispatch', () => {
     expect(first.mode).toBe('queue')
     expect(first.content[0].text).toContain('Intent: thing done')
     expect(first.content[0].text).toContain('test passes')
+    expect(first.content[0].text).toContain('also cover lint')
+    expect(first.content[0].text).toContain(inputMarker('am:early'))
     expect(attempts(r, c.commitment_id)[0]).toMatchObject({ state: 'running', session_id: 'sa-x-C-1-a1', branch: 'sa/C-1' })
     expect(one(r, 'SELECT path, branch, commitment_id FROM sa_workspace')).toEqual({ path: 'local/repo', branch: 'sa/C-1', commitment_id: 'C-1' })
     expect(one(r, `SELECT body_json FROM sa_journal WHERE kind = 'state'`).body_json).toContain('"agentPreset":"standard"')

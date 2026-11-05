@@ -25,7 +25,8 @@ import type { TurnContext } from './turn.ts'
 export type DeskToolResult = { ok: true; [key: string]: unknown } | { ok: false; code: ToolErrorCode | 'NOT_IMPLEMENTED' | 'NO_TURN'; message: string }
 
 export type DeskHandler = (input: unknown, ctx: TurnContext) => DeskToolResult | Promise<DeskToolResult>
-export type DeskHandlers = Partial<Record<'commit' | 'amend' | 'release' | 'pushback' | 'propose', DeskHandler>>
+/** Judgment handlers; an injected `judge` (T21) takes the place of the desk's own. */
+export type DeskHandlers = Partial<Record<'judge' | 'commit' | 'amend' | 'release' | 'pushback' | 'propose', DeskHandler>>
 
 export interface DocArea { read(docId: string): { text: string; truncated: boolean } }
 
@@ -72,7 +73,8 @@ export function createDeskTools(deps: DeskToolDeps): DeskTool[] {
     if (!row) return fail('NOT_IN_BATCH', `${input.event_id} has no intake row`)
     if (row.state === 'disposed') return fail('ALREADY_DISPOSED', `${input.event_id} is already disposed`)
     deps.ledger.open(tx => tx.disposeIntake(event.event_id, shadow, {
-      disposition: input.disposition as Disposition, reason: input.reason,
+      disposition: input.disposition as Disposition, reason: input.reason, class: input.class, confidence: input.confidence,
+      ...(input.new_thread === undefined ? {} : { new_thread: input.new_thread }), deliberation_id: ctx.deliberationId,
       ...(input.about ? { about: input.about } : {}), ...(input.corrects ? { corrects: input.corrects } : {}),
     }), { shadow: ctx.shadow })
     ctx.judged.add(event.event_id)
@@ -162,8 +164,9 @@ export function createDeskTools(deps: DeskToolDeps): DeskTool[] {
     async execute(input, context) {
       const ctx = deps.turnOf(context.sessionId)
       if (!ctx) return fail('NO_TURN', 'no open turn on this session')
+      const injected = deps.handlers[name as keyof DeskHandlers]
       const impl = own[name] as ((input: unknown, ctx: TurnContext) => DeskToolResult) | undefined
-      const handler = impl ?? deps.handlers[name as keyof DeskHandlers]
+      const handler = name === 'judge' && injected ? injected : impl ?? injected
       const result: DeskToolResult = handler ? await handler(input, ctx) : fail('NOT_IMPLEMENTED', `${name} lands with T21/T26`)
       ctx.trace.push({ tool: name, ok: result.ok, ...(result.ok ? {} : { code: result.code }) })
       if (!result.ok) ctx.toolErrors += 1
