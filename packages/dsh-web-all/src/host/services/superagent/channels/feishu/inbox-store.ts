@@ -81,6 +81,15 @@ export class InboxStore {
   private readonly maxAttempts: number
   private readonly staleTimeoutMs: number
   private closed = false
+  /**
+   * Cached answer to "does this database carry the claim `owner` column".
+   *
+   * Probed on the first claim rather than at construction, because the column is
+   * added by the protocol migration that runs *after* this store opens (the
+   * ledger refuses to create the channel's table itself), so a probe in `open()`
+   * would always answer no and the filter would never engage.
+   */
+  private ownerColumn: boolean | undefined
 
   /**
    * The reply ledger, on this store's connection.
@@ -230,9 +239,28 @@ export class InboxStore {
 
   peek(limit = 1): InboxItem[] {
     const rows = this.db.prepare(`SELECT event_id, file, status, attempts, payload
-      FROM inbox_events WHERE status = 'pending'
+      FROM inbox_events WHERE status = 'pending'${this.claimFilter()}
       ORDER BY received_at ASC, rowid ASC LIMIT ?`).all(limit) as unknown as InboxRow[]
     return rows.map(row => this.rowToItem(row))
+  }
+
+  /**
+   * The claim predicate that keeps the secretary's events out of the tool path.
+   *
+   * `inbox_events.owner` is written by the kernel's claim (F16). A message the
+   * secretary claimed must not be handed to `lark_inbox_pop`, or two answers race
+   * for one message; a message the old responder owns - or that nobody owns yet -
+   * stays claimable, so the pre-secretary path keeps working unchanged. A
+   * database the protocol has not migrated yet has no such column, and then the
+   * query degrades to the original one instead of failing.
+   * @returns the SQL fragment to append to a claim predicate, empty when absent.
+   */
+  private claimFilter(): string {
+    if (this.ownerColumn === undefined) {
+      const columns = this.db.prepare('PRAGMA table_info(inbox_events)').all() as unknown as Array<{ name?: unknown }>
+      this.ownerColumn = columns.some(column => String(column.name ?? '') === 'owner')
+    }
+    return this.ownerColumn ? " AND (owner IS NULL OR owner = 'responder')" : ''
   }
 
   /**
@@ -245,14 +273,17 @@ export class InboxStore {
    * @returns the claimed item, or null when nothing is pending.
    */
   pop(): InboxItem | null {
+    const filter = this.claimFilter()
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const row = this.db.prepare(`SELECT event_id, file, attempts, payload, status
-        FROM inbox_events WHERE status = 'pending'
+        FROM inbox_events WHERE status = 'pending'${filter}
         ORDER BY received_at ASC, rowid ASC LIMIT 1`).get() as unknown as InboxRow | undefined
       if (!row) return null
       const eventId = String(row.event_id)
+      // The owner predicate repeats in the claim itself: a claim written between
+      // this read and this update must not be overwritten by the tool path.
       const claimed = this.db.prepare(`UPDATE inbox_events SET status = 'processing', attempts = attempts + 1, updated_at = ?
-        WHERE event_id = ? AND status = 'pending'`).run(Date.now(), eventId)
+        WHERE event_id = ? AND status = 'pending'${filter}`).run(Date.now(), eventId)
       if (Number(claimed.changes) === 1) {
         return {
           envelope: JSON.parse(String(row.payload)) as LarkInboxEnvelope,

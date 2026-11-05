@@ -46,6 +46,8 @@ import { accessTrustOf } from '../../../access-trust/index.ts'
 import { registerInboxTools, type InboxReplyCapability, type InboxReplySender } from './tools.ts'
 import { LarkWizard, writeWithConflictRetry, type SpawnFn } from './admin/wizard.ts'
 import { registerResources } from '../../../resources.ts'
+import { createFeishuChannel, type FeishuChannelHooks } from './channel.ts'
+import type { ChannelReactPort } from './react.ts'
 const SECTION_ORDER = 210
 
 export const LARK_INBOX_GUIDANCE = '本机已安装 dsh-lark-inbox 插件（飞书/Lark 机器人消息收件箱）：飞书 bot 以 WebSocket 长连接收到的消息幂等写入本地 JSONL 队列（$DSH_HOME/lark-inbox，按日轮转，SQLite 索引去重与游标）。可用工具：lark_inbox_peek（查看待处理消息与网关连接状态）、lark_inbox_pop（取出最旧一条并锁定）、lark_inbox_ack（确认完成 ok=true，或退回重试 ok=false，超次转死信）、lark_inbox_reply（回复某条入站消息，落在原会话/话题）。用户提到「飞书机器人消息 / lark-inbox / 飞书收件箱 / 回复飞书消息」时即指本插件。'
@@ -68,6 +70,12 @@ export interface LarkInboxServiceDeps {
   createGateway?: (options: ConstructorParameters<typeof LarkGateway>[0]) => Pick<LarkGateway, 'start' | 'stop' | 'isRunning'>
   /** Builds the reply sender for one credential set; tests inject a fake. */
   createSender?: (credentials: FeishuCredentials) => InboxReplySender
+  /**
+   * Superagent admission hook: whether this event's answer belongs to the
+   * secretary. Absent means the responder keeps every event, which is this
+   * domain's behaviour before the kernel's claim policy is wired.
+   */
+  admit?: FeishuChannelHooks['admit']
 }
 
 function readSenderType(event: unknown): string {
@@ -178,6 +186,34 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
   let activeResponder: ReplyResponder | undefined
   /** The responder the runtime being built owns, so a late teardown cannot free it. */
   let ownResponder: ReplyResponder | undefined
+
+  /**
+   * The protocol channel over this domain's live handles.
+   *
+   * One instance for the whole domain rather than one per runtime: the admission
+   * rule and the memo of who last spoke in a chat must survive a settings-driven
+   * rebuild, which is why every port is an accessor instead of a captured value.
+   */
+  const channel = createFeishuChannel({
+    store: () => activeStore,
+    sender: () => replyCapability.sender,
+    reactor: () => {
+      const candidate: unknown = replyCapability.sender
+      const react = typeof candidate === 'object' && candidate !== null ? (candidate as { react?: unknown }).react : undefined
+      return typeof react === 'function' ? candidate as ChannelReactPort : undefined
+    },
+    members: async () => {
+      // The group member snapshot is a platform call that arrives with the
+      // kernel's audience use (T27). Reporting an empty group would make a group
+      // reveal look safe, so the channel refuses instead of guessing.
+      throw new Error('AUDIENCE_MEMBERS_UNWIRED: the group member snapshot is not wired yet')
+    },
+    // The owner's union ids come from configuration in a later step; with none
+    // configured nobody is the owner, which is the narrowest audience.
+    ownerUnionIds: () => [],
+    ...(deps.admit === undefined ? {} : { hooks: { admit: deps.admit } }),
+    log: { warn: message => log.warn('%s', message) },
+  })
 
   /**
    * Build the three engine calls the answer path needs.
@@ -416,8 +452,9 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
         const stored = store.append(envelope)
         // Only a message this call actually stored is admitted: a redelivery has
         // already been considered once, and re-running admission on it could open
-        // a second batch for one question.
-        if (stored === 'appended') activeResponder?.kick(envelope)
+        // a second batch for one question. The channel decides who answers it; the
+        // kick stays here because the responder is this domain's, not the channel's.
+        if (stored === 'appended') channel.deliver(envelope, () => activeResponder?.kick(envelope))
       },
     }
     // Housekeeping, deliberately on the inbox domain rather than the answer path:
