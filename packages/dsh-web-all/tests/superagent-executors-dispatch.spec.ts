@@ -80,7 +80,7 @@ describe('executors dispatch', () => {
     expect(budget(3, 2.1, undefined, 10).wall_ms).toBe(4 * 15.75 * MIN)   // scale capped at 4
   })
 
-  it('2. dispatch: session sa-x-C-1-a1, attempt cwd, standard preset, first prompt queue with intent and done_when; running', async () => {
+  it('2. dispatch: session sa-x-C-1-a1, attempt cwd, superagent-executor preset, first prompt queue with intent and done_when; running', async () => {
     const r = rig()
     const { c, a } = commit(r)
     // T27 gap 4: an amend written while nothing ran reaches the first prompt with its marker.
@@ -88,7 +88,7 @@ describe('executors dispatch', () => {
     const out = await r.ex.dispatch(c.commitment_id)
     expect(out).toEqual({ attemptId: a.attempt_id, sessionId: 'sa-x-C-1-a1' })
     const create = r.controller.calls.find(x => x.method === 'create') as Extract<FakeController['calls'][number], { method: 'create' }>
-    expect(create.req).toEqual({ sessionId: 'sa-x-C-1-a1', cwd: durableDir(r.seatRoot, 'C-1'), agentPreset: 'standard' })
+    expect(create.req).toEqual({ sessionId: 'sa-x-C-1-a1', cwd: durableDir(r.seatRoot, 'C-1'), agentPreset: 'superagent-executor' })
     const [first] = prompts(r)
     expect(first.mode).toBe('queue')
     expect(first.content[0].text).toContain('Intent: thing done')
@@ -97,7 +97,7 @@ describe('executors dispatch', () => {
     expect(first.content[0].text).toContain(inputMarker('am:early'))
     expect(attempts(r, c.commitment_id)[0]).toMatchObject({ state: 'running', session_id: 'sa-x-C-1-a1', branch: 'sa/C-1' })
     expect(one(r, 'SELECT path, branch, commitment_id FROM sa_workspace')).toEqual({ path: 'local/repo', branch: 'sa/C-1', commitment_id: 'C-1' })
-    expect(one(r, `SELECT body_json FROM sa_journal WHERE kind = 'state'`).body_json).toContain('"agentPreset":"standard"')
+    expect(one(r, `SELECT body_json FROM sa_journal WHERE kind = 'state'`).body_json).toContain('"agentPreset":"superagent-executor"')
   })
 
   it('3. a failed create ends the attempt as dispatch_failed and self-heals one tier up (n=2)', async () => {

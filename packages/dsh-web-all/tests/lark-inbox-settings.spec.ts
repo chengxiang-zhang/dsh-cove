@@ -86,7 +86,12 @@ describe('Feishu settings field inventory', () => {
     // writes them (the wizard owns the automatic path, the credential form owns
     // the manual one, and both target `feishu`).
     const legacyCredentialFields = ['appId', 'appSecret']
-    expect(declared.filter(field => !legacyCredentialFields.includes(field)).sort()).toEqual([...LARK_INBOX_FIELDS].sort())
+    // `testHarness` is a deployment switch for the live test harness (no Feishu
+    // socket, an HTTP ingress and a capture egress), not an operator setting: the
+    // settings page must not be able to silently stop the bot from listening.
+    const deploymentOnlyFields = ['testHarness']
+    expect(declared.filter(field => !legacyCredentialFields.includes(field) && !deploymentOnlyFields.includes(field)).sort())
+      .toEqual([...LARK_INBOX_FIELDS].sort())
     expect(LARK_INBOX_FIELDS).toContain('dropAppMessages')
   })
 

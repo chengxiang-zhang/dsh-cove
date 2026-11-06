@@ -79,6 +79,9 @@ describe('lark inbox config and wizard route contracts', () => {
       // off too: it changes what a person receives, and it appends to the
       // instructions every conversation carries.
       autoReplyRouter: 'off',
+      // The live test harness ships off and stays a deployment switch: a profile
+      // that turns it on accepts inbound events over HTTP instead of Feishu.
+      testHarness: false,
     })
   })
 

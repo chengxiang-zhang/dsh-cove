@@ -1,0 +1,2 @@
+name: 执行体
+description: superagent 执行体会话专用预设：只装执行体人格与回报契约；工具由宿主配置继承，report 工具由宿主按会话注册。

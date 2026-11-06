@@ -14,5 +14,5 @@ export interface Profile {
   lifetime: Lifetime
   tools: 'read' | 'full'
   budget_tier: 'small' | 'medium' | 'large'
-  preset: 'standard'
+  preset: 'superagent-executor'
 }

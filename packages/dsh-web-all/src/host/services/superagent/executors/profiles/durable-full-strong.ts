@@ -5,5 +5,5 @@ import type { Profile } from './types.ts'
  * stay empty (global default) until a host-specific pairing is configured.
  */
 export const DURABLE_FULL_STRONG: Profile = {
-  id: 'durable-full-strong', effort: 'high', cost_tier: 3, lifetime: 'durable', tools: 'full', budget_tier: 'large', preset: 'standard',
+  id: 'durable-full-strong', effort: 'high', cost_tier: 3, lifetime: 'durable', tools: 'full', budget_tier: 'large', preset: 'superagent-executor',
 }
