@@ -36,6 +36,8 @@ pnpm build
 
 发布顺序为：完整门禁与本地 pack 的真实挂载验证，通过后仅以 `candidate` dist-tag 发布同一 tarball；再下载精确版本的 registry tarball，核验 SHA512 完全一致并运行消费者挂载与浏览器 smoke，通过后才推进 `latest`。已存在版本不可覆盖：重跑时必须核验不可变 registry 字节与已门禁 tarball 一致，否则停止。发布工作流共用一个跨 tag 并发组，且推广前检查 registry 当前 `latest`；相同或更旧版本重跑不得使 `latest` 倒退。此约束不是 npm 的 compare-and-swap，仓库外的人工推广仍需协调；此流程只控制推广，不提供对 npm 发布的事务回滚。
 
+npm 接受一次 publish 不等于版本已可用：受信发布者若配置为只暂存（staged）发布，或 registry 正在做发布时处理，`npm publish` 会以 0 退出并打印 `+ name@version`，而版本要过几分钟才可见（2026-11-06 实测 0.9.0 用了约 19 分钟，超过工作流的 5 分钟等待窗口）。这不是"包不存在"：重发会被拒（`Cannot publish over previously staged version`），正确的恢复是等版本出现后重跑该 job —— 已存在的不可变版本只会被核验字节，不会被重发；若 npmjs.com 的 Staged Packages 里排队，由维护者用 2FA 批准。任何情况下都不要为此挪 tag。
+
 npm 发布是按需开启的：`release.yml` 的 registry 路径（`candidate`、`verify-release`）只在仓库变量 `NPM_PUBLISH` 为 `true` 时运行，开启前必须先配好 npm Trusted Publisher 或 `NPM_TOKEN` secret，否则该路径只会停在认证失败。Trusted Publisher 需要同时具备 `npm publish` 与 `npm dist-tag` 两项权限：`npm trust github --allow-publish` 只授予前者，`npm dist-tag` 只能在 npmjs.com 的 Trusted Publisher 设置里勾选。缺这项时 candidate 仍然发布成功、registry 字节校验也照样跑，只有推进 `latest` 会被 403 拒绝；工作流不把这次拒绝判成发布失败，而是在 job summary 里给出唯一需要的后续动作 `pnpm release:promote vX.Y.Z`，由维护者用自己的 npm 登录执行一次 `npm dist-tag add` 并回读核对。无论是否发布到 npm，每个 tag 都由 `github-release` job 产出 GitHub Release，挂上已门禁的 tarball 与生成的发布说明；桌面端、Android 与 iOS 安装包由各自工作流挂到同一个 tag，因此 tag 的交付物不依赖 npm 账号。
 
 ## 发布检查

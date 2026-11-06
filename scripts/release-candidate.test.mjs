@@ -130,8 +130,15 @@ test('publishCandidate checks post-publish integrity and bounds genuine propagat
   })
   await t.test('persistent 404', t => {
     const f = fixture(t, { metadata: [npmError('E404')] })
+    // The timeout is not "the package is missing": npm can hold a publish in its staging or
+    // processing queue, so the message has to name the recovery instead of inviting a retag.
     assert.throws(() => publishCandidate(f.file, f.run, immediate), /timed out waiting for candidate propagation/)
-    assert.equal(f.calls.filter(call => call.args[0] === 'view').length, 4)
+    assert.throws(() => publishCandidate(f.file, f.run, immediate), error =>
+      /staging or processing queue/u.test(error.message)
+      && /npm view @dsh-cove\/dsh-web-all@0\.4\.2 version/u.test(error.message)
+      && /re-run this job/u.test(error.message)
+      && /not republished/u.test(error.message))
+    assert.equal(f.calls.filter(call => call.args[0] === 'view').length, 8)
   })
 })
 

@@ -107,7 +107,20 @@ export function publishCandidate(file, run = runDefault, {
     if (metadata) break
     if (attempt < attempts) sleep(delayMs)
   }
-  if (!metadata) throw new Error('timed out waiting for candidate propagation: ' + spec)
+  if (!metadata) {
+    // A trusted publisher configured for staged publishing, or the registry's own
+    // publish-time processing, both accept a publish while keeping the version unavailable
+    // for minutes: `npm publish` exits 0 and prints `+ name@version`. That is not a missing
+    // package - republishing is refused ("Cannot publish over previously staged version"),
+    // and the run is idempotent once the version appears - so the recovery is to wait and
+    // re-run the job, never to move the tag.
+    throw new Error([
+      'timed out waiting for candidate propagation: ' + spec,
+      'npm can accept a publish into its staging or processing queue and keep the version unavailable for minutes;',
+      'confirm with `npm view ' + spec + ' version`, approve it on npmjs.com (Staged Packages) when the queue holds it,',
+      'then re-run this job: an existing immutable version is verified against the gated tarball, not republished.',
+    ].join(' '))
+  }
   assertArtifact(file, metadata)
   return { spec, published: true }
 }
