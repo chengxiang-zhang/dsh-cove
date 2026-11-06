@@ -9,7 +9,8 @@
 import { Context } from '@deepseek-ai/cordis'
 import { ToolRuntime, validateJsonSchemaValue, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { describe, expect, it } from 'vitest'
-import { hostToolOf, type DeskTool } from '../src/host/services/superagent/desk/toolface.ts'
+import { DESK_REFUSAL, DISPATCH_TOOLS, deskGuard, globalDeskGuard, hostToolOf, type DeskTool } from '../src/host/services/superagent/desk/toolface.ts'
+import { selfCheck } from '../src/host/services/superagent/desk/self-check.ts'
 import { createDeskTools } from '../src/host/services/superagent/desk/tools.ts'
 import { newTurnContext, type TurnContext } from '../src/host/services/superagent/desk/turn.ts'
 import { createReportTool } from '../src/host/services/superagent/executors/report-tool.ts'
@@ -125,5 +126,27 @@ describe('desk tools against the real host tool runtime', () => {
     const report = hostToolOf(createReportTool(() => ({ ok: true, seq: 1 })), 'sa-x-C-1-a1').output.schema
     expect(validateJsonSchemaValue(report, { ok: true, seq: 4 }, 'value')).toEqual([])
     expect(validateJsonSchemaValue(report, { ok: false, code: 'QUESTION_REQUIRED', message: 'm' }, 'value')).toEqual([])
+  })
+
+  it('6. the allow set is the nine desk tools plus dispatch; write/execute stays refused and fails the self-check when visible', () => {
+    const roleOf = (sid: string) => (sid === SID ? 'desk:p2p:oc_1' : undefined)
+    const global = globalDeskGuard(roleOf)
+    const WRITE_EXEC = ['bash', 'exec', 'shell', 'write', 'edit', 'ssh_exec', 'worktree_create', 'lark_inbox_reply', 'job_kill']
+    for (const name of [...DESK_TOOL_NAMES, ...DISPATCH_TOOLS]) {
+      expect(deskGuard({ name }), name).toBeUndefined()
+      expect(global({ name, agent: SID }), name).toBeUndefined()
+    }
+    for (const name of [...WRITE_EXEC, 'read', 'web_fetch']) {
+      expect(deskGuard({ name }), name).toBe(DESK_REFUSAL)
+      expect(global({ name, agent: SID }), name).toBe(DESK_REFUSAL)
+    }
+    expect(DISPATCH_TOOLS).toEqual(['subagent', 'spawn_teammate', 'send_message', 'wait_agent', 'list_agents', 'interrupt_agent',
+      'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update'])
+    expect(selfCheck([...DESK_TOOL_NAMES, ...DISPATCH_TOOLS], 0)).toMatchObject({ ok: true, extra_count: 10, denied_visible: [] })
+    for (const name of ['bash', 'exec', 'shell', 'write', 'edit', 'ssh_exec', 'worktree_create', 'lark_inbox_reply']) {
+      expect(selfCheck([...DESK_TOOL_NAMES, ...DISPATCH_TOOLS, name], 0), name).toMatchObject({ ok: false, denied_visible: [name] })
+    }
+    expect(selfCheck([...DESK_TOOL_NAMES.slice(1), ...DISPATCH_TOOLS], 0)).toMatchObject({ ok: false, missing: ['judge'] })
+    expect(selfCheck([...DESK_TOOL_NAMES], 1).ok).toBe(false)
   })
 })

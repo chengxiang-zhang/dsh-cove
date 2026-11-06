@@ -23,7 +23,7 @@ import { DESK_TOOL_NAMES } from '../protocol/tools.ts'
 import { compileDossier, splitBySender } from './dossier.ts'
 import { compileNow } from './now.ts'
 import { selfCheck, type SelfCheckResult } from './self-check.ts'
-import { DESK_REFUSAL, type ToolFace } from './toolface.ts'
+import { DESK_REFUSAL, deskMayRun, type ToolFace } from './toolface.ts'
 import { createDeskTools, type DeskHandlers, type DocArea } from './tools.ts'
 import { audienceOf, buildView, dossierFingerprint, newTurnContext, windowOf, type TurnContext } from './turn.ts'
 
@@ -512,9 +512,9 @@ export function createPresence(deps: DeskDeps): Presence {
     if (event.type === 'tool/result') {
       const message = data.message as { toolCallId?: unknown; content?: { text?: unknown }[] } | undefined
       const name = callNames.get(sessionId)?.get(String(message?.toolCallId ?? ''))
-      if (name === undefined || (DESK_TOOL_NAMES as readonly string[]).includes(name)) return
+      if (name === undefined || deskMayRun(name)) return
       const text = (message?.content ?? []).map(b => (typeof b.text === 'string' ? b.text : '')).join('\n')
-      // A non-desk tool result that is not our refusal ran: the face is broken.
+      // A tool outside the desk and dispatch sets that ran (no refusal): the face is broken.
       if (!text.includes(DESK_REFUSAL)) violations.set(sessionId, (violations.get(sessionId) ?? 0) + 1)
     }
   }
@@ -554,9 +554,21 @@ export function createPresence(deps: DeskDeps): Presence {
     async startupCheck() {
       const enabled: string[] = []
       const failed: string[] = []
+      const now = ledger.nowMs()
       for (const desk of ledger.read.all<DeskRow>(`SELECT * FROM ${D} WHERE session_id IS NOT NULL ORDER BY desk_id`)) {
-        const check = selfCheck(await deps.toolface.visible(desk.session_id as string), violations.get(desk.session_id as string) ?? 0)
-        if (check.ok) { enabled.push(desk.desk_id); disabled.delete(desk.desk_id) } else { failed.push(desk.desk_id); disabled.add(desk.desk_id) }
+        const sessionId = desk.session_id as string
+        try {
+          const check = selfCheck(await deps.toolface.visible(sessionId), violations.get(sessionId) ?? 0)
+          if (check.ok) { enabled.push(desk.desk_id); disabled.delete(desk.desk_id) }
+          else { failed.push(desk.desk_id); disabled.add(desk.desk_id) }
+        } catch (error) {
+          // Cold start: the previous process's agent scope is gone. Drop the stale
+          // binding so the next message recreates (same shape as idle eviction). A
+          // dead scope must never abort the whole plugin load.
+          log.warn(`desk ${desk.desk_id}: startup self-check skipped (${error instanceof Error ? error.message : String(error)}); clearing stale session`)
+          writeDesk(`UPDATE ${D} SET session_id = NULL, generation = generation + 1, updated_at = ? WHERE desk_id = ?`, now, desk.desk_id)
+          disabled.delete(desk.desk_id)
+        }
       }
       return { enabled, disabled: failed }
     },

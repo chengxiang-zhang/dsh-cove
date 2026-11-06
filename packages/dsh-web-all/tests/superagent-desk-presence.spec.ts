@@ -32,6 +32,7 @@ interface Rig {
   presence: ReturnType<typeof createPresence>
   tools: Map<string, DeskTool[]>
   setVisible(names: string[] | undefined): void
+  setVisibleThrows(error: Error | undefined): void
   cfg: DeskConfig
   mode: { value: 'responder' | 'shadow' | 'superagent' }
 }
@@ -42,12 +43,16 @@ function rig(opts: { applyThrows?: Error; noRecover?: boolean } = {}): Rig {
   const controller = createFakeController()
   const tools = new Map<string, DeskTool[]>()
   let visible: string[] | undefined
+  let visibleThrows: Error | undefined
   const toolface: ToolFace = {
     async apply(sid, list) {
       if (opts.applyThrows) throw opts.applyThrows
       tools.set(sid, [...list]); return () => { tools.delete(sid) }
     },
-    async visible(sid) { return visible ?? (tools.get(sid) ?? []).map(x => x.name) },
+    async visible(sid) {
+      if (visibleThrows) throw visibleThrows
+      return visible ?? (tools.get(sid) ?? []).map(x => x.name)
+    },
   }
   const lease = createLease(t.ledger)
   lease.acquire('proc', t.clock.now())
@@ -69,7 +74,12 @@ function rig(opts: { applyThrows?: Error; noRecover?: boolean } = {}): Rig {
     degrade: e => { degrades.degrade(e.reason, e.scope) },
     recover: e => { if (!opts.noRecover) degrades.recover(e.reason, e.scope) },
   })
-  return { t, controller, presence, tools, setVisible: v => { visible = v }, cfg, mode }
+  return {
+    t, controller, presence, tools,
+    setVisible: v => { visible = v },
+    setVisibleThrows: e => { visibleThrows = e },
+    cfg, mode,
+  }
 }
 
 /** Seed what claim would have written, then hand the event to the desk. */
@@ -426,36 +436,47 @@ describe('desk presence', () => {
     expect(check).toMatchObject({ ok: false, missing: [], extra: AGENT_TEAM, extra_count: 9, denied_visible: ['bash', 'ssh_exec'], violations: 0 })
   })
 
-  it('19. Agent Team tools are refused at execution on the desk (R8), and a refusal is not a violation', async () => {
+  it('19. dispatch tools run on the desk; write/execute tools are refused; only a non-dispatch run is a violation', async () => {
     const ctx = new Context()
     ctx.provide('systemPrompt', new Proxy({}, { get: () => () => () => undefined }))
     const rt = new ToolRuntime(ctx, {} as never)
     const ran: string[] = []
     const ok = { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => [{ type: 'text', text: String(v) }] }
-    for (const name of ['spawn_teammate', 'send_message', 'team_task_create']) {
-      rt.register({ name, description: name, parameters: { type: 'object', properties: {} }, output: ok, execute: async () => { ran.push(name); return 'done' } } as never)
+    for (const name of ['spawn_teammate', 'send_message', 'team_task_create', 'subagent', 'bash', 'write']) {
+      rt.register({ name, description: name, parameters: { type: 'object', properties: {} }, output: ok, execute: async () => { ran.push(name); return `${name} done` } } as never)
     }
     rt.guard(deskGuard as never)
     const r = rig()
-    r.setVisible([...DESK_TOOL_NAMES, ...AGENT_TEAM])
+    r.setVisible([...DESK_TOOL_NAMES, ...AGENT_TEAM, 'subagent'])
     deliver(r)
     await closeWindow(r)
-    for (const [i, name] of ['spawn_teammate', 'send_message', 'team_task_create'].entries()) {
+    const results: Record<string, { isError: boolean; text: string }> = {}
+    for (const [i, name] of ['spawn_teammate', 'send_message', 'team_task_create', 'subagent', 'bash', 'write'].entries()) {
       const result = await rt.execute({ callId: `t${i}` as never, name, arguments: {}, signal: new AbortController().signal })
-      expect(result.isError, name).toBe(true)
-      const text = result.content.map(b => ('text' in b ? b.text : '')).join('')
-      expect(text, name).toContain(DESK_REFUSAL)
+      results[name] = { isError: result.isError, text: result.content.map(b => ('text' in b ? b.text : '')).join('') }
       r.presence.onSessionEvent(SID, { type: 'tool/call', seq: ++seq, data: { callId: `t${i}`, name, arguments: '{}' } })
       r.presence.onSessionEvent(SID, { type: 'tool/result', seq: ++seq, data: { message: { toolCallId: `t${i}`, content: result.content } } })
     }
-    expect(ran).toEqual([])
+    expect(results.spawn_teammate).toEqual({ isError: false, text: 'spawn_teammate done' })
+    expect(results.send_message).toEqual({ isError: false, text: 'send_message done' })
+    expect(results.bash.isError).toBe(true)
+    expect(results.bash.text).toContain(DESK_REFUSAL)
+    expect(results.write.text).toContain(DESK_REFUSAL)
+    expect(ran).toEqual(['spawn_teammate', 'send_message', 'team_task_create', 'subagent'])
+    await endTurn(r, SID)
+    // Successful dispatch is not a violation: the next turn runs.
+    deliver(r)
+    await closeWindow(r)
+    expect(prompts(r)).toHaveLength(2)
+    // A write/execute tool that actually ran (no refusal in its result) is one, and blocks the next turn.
+    r.presence.onSessionEvent(SID, { type: 'tool/call', seq: ++seq, data: { callId: 'b1', name: 'bash', arguments: '{}' } })
+    r.presence.onSessionEvent(SID, { type: 'tool/result', seq: ++seq, data: { message: { toolCallId: 'b1', content: [{ type: 'text', text: 'hi' }] } } })
     await endTurn(r, SID)
     deliver(r)
     await closeWindow(r)
     expect(prompts(r)).toHaveLength(2)
-    await endTurn(r, SID)
     const last = JSON.parse(String(rows(r, 'SELECT rule_trace FROM sa_deliberation ORDER BY rowid DESC LIMIT 1')[0].rule_trace)) as { selfcheck: { violations: number } }
-    expect(last.selfcheck.violations).toBe(0)
+    expect(last.selfcheck.violations).toBe(1)
   })
 
   it('20. a self-check that keeps failing retries with backoff, at most 3 turns, then closes quietly with the detail', async () => {
@@ -497,5 +518,21 @@ describe('desk presence', () => {
     await u.presence.tick(u.t.clock.now())
     expect(prompts(u)).toHaveLength(1)
     expect(rows(u, 'SELECT reason, ended_at IS NULL AS open FROM sa_degrade_event')).toEqual([{ reason: 'desk_unavailable', open: 0 }])
+  })
+
+  it('22. a cold-start missing agent scope clears the stale session and does not abort or disable the desk', async () => {
+    const r = rig()
+    deliver(r)
+    await closeWindow(r)
+    await endTurn(r, SID)
+    expect(rows(r, 'SELECT session_id, generation FROM sa_desk')).toEqual([{ session_id: SID, generation: 0 }])
+    r.setVisibleThrows(new Error('superagent desk: no agent scope for sa-desk-p2poc_1-g0'))
+    await expect(r.presence.startupCheck()).resolves.toEqual({ enabled: [], disabled: [] })
+    expect(rows(r, 'SELECT session_id, generation FROM sa_desk')).toEqual([{ session_id: null, generation: 1 }])
+    r.setVisibleThrows(undefined)
+    deliver(r, { text: 'after restart' })
+    await closeWindow(r)
+    expect(creates(r).map(c => c.sessionId)).toEqual([SID, deskSessionId('p2p:oc_1', 1)])
+    expect(prompts(r)).toHaveLength(2)
   })
 })

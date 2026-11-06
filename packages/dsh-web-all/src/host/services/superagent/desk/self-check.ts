@@ -8,8 +8,9 @@
  * - every desk tool is visible (`missing` empty);
  * - no non-desk tool call has executed successfully on this session (`violations` 0);
  * - no host-privileged tool is visible at all (`denied_visible` empty).
- * Anything else visible is recorded as `extra` and does not fail the check: the
- * desk guard refuses its execution, and a successful execution is a violation.
+ * Anything else visible is recorded as `extra` and does not fail the check. The
+ * dispatch set (toolface DISPATCH_TOOLS) is expected there and may run; any other
+ * extra is refused by the desk guard, and a successful run of it is a violation.
  */
 
 import { DESK_TOOL_NAMES } from '../protocol/tools.ts'

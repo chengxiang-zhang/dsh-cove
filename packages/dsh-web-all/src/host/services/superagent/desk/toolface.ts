@@ -4,8 +4,13 @@
  * 1. `restrict({ allow: [] })` on the desk session's agent scope hides every
  *    inherited (host-plane) tool.
  * 2. The nine desk tools are registered scoped on that same layer.
- * 3. A guard refuses any execution that is not a desk tool; no guard can overturn
- *    another guard's refusal (F11).
+ * 3. A guard refuses any execution that is neither a desk tool nor a dispatch tool;
+ *    no guard can overturn another guard's refusal (F11).
+ *
+ * Dispatch (2026-11-06 owner decision): the secretary hands work out itself, so the
+ * agent-plane dispatch set (`subagent`, the Agent Team set) runs. Writing and
+ * executing stay closed: those tools are not in the allow set, and a visible one
+ * fails the self-check (`DENIED_VISIBLE_*`).
  *
  * S1 reading (fails, but not for scope access): `restrict` only filters inherited
  * tools, so tools the agent plane itself registers (today: `subagent`) stay
@@ -18,11 +23,21 @@
 
 import { defineTool, type ParameterSchemaSpec, type ToolDefinition, type ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
 import { DESK_TOOL_NAMES } from '../protocol/tools.ts'
+import { isDeniedVisible } from './self-check.ts'
 
 export const DESK_REFUSAL = 'desk-has-no-such-tool'
 
-/** Agent-plane tools a desk may still see after restrict (S1: fixed, known set). */
-export const AGENT_FACE_TOOLS: readonly string[] = Object.freeze(['subagent'])
+/**
+ * Agent-plane dispatch tools the desk may see and run: one-off work to `subagent`,
+ * standing work to an agent team (`spawn_teammate` + `team_task_*`) and the
+ * messaging/wait/interrupt tools that steer it. None writes or executes itself.
+ */
+export const DISPATCH_TOOLS: readonly string[] = Object.freeze(['subagent', 'spawn_teammate', 'send_message', 'wait_agent', 'list_agents',
+  'interrupt_agent', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update'])
+/** @deprecated kept for readers of the S1 name; the set is DISPATCH_TOOLS. */
+export const AGENT_FACE_TOOLS: readonly string[] = DISPATCH_TOOLS
+const leaked = DISPATCH_TOOLS.filter(isDeniedVisible)
+if (leaked.length) throw new Error(`dispatch set must not hold write/execute tools: ${leaked.join(', ')}`)
 
 /** What the model sees of a value the tool returns: the host validates it against `schema`, then renders it. */
 export interface ToolOutputSpec {
@@ -85,9 +100,12 @@ export interface ToolFace {
 }
 
 const DESK = new Set<string>(DESK_TOOL_NAMES)
+/** What a desk session may execute: the nine desk tools and the dispatch set, nothing else. */
+const ALLOWED = new Set<string>([...DESK_TOOL_NAMES, ...DISPATCH_TOOLS])
+export const deskMayRun = (name: string): boolean => ALLOWED.has(name) && !isDeniedVisible(name)
 
 /** Layer 3 on the desk scope. */
-export const deskGuard: Guard = exec => (DESK.has(exec.name) ? undefined : DESK_REFUSAL)
+export const deskGuard: Guard = exec => (deskMayRun(exec.name) ? undefined : DESK_REFUSAL)
 
 /** Session id carried by a tool execution: a string, or an object with `sessionId`/`id`. */
 export function sessionOfExec(agent: unknown): string | undefined {
@@ -101,7 +119,7 @@ export function sessionOfExec(agent: unknown): string | undefined {
 }
 
 /**
- * Global guard (N3 branch): a desk session may run desk tools only; any other
+ * Global guard (N3 branch): a desk session may run desk and dispatch tools only; any other
  * session may not run desk tools. An execution with no agent is the global view
  * and may not run desk tools either.
  */
@@ -109,7 +127,7 @@ export function globalDeskGuard(roleOf: (sessionId: string) => string | undefine
   return exec => {
     const sid = sessionOfExec(exec.agent)
     const isDesk = sid !== undefined && (roleOf(sid)?.startsWith('desk:') ?? false)
-    if (isDesk) return DESK.has(exec.name) ? undefined : DESK_REFUSAL
+    if (isDesk) return deskMayRun(exec.name) ? undefined : DESK_REFUSAL
     return DESK.has(exec.name) ? 'desk tools run only on desk sessions' : undefined
   }
 }
