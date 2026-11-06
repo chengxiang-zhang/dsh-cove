@@ -4,8 +4,6 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { IconBranchOutline16 } from '../ui-icons.ts'
-import { IconAgentBrowser16 } from './icons.tsx'
-import { AgentBrowserPanel } from './agent-browser.tsx'
 import { GitWorkbench } from './git-workbench.tsx'
 import { RenderBoundary } from './RenderBoundary.tsx'
 import { fileAddressFor } from '../../core/right-pane/protocol.ts'
@@ -48,8 +46,8 @@ interface NativeTabInfo {
 type UseTabInfo = () => NativeTabInfo
 interface PositionTabProps { useTabInfo?: UseTabInfo }
 interface PageSpec {
-  id: 'git' | 'browser' | 'agent-browser'
-  kind: 'web-ui.git' | 'web-ui.browser' | 'web-ui.agent-browser'
+  id: 'git' | 'browser'
+  kind: 'web-ui.git' | 'web-ui.browser'
   title: () => string
   description: () => string
   order: number
@@ -99,7 +97,6 @@ function pages(ctx: ClientContext): readonly PageSpec[] {
   const t = bindRightPaneLocale(ctx)
   return [
     { id: 'git', kind: 'web-ui.git', title: () => t('git.title'), description: () => t('git.description'), order: 30, icon: IconBranchOutline16, requiresWorkspace: true, render: (owner, info, sessionId) => <GitPage ctx={owner} sessionId={sessionId} visible={info?.tab.visible ?? true}/> },
-    { id: 'agent-browser', kind: 'web-ui.agent-browser', title: () => t('agentBrowser.title'), description: () => t('agentBrowser.description'), order: 32, icon: IconAgentBrowser16, requiresWorkspace: false, render: (_owner, info, sessionId) => <AgentBrowserPanel sessionId={sessionId} visible={info?.tab.visible ?? true} signal={info?.tab.signal} t={t}/> },
   ]
 }
 

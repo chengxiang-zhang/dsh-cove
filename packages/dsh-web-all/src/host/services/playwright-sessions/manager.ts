@@ -96,18 +96,6 @@ export class SessionBrowserManager {
     return this.sessions.has(sessionId)
   }
 
-  /**
-   * The host-owned persistent context of a session browser, when one exists
-   * AND was created in liveView mode (dual-owner). Never creates a browser:
-   * the live-view upgrade must not spawn a browser just because a client
-   * opened the view.
-   */
-  contextOf(sessionId: string): Promise<SessionBrowser['context']> {
-    const entry = this.sessions.get(sessionId)
-    if (entry === undefined) return Promise.resolve(null)
-    return entry.browser.then(browser => browser.context ?? null, () => null)
-  }
-
   /** Dispose one session browser and drop it from the registry. */
   async dispose(sessionId: string): Promise<void> {
     const entry = this.sessions.get(sessionId)

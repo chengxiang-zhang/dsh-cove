@@ -8,6 +8,7 @@
 
 - **工作区与会话工作流**：Git worktree 管理与会话隔离、workspace-model 预设。worktree 不再有独立页面。一个 worktree 就是一条 lane：输入框的分支选择器创建该分支的 worktree，并把它的目录注册为一个工作区（这是平台约束，不是口味——注册表只把 cwd 等于工作区路径的会话算作该工作区成员，而没有任何工作区认领的空白对话，输入框是禁用的），随后用平台自己的工作区导航把对话移上去。这条注册刻意短命：lane 的对话全部归档后即注销（目录、分支与绑定都保留，再选该分支一步就能重建），启动时还会清掉旧版本留下的行。会话顶部的 lane chip 既显示当前分支，也承载它余下的生命周期——提 PR、检查是否已合并、删除目录（可勾选连本地分支一起删），删除同时注销该工作区。界面上这些词一律写成「分支目录」，不出现 worktree / lane 这类实现词。
 - **开发工作台**：输入区的 Git 分支 chip 与图谱对话框，以及右栏 Source Control 工作台。
+- **记忆查看（只读）**：侧栏「记忆」页读 OpenViking 的全局空间与当前工作区的 peer 空间，可逐层翻目录、看文档原文、做语义搜索。它不写入、不落本地存储，记忆本体由 OpenViking 插件维护，见 [docs/memory-view.md](../../docs/memory-view.md)。
 - **HiOpen 模型路由**：不含凭据的 `llm-pi-ai` 预置提供一份精选模型目录，端点自带（在 `config/deployment.local.json` 填 `llm.hiopen.baseUrl`，再跑 `node scripts/config-render.mjs`），仓库不提交任何端点与凭据，并为 DSH Agent 精选准确模型 id、上下文/输出上限、推理档位和文本/图片模态。
 - **远程运维**：SSH 主机、终端、传输、隧道和集群执行。远程浏览器入口不再由本插件签发账号会话；远程可访问性由部署的 `--trusted-host` 与网络门禁共同决定，见 [docs/remote-access.md](../../docs/remote-access.md)。
 - **飞书 bot**：一套共享应用凭据——`feishu` 命名空间（`appId`、`appSecret`、`domain`；`appSecret` 支持 `env:变量名`，环境变量 `FEISHU_APP_SECRET` 优先、兼容旧的 `LARK_APP_SECRET`）——同时服务同一个 bot 的三条链路：带 `lark_inbox_peek`、`lark_inbox_pop`、`lark_inbox_ack`、`lark_inbox_reply`、`lark_autoreply_status` 工具的长连接收件箱，agent 对入站消息的回复，以及运行结束推送。连接向导与 **设置 → 内置插件 → 飞书** 页里的凭据区都能配置它；手工凭据区让没装 lark-cli 的安装也能收尾。同一页还配置「自动回话」：`autoReplyMode`（`off` 只入队不回复、`probe` 走完整链路但只把回复写进账本不发送、`self` 才真的回复私聊与群里 @ 机器人的消息）、`autoReplyOpenIds`（允许被回复的人，留空即不限制）、`autoReplyCwd`（回话会话的工作目录）与 `autoReplyPreamble`（每个新会话第一条消息前附带的说明）。同一会话的连发消息合并成一个回合，一个回合只产生一条回复；回合失败、超时或被中断也会回一句说明，不会静默。已完成或已放弃的队列行与回话作业按 `retentionDays` 保留（默认 30 天，`0` 表示永不清理）；按日的 JSONL 分片不动，所以「平台到底发了什么」的原文不会被索引清理带走。幂等键就存在被清理的那些行里，所以 `retentionDays` 就是「一条消息只回一次」这条承诺的真实期限：超过窗口的重投看起来就是一条新消息。`autoReplyReceipt` 默认开启：消息一到就给原消息加一个表情，即使它要排在别的回合后面等，对方也知道已被读取；表情被拒只记一行日志、不影响回复，probe 模式不加。`proactiveNotice`（默认关）允许机器人主动开口：别的会话跑完一段较长的工作后，先由三个确定性闸门决定要不要问模型——跑得够久、不在静默时段、本小时预算未用完——再由模型决定；它若认为不必打扰就只回 `SILENT`，账本把这记成有意的 `empty`，而不是被取消。`autoReplySteer`（`off`、`shadow` 或 `on`，默认 `off`）决定一条在机器人正忙时到达的消息要不要排队：`on` 时它可以并入正在进行的那个回合，而不是等下一个回合，而这个判定由代码确定性做出——该回合已绑定、剩余期限足够、没有正在停止或超时、没有收集中的批次、本回合并入的次数还没到上限。`shadow` 只把判定结果写下来、不真的并入。被并入的消息与它加入的那条仍只产生一条回复，且这条回复挂在被并入的那条消息上。`autoReplyRouter`（`off` 或 `on`，默认 `off`）把回复的形态交给会话本身：`on` 时前言里多一段对话契约，模型可以在「正文」和「只输出 `ACK`」之间选——后者是在原消息上加一个表情、不发文字。这道选择与对方之间只有一条守卫，而它只往「说话」的方向推：带问号或疑问词、或者不是纯确认或致谢的直接提问永远不会被降级成表情，守卫否决时改发一句固定短句；表情发不出去则回退成文字。前言按内容自身的 hash 版本化，所以被旧前言告知过的会话会再收到一次当前版本。两条都是可热更开关，任一条改回 `off` 就回到不带它的行为：消息各自等自己的回合，回复一律是正文。
@@ -79,7 +80,7 @@ Profile 覆写示例：
 
 内置 `hiopen` 路由通过 DSH credentials 解析 `HIOPEN_API_KEY`；密钥只应写入 `$DSH_HOME/.credentials.yaml` 的 `refs.HIOPEN_API_KEY`，不得写进 profile 或仓库。预置只暴露精选的聊天/Agent 子集，而不是照搬 `/v1/models` 的全部条目：端点同时会列出 embedding、guard、detector 和暂时不可用的路由。端点变化时可用 profile 覆写替换或扩展 `hiopen.models`。
 
-Playwright 服务域是 `mcp__playwright__*` 公共工具名的唯一所有者。启动本插件前必须移除全局 `mcp-playwright` 行；工具名重复会导致 Playwright 注册失败。默认 `launch` 模式按 DSH 会话隔离浏览器进程，最多并发两个，并回收空闲会话。`extension` 模式则把官方 [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm) 中选定的标签页独占租给一条由人确认的 DSH 会话：在该会话右栏打开「Agent 浏览器」，点连接，在扩展中批准并分配标签页。断开后外部 Chrome 继续运行。`cdp` 模式直连操作者已用 `--remote-debugging-port` 启动的浏览器：把 `cdpEndpoint` 指向它，该会话就直接驱动这个浏览器，不需要扩展、也不再有任何授权弹窗，而浏览器自己的持久 profile 会保留登录态（Chrome 136 及以后只认配合非默认 `--user-data-dir` 的远程调试，因此请保留一个专用自动化 profile 并在其中登录一次）。控制面走插件共享的宿主访问围栏——loopback 请求，或请求 Host 属于部署通过 `--trusted-host` 声明（从 `ctx.webStartup.trustedHosts` 读取，更早的 SDK 为 `ctx.webRuntime.trustedHosts`）且携带有效 DSH 浏览器会话的 authority。只有 `extension` 模式受审批门限制：其中任意代码工具默认隐藏，`approvalPolicy: mutations` 会在每个非只读浏览器动作前走 DSH 一次性审批。
+Playwright 服务域是 `mcp__playwright__*` 公共工具名的唯一所有者。启动本插件前必须移除全局 `mcp-playwright` 行；工具名重复会导致 Playwright 注册失败。默认 `launch` 模式按 DSH 会话隔离浏览器进程，最多并发两个，并回收空闲会话。`extension` 模式则把官方 [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm) 中选定的标签页独占租给一条由人确认的 DSH 会话：`POST /api/playwright-sessions/connect` 弹出扩展的授权与标签页选择，断开后外部 Chrome 继续运行。浏览器能力只以 `mcp__playwright__*` 工具形式暴露，右栏没有浏览器页签、没有实时画面。`cdp` 模式直连操作者已用 `--remote-debugging-port` 启动的浏览器：把 `cdpEndpoint` 指向它，该会话就直接驱动这个浏览器，不需要扩展、也不再有任何授权弹窗，而浏览器自己的持久 profile 会保留登录态（Chrome 136 及以后只认配合非默认 `--user-data-dir` 的远程调试，因此请保留一个专用自动化 profile 并在其中登录一次）。控制面走插件共享的宿主访问围栏——loopback 请求，或请求 Host 属于部署通过 `--trusted-host` 声明（从 `ctx.webStartup.trustedHosts` 读取，更早的 SDK 为 `ctx.webRuntime.trustedHosts`）且携带有效 DSH 浏览器会话的 authority。只有 `extension` 模式受审批门限制：其中任意代码工具默认隐藏，`approvalPolicy: mutations` 会在每个非只读浏览器动作前走 DSH 一次性审批。
 
 ```yaml
 - id: web-all
@@ -101,7 +102,7 @@ Playwright 服务域是 `mcp__playwright__*` 公共工具名的唯一所有者�
       cdpEndpoint: http://127.0.0.1:9222
 ```
 
-`allowedOrigins` 与 `blockedOrigins` 是 Playwright 导航护栏，并非完整的授权边界：重定向和页面内容仍是不可信输入。扩展模式不重复投放实时画面，因为用户已经能看到被连接的 Chrome 窗口；`liveView` 只用于启动的浏览器。
+`allowedOrigins` 与 `blockedOrigins` 是 Playwright 导航护栏，并非完整的授权边界：重定向和页面内容仍是不可信输入。
 
 SSH 执行、交互终端、传输和隧道都在客户端认证前校验服务器身份。请在宿主用户的 `~/.ssh/known_hosts` 中预置已核验的记录（非默认端口使用 `[host]:port`），或在共享宿主围栏后的 `POST /api/dsh-ssh/hosts` 或 `PATCH /api/dsh-ssh/hosts/:alias` 中，把主机条目的 `hostKeyFingerprint` 设置为经服务器管理员独立核验的 SHA256 指纹。PATCH 时省略该字段会保留 pin，设为 `null` 则恢复 known-host 校验。未知或变化的密钥会被拒绝，不会自动信任首次连接。池内连接每次接纳新操作前也会按当前信任重新校验；移除或吊销信任会阻止新操作，但不会终止既有通道或隧道。支持主机名模式与 hashed known-host 记录，不支持 host certificate 或 `@cert-authority`。显式指纹 pin 具有优先权，但匹配的已吊销密钥仍被拒绝。当前引擎会拒绝 `proxyJump`，而不是静默直连。仅有 `ssh-keyscan` 输出不构成身份核验。
 
@@ -215,7 +216,7 @@ DSH 原生 `@deepseek-ai/dsh-schedule` 把任务绑定在创建它的会话上�
 ## 已知限制
 
 - 所有服务域共享一个 `web-all` 生命周期，不能作为单独的 profile 条目分别启停。
-- 共享宿主访问围栏判定的是「请求是否来自被承认的浏览器入口」，不是「它属于哪个账号」：围栏只暴露一个布尔值。因此数据归属于某个会话的面（Agent Browser 实时视图 `/playwright-sessions/ws/browser`、工作区内的 `git-status`、以会话 cwd 为键的工作区数据）对任何通过围栏、并且知道会话 id 或工作区路径的调用方可见；在宿主把调用方身份暴露给路由族之前，这些面无法按账号隔离。
+- 共享宿主访问围栏判定的是「请求是否来自被承认的浏览器入口」，不是「它属于哪个账号」：围栏只暴露一个布尔值。因此数据归属于某个会话的面（工作区内的 `git-status`、以会话 cwd 为键的工作区数据）对任何通过围栏、并且知道会话 id 或工作区路径的调用方可见；在宿主把调用方身份暴露给路由族之前，这些面无法按账号隔离。
 - 设置界面刻意保持最小：只为飞书与通知提供配置页，其余能力域配置通过 profile 覆写或设置文档编辑。
 - 飞书接入按 `$DSH_HOME` 单实例：同一 `$DSH_HOME` 只允许一个 dsh-web 进程消费飞书队列。应用的长连接在集群里是随机分发给某个已连接客户端的，不是广播，因此同目录下的第二个进程会漏消息，而不是与前者分担。
 - bot 未订阅 `im.message.recalled_v1`，被撤回的消息可能仍留在队列里，`lark_inbox_peek` 或 `lark_inbox_pop` 仍会把它交给 agent。`allowedOpenIds` 留空表示不限制发送者；填写后才限定谁能触达 agent。

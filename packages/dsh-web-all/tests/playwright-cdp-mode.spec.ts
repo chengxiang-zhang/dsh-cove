@@ -29,12 +29,10 @@ describe('playwright-sessions cdp config', () => {
     expect(resolved.cdpEndpoint).toBe('http://127.0.0.1:9222')
     expect(resolved.approvalPolicy).toBe('never')
     expect(resolved.unsafeTools).toBe(true)
-    expect(resolved.liveView).toBe(false)
   })
 
-  it('still defaults the endpoint to empty and live view to off', () => {
+  it('still defaults the endpoint to empty', () => {
     expect(resolvePlaywrightSessionsConfig().cdpEndpoint).toBe('')
-    expect(resolvePlaywrightSessionsConfig({ mode: 'cdp', liveView: true }).liveView).toBe(false)
   })
 })
 
@@ -64,9 +62,6 @@ describe('playwright-sessions cdp child arguments', () => {
     const launch = sessionBrowserArgs(options(), '/tmp/p/session-abc', '/tmp/p/session-abc/output')
     expect(launch).toContain('--headless')
     expect(launch[launch.indexOf('--user-data-dir') + 1]).toBe('/tmp/p/session-abc')
-
-    const hosted = sessionBrowserArgs(options({ liveView: true }), '/tmp/p/session-abc', '/tmp/p/session-abc/output', 'ws://127.0.0.1:4000/devtools/browser/x')
-    expect(hosted[hosted.indexOf('--cdp-endpoint') + 1]).toBe('ws://127.0.0.1:4000/devtools/browser/x')
 
     const extension = sessionBrowserArgs(options({ mode: 'extension' }), '/tmp/p/session-abc', '/tmp/p/session-abc/output')
     expect(extension).toContain('--extension')

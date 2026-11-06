@@ -72,7 +72,7 @@ Every finished turn is recorded in the read-only `GET /api/dsh-notify/feed`; the
 
 ### Browser automation
 
-Each session gets its own Playwright browser, exposed to the agent as the `mcp__playwright__*` tool namespace and managed from the right-pane Agent Browser tab.
+Each session gets its own Playwright browser, exposed to the agent as the `mcp__playwright__*` tool namespace. There is no page panel: the capability exists only as tools (`launch` starts an isolated browser, `cdp` attaches to a Chrome you started).
 
 Configuration details for every capability live in the [dsh-web-all README](packages/dsh-web-all/README.md).
 

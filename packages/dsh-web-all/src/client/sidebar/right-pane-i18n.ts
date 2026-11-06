@@ -1,6 +1,6 @@
 /**
- * Copy for the web-all right-pane pages (Git management, sandboxed browser
- * and their shared diff surface). zh is the key source; en mirrors every key.
+ * Copy for the web-all right-pane pages (Git management and its diff surface).
+ * zh is the key source; en mirrors every key.
  */
 export const RIGHT_PANE_LOCALE = 'web-all-right-pane' as const
 
@@ -87,27 +87,6 @@ export const rightPaneZh = {
   'git.ago.days': '{n} 天前',
   'git.ago.months': '{n} 个月前',
   'git.ago.years': '{n} 年前',
-  // Browser.
-  'agentBrowser.title': 'Agent 浏览器',
-  'agentBrowser.description': '连接并管理当前会话的 Playwright 浏览器',
-  'agentBrowser.live': '本机 Chrome 已连接',
-  'agentBrowser.notEnabled': '当前使用独立浏览器模式；本机 Chrome 连接未启用。',
-  'agentBrowser.connecting': '正在等待 Chrome 扩展确认与标签页选择…',
-  'agentBrowser.noPage': '浏览器尚未打开页面',
-  'agentBrowser.closed': '尚未连接本机 Chrome',
-  'agentBrowser.error': '浏览器连接失败',
-  'agentBrowser.hint': '只会操作你在 Playwright 扩展中授权给本会话的标签页。',
-  'agentBrowser.connect': '连接本机 Chrome',
-  'agentBrowser.disconnect': '断开连接',
-  'agentBrowser.refresh': '刷新状态',
-  'agentBrowser.busy': '本机 Chrome 正被另一个会话使用。请先在那个会话中断开。',
-  'agentBrowser.noSession': '请选择一个会话后再连接浏览器。',
-  'agentBrowser.install': '安装 Playwright Extension',
-  'agentBrowser.installHint': '连接前，请先在 Chrome 或 Edge 中安装官方 Playwright Extension。',
-  'agentBrowser.security': '写操作会经过 DSH 的一次性审批；任意代码工具默认不向本机 Chrome 开放。',
-  'agentBrowser.denied': '无法连接本机 Chrome：请确认已通过宿主机部署的规范地址登录，再重试。',
-  'agentBrowser.cdp': '已直连本机 Chrome（CDP，无需授权）',
-  'agentBrowser.cdpHint': '浏览器由你启动并带调试端口；本会话直接接管，不会再弹授权页。',
 } as const
 
 export type RightPaneLocaleKey = keyof typeof rightPaneZh
@@ -188,24 +167,4 @@ export const rightPaneEn: Record<RightPaneLocaleKey, string> = {
   'git.ago.days': '{n}d ago',
   'git.ago.months': '{n}mo ago',
   'git.ago.years': '{n}y ago',
-  'agentBrowser.title': 'Agent Browser',
-  'agentBrowser.description': 'Connect and manage this session\'s Playwright browser',
-  'agentBrowser.live': 'Local Chrome connected',
-  'agentBrowser.notEnabled': 'The isolated browser mode is active; local Chrome attachment is not enabled.',
-  'agentBrowser.connecting': 'Waiting for Chrome extension approval and tab selection…',
-  'agentBrowser.noPage': 'The browser has no page yet',
-  'agentBrowser.closed': 'Local Chrome is not connected',
-  'agentBrowser.error': 'Browser connection failed',
-  'agentBrowser.hint': 'Only tabs assigned to this session in the Playwright extension can be operated.',
-  'agentBrowser.connect': 'Connect local Chrome',
-  'agentBrowser.disconnect': 'Disconnect',
-  'agentBrowser.refresh': 'Refresh status',
-  'agentBrowser.busy': 'Local Chrome is already controlled by another session. Disconnect it there first.',
-  'agentBrowser.noSession': 'Select a conversation before connecting a browser.',
-  'agentBrowser.install': 'Install Playwright Extension',
-  'agentBrowser.installHint': 'Install the official Playwright Extension in Chrome or Edge before connecting.',
-  'agentBrowser.security': 'Mutations pass through one-shot DSH approval; arbitrary-code tools are hidden from local Chrome by default.',
-  'agentBrowser.denied': 'Cannot attach to the host\'s local Chrome: sign in through the host\'s canonical deployment address and retry.',
-  'agentBrowser.cdp': 'Attached to local Chrome over CDP (no consent step)',
-  'agentBrowser.cdpHint': 'You start the browser with a debugging port; this session attaches directly and no approval page appears.',
 }

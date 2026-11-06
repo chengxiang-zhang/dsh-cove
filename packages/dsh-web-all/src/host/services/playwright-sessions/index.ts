@@ -14,7 +14,6 @@ import { createSessionBrowser, extractText } from './child.ts'
 import { SessionBrowserManager } from './manager.ts'
 import { PlaywrightSessionsController } from './controller.ts'
 import { registerPlaywrightControlRoutes } from './routes.ts'
-import { registerLiveViewUpgrade } from './live-view.ts'
 import { abortable } from '../lifecycle.ts'
 import { registerAsyncResources } from '../resources.ts'
 import { pruneStaleProfiles, removeProfileDir } from './profile-gc.ts'
@@ -60,7 +59,6 @@ export async function register(ctx: Context, input: PlaywrightSessionsConfig = {
     allowedOrigins: config.allowedOrigins,
     blockedOrigins: config.blockedOrigins,
     toolCallTimeoutMs: config.toolCallTimeoutMs,
-    liveView: config.liveView,
   }), {
     idleTimeoutMs: config.idleTimeoutMs,
     maxConcurrentBrowsers: config.maxConcurrentBrowsers,
@@ -81,12 +79,6 @@ export async function register(ctx: Context, input: PlaywrightSessionsConfig = {
     controller = new PlaywrightSessionsController({ config, manager, sessionExists })
     own(() => controller.dispose())
     own(registerPlaywrightControlRoutes(ctx, controller))
-    // Agent-browser live view: a per-session WebSocket streaming CDP screencast
-    // of the browser the MCP child drives. Only mounted when liveView is on;
-    // the resolver reads the manager registry and never creates a browser.
-    if (config.liveView) {
-      own(registerLiveViewUpgrade(ctx, sessionId => manager.contextOf(sessionId)))
-    }
     let tools = await abortable(enumerate(require), ownerSignal)
     if (!config.unsafeTools) tools = tools.filter(tool => tool.name !== 'browser_run_code_unsafe')
     ownerSignal?.throwIfAborted()

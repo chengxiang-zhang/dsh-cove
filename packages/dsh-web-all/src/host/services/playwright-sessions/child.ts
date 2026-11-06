@@ -9,21 +9,16 @@
  * browser, and the explicit user-data-dir keeps its login state durable
  * without ever touching another session's profile.
  *
- * In `liveView` mode the host starts the persistent Chromium itself with
- * `launchPersistentContext` (CDP endpoint on an ephemeral port) and passes
- * `--cdp-endpoint` to the MCP child, which connects to that SAME browser as
- * its default context. The host keeps the `BrowserContext` handle so the
- * live-view WebSocket (see live-view.ts) can stream CDP screencast frames of
- * the pages the MCP tools drive. This is the dual-owner launch path the
- * older implementation documented; without `liveView` the child launches its
- * own browser exactly as before.
+ * In `cdp` mode the child is pointed at a browser the operator already
+ * started with remote debugging (`--cdp-endpoint`): it attaches to that
+ * browser and drives its tabs, so the windows and logins being operated are
+ * the operator's own. No browser is launched in that mode.
  */
 
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { chromium as playwrightChromium, type BrowserContext } from 'playwright-core'
 import { sanitizePlaywrightSessionKey } from '../../../core/playwright-sessions/names.ts'
 import type { PlaywrightConnectionMode } from '../../../core/playwright-sessions/contracts.ts'
 
@@ -47,13 +42,6 @@ export interface SessionBrowserOptions {
   blockedOrigins: string[]
   /** Per-tool-call timeout in milliseconds. */
   toolCallTimeoutMs: number
-  /**
-   * Dual-owner mode: the host starts the persistent Chromium and the MCP
-   * child connects over `--cdp-endpoint`; the returned browser exposes the
-   * `context` handle for the live view. False (default) keeps the plain
-   * child-launched browser with no live view.
-   */
-  liveView?: boolean
 }
 
 export interface SessionBrowser {
@@ -68,8 +56,6 @@ export interface SessionBrowser {
   close(): Promise<void>
   /** Close the browser and terminate the child process. */
   dispose(): Promise<void>
-  /** The host-owned persistent context (liveView mode only). */
-  readonly context?: BrowserContext | null
 }
 
 export interface SessionBrowserResult {
@@ -78,38 +64,6 @@ export interface SessionBrowserResult {
 }
 
 const STDERR_CAPTURE_LIMIT = 8192
-/** Wait for the DevToolsActivePort file after launching Chromium. */
-const CDP_PORT_FILE_TIMEOUT_MS = 15_000
-
-/** The file Chromium writes with its --remote-debugging-port=0 choice. */
-function cdpPortFile(profileDir: string): string {
-  return join(profileDir, 'DevToolsActivePort')
-}
-
-/** Read the ephemeral CDP endpoint Chromium chose (DevToolsActivePort:
- *  first line = port, second line = browser websocket path). */
-export function readCdpEndpoint(profileDir: string): string {
-  const lines = readFileSync(cdpPortFile(profileDir), 'utf8').trim().split('\n')
-  const port = Number.parseInt(lines[0] ?? '', 10)
-  if (!Number.isFinite(port) || port <= 0) throw new Error(`unreadable DevToolsActivePort: ${lines.join(' | ').slice(0, 80)}`)
-  const wsPath = (lines[1] ?? '').trim()
-  return `ws://127.0.0.1:${port}${wsPath === '' ? '' : wsPath}`
-}
-
-/** Poll for the CDP port file with a bounded wait. */
-export async function waitForCdpEndpoint(profileDir: string, timeoutMs = CDP_PORT_FILE_TIMEOUT_MS): Promise<string> {
-  const deadline = Date.now() + timeoutMs
-  let lastError: unknown
-  while (Date.now() < deadline) {
-    try {
-      return readCdpEndpoint(profileDir)
-    } catch (error) {
-      lastError = error
-      await new Promise(resolve => setTimeout(resolve, 250))
-    }
-  }
-  throw new Error(`CDP port file did not appear within ${timeoutMs}ms` + (lastError !== undefined ? ` (${String(lastError)})` : ''))
-}
 
 /**
  * Build the `@playwright/mcp` arguments for one session browser.
@@ -119,14 +73,12 @@ export async function waitForCdpEndpoint(profileDir: string, timeoutMs = CDP_POR
  * - `cdp` attaches to a browser the user started with remote debugging; no
  *   extension and no consent step, and the user's persistent profile keeps its
  *   logins (requires a non-default `--user-data-dir` since Chrome 136).
- * - `launch` starts its own browser: host-owned when `hostedEndpoint` is given
- *   (live view dual-owner), otherwise a per-session headless/headed Chrome.
+ * - `launch` starts its own per-session headless/headed Chrome.
  */
 export function sessionBrowserArgs(
   options: SessionBrowserOptions,
   profileDir: string,
   outputDir: string,
-  hostedEndpoint?: string,
 ): string[] {
   const args = [
     options.cliPath,
@@ -150,10 +102,6 @@ export function sessionBrowserArgs(
     args.push('--cdp-endpoint', options.cdpEndpoint)
     return args
   }
-  if (hostedEndpoint !== undefined) {
-    args.push('--cdp-endpoint', hostedEndpoint)
-    return args
-  }
   if (options.headless) args.push('--headless')
   args.push('--user-data-dir', profileDir)
   return args
@@ -164,20 +112,7 @@ export async function createSessionBrowser(options: SessionBrowserOptions): Prom
   const outputDir = join(profileDir, 'output')
   mkdirSync(outputDir, { recursive: true })
 
-  // Dual-owner mode: the host owns the persistent Chromium, the MCP child
-  // connects to it over the CDP endpoint. The context handle is kept for the
-  // live-view screencast.
-  let hostedContext: BrowserContext | null = null
-  let hostedEndpoint: string | undefined
-  if (options.mode === 'launch' && options.liveView === true) {
-    hostedContext = await playwrightChromium.launchPersistentContext(profileDir, {
-      headless: options.headless,
-      args: ['--remote-debugging-port=0'],
-      env: options.env,
-    })
-    hostedEndpoint = await waitForCdpEndpoint(profileDir)
-  }
-  const args = sessionBrowserArgs(options, profileDir, outputDir, hostedEndpoint)
+  const args = sessionBrowserArgs(options, profileDir, outputDir)
 
   const childEnv = options.env
 
@@ -208,10 +143,6 @@ export async function createSessionBrowser(options: SessionBrowserOptions): Prom
   try {
     await client.connect(transport)
   } catch (error) {
-    if (hostedContext !== null) {
-      try { await hostedContext.close() } catch { /* ignore */ }
-      hostedContext = null
-    }
     void transport.close().catch(() => {})
     throw new Error(
       `playwright-sessions: failed to start browser for session ${options.sessionId}: ${String(error)}` +
@@ -236,10 +167,6 @@ export async function createSessionBrowser(options: SessionBrowserOptions): Prom
       } catch {
         // Transport may already be gone; nothing left to do.
       }
-      if (hostedContext !== null) {
-        try { await hostedContext.close() } catch { /* ignore */ }
-        hostedContext = null
-      }
       closed = true
     })()
     return closePromise
@@ -249,7 +176,6 @@ export async function createSessionBrowser(options: SessionBrowserOptions): Prom
     sessionId: options.sessionId,
     profileDir,
     outputDir,
-    context: hostedContext,
     async call(rawName, args, signal) {
       ensureOpen()
       const result = await client.callTool(

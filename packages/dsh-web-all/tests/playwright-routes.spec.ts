@@ -24,16 +24,16 @@ describe('playwright control routes', () => {
   })
 
   it('returns status without exposing another owner identity', async () => {
-    const controller = { status: vi.fn(() => ({ mode: 'extension', state: 'disconnected', ownedByThisSession: false, busy: true, liveView: false })) }
+    const controller = { status: vi.fn(() => ({ mode: 'extension', state: 'disconnected', ownedByThisSession: false, busy: true })) }
     const route = makePlaywrightControlRoutes(controller as never)[0]
     const res = response()
     await route.handler(request('/api/playwright-sessions/status?sessionId=s2') as never, res as never)
     expect(res.status).toBe(200)
-    expect(JSON.parse(res.body.join('')).value).toEqual({ mode: 'extension', state: 'disconnected', ownedByThisSession: false, busy: true, liveView: false })
+    expect(JSON.parse(res.body.join('')).value).toEqual({ mode: 'extension', state: 'disconnected', ownedByThisSession: false, busy: true })
   })
 
   it('connects only with a JSON session id', async () => {
-    const controller = { connect: vi.fn(async () => ({ mode: 'extension', state: 'connected', ownedByThisSession: true, busy: false, liveView: false })) }
+    const controller = { connect: vi.fn(async () => ({ mode: 'extension', state: 'connected', ownedByThisSession: true, busy: false })) }
     const route = makePlaywrightControlRoutes(controller as never)[0]
     const res = response()
     await route.handler(request('/api/playwright-sessions/connect', { method: 'POST', body: { sessionId: 's1' } }) as never, res as never)

@@ -1,9 +1,8 @@
 /**
- * Both host WebSocket upgrades carry the shared host access fence, and neither
- * had a topology-level test: `ssh` only asserted the upgrade path exists, and
- * the live view had no fence assertion at all. A same-host reverse proxy makes
- * every remote request arrive on a loopback socket, so these cases pin the
- * refusal that a socket-only check would let through.
+ * The host WebSocket upgrade carries the shared host access fence: the `ssh`
+ * terminal previously had only a path-existence assertion. A same-host reverse
+ * proxy makes every remote request arrive on a loopback socket, so these cases
+ * pin the refusal that a socket-only check would let through.
  *
  * The admitted direction asserts the next guard instead of a real WebSocket
  * handshake: an admitted request without its required query parameter answers
@@ -16,7 +15,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { register as registerAccessTrust } from '../src/host/services/access-trust/index.ts'
 import { registerTerminalUpgrade } from '../src/host/services/ssh/terminal-ws.ts'
-import { registerLiveViewUpgrade } from '../src/host/services/playwright-sessions/live-view.ts'
 
 const disposers: Array<() => void> = []
 afterEach(() => { for (const dispose of disposers.splice(0)) dispose() })
@@ -87,14 +85,6 @@ function terminalUpgrade(authenticated: boolean): UpgradeRoute {
   return route
 }
 
-function liveViewUpgrade(authenticated: boolean): UpgradeRoute {
-  const built = harness(authenticated)
-  disposers.push(registerLiveViewUpgrade(built.ctx, async () => null))
-  const route = built.upgrades.find(candidate => candidate.path === '/playwright-sessions/ws/browser')
-  if (route === undefined) throw new Error('live-view upgrade not registered')
-  return route
-}
-
 describe('host upgrade fences', () => {
   it('ssh terminal: refuses a forged Host that arrives through a same-host proxy', () => {
     const route = terminalUpgrade(true)
@@ -124,23 +114,4 @@ describe('host upgrade fences', () => {
     expect(out.written()).toContain('400 Bad Request')
   })
 
-  it('agent-browser live view: refuses a forged Host and a sessionless canonical browser', () => {
-    const route = liveViewUpgrade(true)
-    const forged = socket()
-    route.handler(request({ url: '/playwright-sessions/ws/browser?sessionId=s1', host: 'evil.example', origin: 'http://evil.example' }), forged.duplex, Buffer.alloc(0))
-    expect(forged.written()).toContain('403 Forbidden')
-
-    const sessionless = liveViewUpgrade(false)
-    const denied = socket()
-    sessionless.handler(request({ url: '/playwright-sessions/ws/browser?sessionId=s1', host: CANONICAL, origin: `http://${CANONICAL}` }), denied.duplex, Buffer.alloc(0))
-    expect(denied.written()).toContain('403 Forbidden')
   })
-
-  it('agent-browser live view: admits the canonical entry with a session', () => {
-    const route = liveViewUpgrade(true)
-    const out = socket()
-    route.handler(request({ url: '/playwright-sessions/ws/browser', host: CANONICAL, origin: `http://${CANONICAL}` }), out.duplex, Buffer.alloc(0))
-    expect(out.written()).toContain('400 Bad Request')
-    expect(out.written()).not.toContain('403')
-  })
-})

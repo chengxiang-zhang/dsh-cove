@@ -1,4 +1,4 @@
-/** Public, secret-free control-plane contracts for the Agent Browser panel. */
+/** Public, secret-free control-plane contracts for the attended-browser lease. */
 import type { PlaywrightConnectionMode } from './contracts.ts'
 
 export const PLAYWRIGHT_CONTROL_API_PREFIX = '/api/playwright-sessions'
@@ -10,7 +10,6 @@ export interface PlaywrightConnectionStatus {
   state: PlaywrightConnectionState
   ownedByThisSession: boolean
   busy: boolean
-  liveView: boolean
   errorCode?: string
   errorMessage?: string
 }

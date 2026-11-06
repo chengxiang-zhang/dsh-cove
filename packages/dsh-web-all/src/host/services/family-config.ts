@@ -70,8 +70,7 @@ const CORE_FIELDS = {
     pruneProfileOnDispose: z.boolean().default(true),
     profileTtlMs: z.number().step(1).min(0).default(86_400_000),
     profileSweepIntervalMs: z.number().step(1).min(0).default(3_600_000),
-    liveView: z.boolean().default(false),
-  }).default({ mode: 'launch', headless: true, browserChannel: 'chrome', executablePath: '', allowedHosts: ['*'], allowedOrigins: [], blockedOrigins: [], toolCallTimeoutMs: 120_000, idleTimeoutMs: 900_000, maxConcurrentBrowsers: 2, pruneProfileOnDispose: true, profileTtlMs: 86_400_000, profileSweepIntervalMs: 3_600_000, liveView: false }),
+  }).default({ mode: 'launch', headless: true, browserChannel: 'chrome', executablePath: '', allowedHosts: ['*'], allowedOrigins: [], blockedOrigins: [], toolCallTimeoutMs: 120_000, idleTimeoutMs: 900_000, maxConcurrentBrowsers: 2, pruneProfileOnDispose: true, profileTtlMs: 86_400_000, profileSweepIntervalMs: 3_600_000 }),
   worktree: z.any(),
 }
 

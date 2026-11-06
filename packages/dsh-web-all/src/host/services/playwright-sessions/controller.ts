@@ -24,7 +24,6 @@ export class PlaywrightSessionsController {
         state: 'unavailable',
         ownedByThisSession: false,
         busy: false,
-        liveView: this.options.config.liveView,
       }
     }
     const ownedByThisSession = this.ownerId === sessionId
@@ -33,7 +32,6 @@ export class PlaywrightSessionsController {
       state: ownedByThisSession ? this.state : 'disconnected',
       ownedByThisSession,
       busy: this.ownerId !== undefined && !ownedByThisSession,
-      liveView: false,
       ...(ownedByThisSession && this.error !== undefined ? { errorCode: this.error.code, errorMessage: this.error.message } : {}),
     }
   }

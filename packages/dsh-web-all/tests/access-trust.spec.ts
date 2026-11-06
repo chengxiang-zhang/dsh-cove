@@ -256,7 +256,7 @@ describe('route families consult the shared fence', () => {
   })
 
   it('playwright control: default fence stays loopback, the mounted fence admits the entry', async () => {
-    const controller = { status: () => ({ mode: 'extension', state: 'disconnected', ownedByThisSession: false, busy: false, liveView: false }) }
+    const controller = { status: () => ({ mode: 'extension', state: 'disconnected', ownedByThisSession: false, busy: false }) }
     const strict = makePlaywrightControlRoutes(controller as never)[0]
     const refused = response()
     await strict.handler(request({ url: '/api/playwright-sessions/status?sessionId=s1', host: CANONICAL }) as never, refused.res as never)

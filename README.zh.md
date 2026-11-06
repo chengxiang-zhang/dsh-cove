@@ -72,7 +72,7 @@ dsh-cove 是 DeepSeek Harness（DSH）Web GUI 的一体化扩展套件：SSH 运
 
 ### 浏览器自动化
 
-每个会话拥有独立的 Playwright 浏览器，以 `mcp__playwright__*` 工具命名空间暴露，并由右栏 Agent 浏览器页签管理。
+每个会话拥有独立的 Playwright 浏览器，以 `mcp__playwright__*` 工具命名空间暴露；没有页面面板，能力只以工具形式存在（`launch` 启动隔离浏览器，`cdp` 直连你已启动的 Chrome）。
 
 每项能力的配置细节见 [dsh-web-all README](packages/dsh-web-all/README.zh.md)。
 

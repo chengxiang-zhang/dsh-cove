@@ -47,7 +47,7 @@ export interface Config extends Record<string, unknown> {
   agentsHome?: string
   /** Worktree PR credential reference. */
   worktree?: import('./host/services/worktree/index.ts').WorktreeServiceConfig
-  /** Playwright sessions service options (profile overridable; `liveView` enables the agent-browser live view). */
+  /** Playwright sessions service options (profile overridable): per-session browser tools and their attachment mode. */
   playwright?: import('./core/playwright-sessions/contracts.ts').PlaywrightSessionsConfig
   /** External CLI session defaults: concurrency, retention, cancellation grace, binary overrides. */
   externalSession?: import('./host/services/external-session/config.ts').ExternalSessionConfig

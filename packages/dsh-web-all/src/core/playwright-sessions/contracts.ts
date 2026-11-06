@@ -37,13 +37,6 @@ export interface PlaywrightSessionsConfig {
   pruneProfileOnDispose?: boolean
   profileTtlMs?: number
   profileSweepIntervalMs?: number
-  /**
-   * Enable the agent-browser live view for launch mode: the host starts the
-   * persistent Chromium (dual-owner; the MCP child connects over
-   * --cdp-endpoint) and serves the screencast. Extension mode uses the visible
-   * Chrome window itself and therefore does not expose a duplicate screencast.
-   */
-  liveView?: boolean
 }
 
 export interface ResolvedPlaywrightSessionsConfig {
@@ -64,7 +57,6 @@ export interface ResolvedPlaywrightSessionsConfig {
   pruneProfileOnDispose: boolean
   profileTtlMs: number
   profileSweepIntervalMs: number
-  liveView: boolean
 }
 
 export interface PlaywrightToolContract {
@@ -93,7 +85,6 @@ export const PLAYWRIGHT_SESSIONS_DEFAULTS = Object.freeze({
   pruneProfileOnDispose: true,
   profileTtlMs: 86_400_000,
   profileSweepIntervalMs: 3_600_000,
-  liveView: false,
 })
 
 /** Apply compatibility defaults while keeping caller arrays isolated. */
@@ -101,7 +92,6 @@ export function resolvePlaywrightSessionsConfig(
   config: PlaywrightSessionsConfig = {},
 ): ResolvedPlaywrightSessionsConfig {
   const mode = config.mode ?? PLAYWRIGHT_SESSIONS_DEFAULTS.mode
-  const liveView = mode === 'launch' && (config.liveView ?? PLAYWRIGHT_SESSIONS_DEFAULTS.liveView)
   return {
     mode,
     cdpEndpoint: config.cdpEndpoint ?? PLAYWRIGHT_SESSIONS_DEFAULTS.cdpEndpoint,
@@ -122,7 +112,6 @@ export function resolvePlaywrightSessionsConfig(
     pruneProfileOnDispose: config.pruneProfileOnDispose ?? PLAYWRIGHT_SESSIONS_DEFAULTS.pruneProfileOnDispose,
     profileTtlMs: config.profileTtlMs ?? PLAYWRIGHT_SESSIONS_DEFAULTS.profileTtlMs,
     profileSweepIntervalMs: config.profileSweepIntervalMs ?? PLAYWRIGHT_SESSIONS_DEFAULTS.profileSweepIntervalMs,
-    liveView,
   }
 }
 

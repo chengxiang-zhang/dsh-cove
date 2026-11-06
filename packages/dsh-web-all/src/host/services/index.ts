@@ -23,7 +23,7 @@ export interface ServiceAssemblyDeps {
   agentsHome?: string
   noBrowserAuth?: boolean
   worktree?: import('./worktree/index.ts').WorktreeServiceConfig
-  /** Playwright sessions options; `liveView` toggles the agent-browser live view. */
+  /** Playwright sessions options: per-session browser tools and how they attach. */
   playwright?: import('../../core/playwright-sessions/contracts.ts').PlaywrightSessionsConfig
   /** External CLI session defaults (concurrency, retention, binary overrides). */
   externalSession?: import('./external-session/config.ts').ExternalSessionConfig

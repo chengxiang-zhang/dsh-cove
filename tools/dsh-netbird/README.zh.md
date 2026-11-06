@@ -30,7 +30,7 @@ DSH 进程使用 `--host 127.0.0.1 --port 3080 --no-open` 启动，并通过 `--
 
 在本 SDK 中，Web profile 的 `web` 行 `trustedHosts` 不会到达运行时围栏：connection 服务与插件围栏读取的是启动参数通过 `--trusted-host` 声明的 authority 列表，`@deepseek-ai/dsh-web-app` 0.2.1 起由 `ctx.webStartup.trustedHosts` 暴露（更早的 SDK 是 `ctx.webRuntime.trustedHosts`）。请在命令行传入规范 authority，不要把 IP 字面量、兼容别名或其他局域网名称写进该列表。
 
-同一份已声明 authority 列表也是宿主侧插件面板的准入列表：web-all 的 Git 管理、Agent 浏览器、worktree、SSH、memoir、运行方式与右栏工作台路由共用一个宿主访问围栏——请求 socket 必须是 loopback，且 Host 为 loopback，或属于该列表并携带有效 DSH 浏览器会话（本地账号、飞书或 OIDC 签发的同一个 HttpOnly 会话，或原生启动 token）；跨站标记、缺失 Host、未声明的 Host、无有效会话一律 403。本机浏览器直接访问 `127.0.0.1:3080` 时 Host 即 loopback，因此不需要额外配置。`noBrowserAuth: true` 会把远程分支退化为仅 Host/Origin 检查，等同于把这些面板开放给任何能到达 80 端口的 peer。
+同一份已声明 authority 列表也是宿主侧插件面板的准入列表：web-all 的 Git 管理、worktree、SSH、memoir、运行方式与右栏工作台路由共用一个宿主访问围栏——请求 socket 必须是 loopback，且 Host 为 loopback，或属于该列表并携带有效 DSH 浏览器会话（本地账号、飞书或 OIDC 签发的同一个 HttpOnly 会话，或原生启动 token）；跨站标记、缺失 Host、未声明的 Host、无有效会话一律 403。本机浏览器直接访问 `127.0.0.1:3080` 时 Host 即 loopback，因此不需要额外配置。`noBrowserAuth: true` 会把远程分支退化为仅 Host/Origin 检查，等同于把这些面板开放给任何能到达 80 端口的 peer。
 
 Nginx 代理 `127.0.0.1:3080`。最小虚拟主机模板见 [nginx.conf.template](nginx.conf.template)。必须保留 `proxy_buffering off;`：DSH 与插件的 JavaScript bundle 可能超过 nginx 内存代理缓冲区；若 worker 无权访问用户目录下的临时路径，响应会被截断，登录后的应用根节点将保持空白。
 
@@ -70,7 +70,7 @@ browse 返回目录列表；`native` 返回接缝的 `directory-picker/unavailab
 | `password` | `302` 跳转 `/login` | 默认值，集成 WebAuth 同时保护外壳、API 与特权面板 |
 | `network-gate` | 直接返回 DSH 文档 | 门禁已部署，并由 `--verify-gate` 现场验证通过 |
 
-`network-gate` 把覆盖网成员资格变成唯一凭据：能入网的任何设备无需二次认证即可驱动 Git、SSH、worktree、Agent 浏览器等特权面板。因此审计拒绝在门禁未现场验证时接受该机器，收紧 NetBird ACL 与 setup key 是这一模式的前置条件。
+`network-gate` 把覆盖网成员资格变成唯一凭据：能入网的任何设备无需二次认证即可驱动 Git、SSH、worktree 等特权面板。因此审计拒绝在门禁未现场验证时接受该机器，收紧 NetBird ACL 与 setup key 是这一模式的前置条件。
 
 ## TLS 入口
 
@@ -207,7 +207,7 @@ pnpm dsh-netbird:audit
 
 审计逐台检查入口与部署事实。规范域名必须解析到清单地址，且未登录入口符合该机器的 `authMode`：`password` 必须是 `/login` 跳转，`network-gate` 必须是 DSH 文档，声明与部署不一致即失败。DNS 未解析或不匹配、连接失败、nginx 占位页、`502`、集成鉴权未挂载都会失败。
 
-`GET /api/dsh-access/session` 要求 `authority.declared === true`：该读数不需要会话，是运行进程确实信任规范 authority 的证据，而这是所有特权面板（Git、右栏、worktree、SSH、memoir、运行方式、Agent 浏览器）可用前提。姿态状态包括 `authority-trusted`、`authority-untrusted`（缺失或写错 `--trusted-host`）、`access-probe-missing`（目标运行的插件构建还没有该路由，姿态无法验证）和 `access-probe-malformed`。
+`GET /api/dsh-access/session` 要求 `authority.declared === true`：该读数不需要会话，是运行进程确实信任规范 authority 的证据，而这是所有特权面板（Git、右栏、worktree、SSH、memoir、运行方式）可用前提。姿态状态包括 `authority-trusted`、`authority-untrusted`（缺失或写错 `--trusted-host`）、`access-probe-missing`（目标运行的插件构建还没有该路由，姿态无法验证）和 `access-probe-malformed`。
 
 `GET /worktree/tree` 在不带会话时探测宿主访问围栏：未声明的 Host 拿到 `200` 即泄漏；`password` 机器上规范 Host 不带会话拿到 `200` 同样是泄漏，说明该机器运行的插件构建还早于共享围栏。加 `--skip-posture` 只跑文档探测。
 

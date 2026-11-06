@@ -55,11 +55,11 @@ describe('right-pane page contract', () => {
     expect(Object.keys(rightPaneEn).sort()).toEqual(Object.keys(rightPaneZh).sort())
   })
 
-  it('registers the git page and the agent-browser tab', () => {
+  it('registers only the git page', () => {
     const { bodies, tabs } = harness({ byId: { s1: { cwd: '/repo' } } })
-    expect(bodies.map(row => row.key)).toEqual(['dsh-web-all/git', 'dsh-web-all/agent-browser'])
-    expect(tabs.map(row => row.id)).toEqual(['dsh-web-all/git', 'dsh-web-all/agent-browser'])
-    expect(tabs.map(row => row.kind)).toEqual(['web-ui.git', 'web-ui.agent-browser'])
+    expect(bodies.map(row => row.key)).toEqual(['dsh-web-all/git'])
+    expect(tabs.map(row => row.id)).toEqual(['dsh-web-all/git'])
+    expect(tabs.map(row => row.kind)).toEqual(['web-ui.git'])
     // The seat injects the session identity; nothing reads the removed
     // `sessions.list.current` fallback any more.
     expect(bodies[0].props.sessionId).toBe('s1')
