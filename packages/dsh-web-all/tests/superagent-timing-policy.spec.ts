@@ -263,4 +263,42 @@ describe('timing and wording', () => {
     expect(over.ok).toBe(false)
     if (!over.ok) expect(over.code).toBe('TOO_LONG')
   })
+
+  it('15. judge(answer) allows moment answer', () => {
+    expect(momentAllowed('answer', facts({ dispositionAnswersInbound: true }))).toBe(true)
+  })
+
+  it('16. judge(ask) allows moment ask without a commitment', () => {
+    // No commit was made; the route decision itself still makes `ask` truthful.
+    expect(momentAllowed('ask', facts({
+      committedInThisTurn: false,
+      hasAskedAssumptionOrRoute: true,
+    }))).toBe(true)
+  })
+
+  it('17. judge(acknowledge|decline) both allow moment answer', () => {
+    expect(momentAllowed('answer', facts({ dispositionAnswersInbound: true }))).toBe(true)
+    expect(momentAllowed('answer', facts({ dispositionAnswersInbound: true }))).toBe(true)
+  })
+
+  it('18. a successful commit in this turn allows moment deliver', () => {
+    expect(momentAllowed('deliver', facts({
+      committedInThisTurn: true,
+      commitmentTerminal: true,
+    }))).toBe(true)
+  })
+
+  it('19. with no commit and none of the answer/ask gates, outlet refuses MOMENT_FORBIDDEN', () => {
+    const blocked = policy({
+      momentFacts: () => facts({
+        committedInThisTurn: false,
+        commitmentTerminal: false,
+        dispositionAnswersInbound: false,
+        hasAskedAssumptionOrRoute: false,
+        byHost: false,
+      }),
+    }).check(proposal({ moment: 'answer' }), NOW)
+    expect(blocked.ok).toBe(false)
+    if (!blocked.ok) expect(blocked.code).toBe('MOMENT_FORBIDDEN')
+  })
 })

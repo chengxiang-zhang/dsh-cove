@@ -26,6 +26,7 @@ import { selfCheck, type SelfCheckResult } from './self-check.ts'
 import { DESK_REFUSAL, deskMayRun, type ToolFace } from './toolface.ts'
 import { createDeskTools, type DeskHandlers, type DocArea } from './tools.ts'
 import { audienceOf, buildView, dossierFingerprint, newTurnContext, windowOf, type TurnContext } from './turn.ts'
+import { attributeTurnEnd } from '../judgment/translate.ts'
 
 export interface DeskConfig {
   seatDir: string
@@ -409,13 +410,14 @@ export function createPresence(deps: DeskDeps): Presence {
     startedSignal.get(trigger.deliberation_id)?.()
 
     const endKind = await ended
+    const attributed = attributeTurnEnd(endKind, ctx.trace)
     turns.delete(sessionId)
     if (endKind === 'timeout') closeTimedOut(deskId, trigger, ctx)
     settleUnjudged(ctx)
     const finishedAt = ledger.nowMs()
     finish(trigger.deliberation_id, {
-      ops: ctx.ops, tool_errors: ctx.toolErrors, tokens: 0, end_reason: endKind,
-      rule_trace: { tools: ctx.trace, ...(ctx.shadow ? { shadow_ops: ctx.shadowOps } : {}),
+      ops: ctx.ops, tool_errors: ctx.toolErrors, tokens: 0, end_reason: attributed.end_reason,
+      rule_trace: { tools: ctx.trace, ...(attributed.commit ? { commit: attributed.commit } : {}), ...(ctx.shadow ? { shadow_ops: ctx.shadowOps } : {}),
         selfcheck: { extra: check.extra, extra_count: check.extra_count, denied_visible: check.denied_visible, violations: check.violations },
         ...(endKind === 'timeout' ? { closed: 'timeout' } : {}), truncated: dossier.truncated, alarms: dossier.alarms },
       pub_hash: projection.pubHash, dossier_hash: dossierFingerprint(projection.pubHash, projection.audienceClass),

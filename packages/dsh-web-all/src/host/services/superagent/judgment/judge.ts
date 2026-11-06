@@ -25,9 +25,9 @@ import type { KernelTx } from '../kernel/ledger.ts'
 import { PHYSICAL } from '../protocol/db.ts'
 import type { InboundEvent } from '../protocol/events.ts'
 import type { Disposition, IntakeRow } from '../protocol/objects.ts'
-import { normalizeClassId } from '../protocol/objects.ts'
 import type { JudgeInput, ToolErrorCode, ToolResult } from '../protocol/tools.ts'
 import { commitmentVisibleAt, threadOf, type JudgmentDeps, type TurnContext } from './gates.ts'
+import { classGate } from './translate.ts'
 
 const I = PHYSICAL.intake
 const C = PHYSICAL.commitment
@@ -71,16 +71,16 @@ export function judgeTool(deps: JudgmentDeps) {
         return fail('ABOUT_NOT_VISIBLE', `commitment ${input.about} is not visible at this desk`)
       }
 
+      const gate = classGate(input.class)
+      if (gate.error) return gate.error
+
       try {
         tx.disposeIntake(event.event_id, shadow, {
           disposition,
           reason: input.reason,
           about: input.about,
           corrects: input.corrects,
-          // The model names the class freely; the host keeps one spelling (`02` closes
-          // the enum, `08` leaves the naming to the reader). A live turn was lost to
-          // `status_query`, which the class regex could not accept.
-          class: normalizeClassId(input.class),
+          class: gate.classId,
           confidence: input.confidence,
           ...(input.new_thread === undefined ? {} : { new_thread: input.new_thread }),
           deliberation_id: ctx.deliberationId,

@@ -18,7 +18,7 @@ import { PHYSICAL } from '../protocol/db.ts'
 import type { InboundEvent } from '../protocol/events.ts'
 import { threadKeyOf } from '../kernel/claim.ts'
 import type { AttemptRow, Capability, CommitmentRow, Strength, WorkClassRow } from '../protocol/objects.ts'
-import { normalizeClassId } from '../protocol/objects.ts'
+import { normalizeClassId, parseEndReason } from '../protocol/objects.ts'
 import type { CommitInput, ToolErrorCode } from '../protocol/tools.ts'
 
 /** Turn context as the desk injects it; T21's TurnContext is structurally assignable. */
@@ -60,6 +60,12 @@ export const MAX_ASSUMPTIONS = 5
 export const MAX_BUDGET_SCALE = 4
 export const SLOT_QUEUE_MAX = 5
 export const CLASS_NAME = /^[a-z][a-z0-9-]{1,40}$/
+/** One class gate for judge and commit: the same predicate and the same sentence, so a
+ *  value that cannot name a work class is refused before it is ever written down. */
+export function classGate(raw: string): { classId: string; error?: Translation } {
+  const classId = normalizeClassId(raw)
+  return CLASS_NAME.test(classId) ? { classId } : { classId, error: fail('CLASS_UNKNOWN', `work class "${classId}" must match ${CLASS_NAME}`) }
+}
 /** Technical choices are the system's to make (B14): never asked of the owner. */
 export const TECHNICAL_QUESTION = /执行体|模型|重试|继续还是停|换档|executor|model|retry|keep going|continue or stop/i
 
@@ -147,8 +153,11 @@ export function translateToCommit(ctx: JudgmentTurn, input: CommitInput, deps: T
   if (rawAssumptions.length > MAX_ASSUMPTIONS) return fail('TOO_MANY_ASSUMPTIONS', `${rawAssumptions.length} > ${MAX_ASSUMPTIONS}`)
   const intake = read.get<{ class: string | null; about: string | null }>(
     `SELECT class, about FROM ${PHYSICAL.intake} WHERE event_id = ? AND shadow = ?`, event.event_id, ctx.shadow ? 1 : 0)
-  const classId = normalizeClassId(intake?.class ?? '')
-  const cls = CLASS_NAME.test(classId) ? deps.classes.get(classId) : undefined
+  // 5. Work class.
+  const gate = classGate(intake?.class ?? '')
+  if (gate.error) return gate.error
+  const classId = gate.classId
+  const cls = deps.classes.get(classId)
   const norm = normalizeAssumptions(rawAssumptions, cls)
   if ('error' in norm) return fail('ASK_REQUIRED', norm.error)
 
@@ -163,8 +172,6 @@ export function translateToCommit(ctx: JudgmentTurn, input: CommitInput, deps: T
     if (top && top.creditor === sender) return fail('THREAD_BUSY', `${top.commitment_id} is still open on this thread`)
     if (top) parentId = top.commitment_id
   }
-  // 5. Work class.
-  if (!CLASS_NAME.test(classId)) return fail('CLASS_UNKNOWN', `work class "${classId}" must match ${CLASS_NAME}`)
   // 6. Budget scale.
   const scale = input.budget_scale ?? 1
   if (!(scale > 0) || scale > MAX_BUDGET_SCALE) return fail('BUDGET_OVER_CAP', `budget_scale ${scale} > ${MAX_BUDGET_SCALE}`)
@@ -224,4 +231,23 @@ function priorOf(ledger: Ledger, key: string, about: CommitmentRow | undefined, 
 /** 08 fixed acknowledgement: understanding, calibrated time, then "say if wrong" or the one question. */
 export function ackText(commitmentId: string, understanding: string, etaMinutes: number, question?: string): string {
   return `接了 ${commitmentId}：${understanding}。预计 ${Math.max(1, Math.round(etaMinutes))} 分钟。${question ? `先回答我：${question}` : '不对就说'}`
+}
+
+// M3 helper: wired by `desk/presence.ts` (around line 411). The one-line call-site
+// change is intentionally not done here because `desk/*` is owned by another writer.
+/**
+ * A turn that ends without a protocol reason is recorded as `unknown`, which is
+ * indistinguishable from "the host never said". When a tool refused the work, the
+ * turn failed for a known reason: attribute it to `error` and name the refusing
+ * tool in the rule trace. `END_REASONS` is a DDL CHECK set, so no member is added.
+ */
+export function attributeTurnEnd(
+  rawKind: string | undefined,
+  trace: readonly { tool: string; ok: boolean; code?: string }[],
+): { end_reason: ReturnType<typeof parseEndReason>; commit?: { ok: false; code: string } } {
+  const base = parseEndReason(rawKind)
+  if (base !== 'unknown') return { end_reason: base }
+  const last = [...trace].reverse().find(t => !t.ok)
+  if (!last) return { end_reason: base }
+  return { end_reason: 'error', ...(last.code === undefined ? {} : { commit: { ok: false as const, code: last.code } }) }
 }
