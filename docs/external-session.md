@@ -126,22 +126,24 @@
 模型可见四个工具，其中两个沿用原生名字以保持兼容：
 
 ```
-subagent_claude_code(prompt, session_id?, cwd?, title?)
-subagent_codex(prompt, session_id?, cwd?, title?)
+subagent_claude_code(prompt, session_id?, cwd?, title?, model?)
+subagent_codex(prompt, session_id?, cwd?, title?, model?)
 external_session_list(status?)
 external_session_stop(session_id)
 ```
 
 - 省略 `session_id`：新建外部会话并跑第一轮，等价原有一次性的使用方式。
 - 提供 `session_id`：在该会话上跑下一轮，内部使用 CLI 会话号续接。
+- 没有 `provider` 参数：走哪个 CLI 由调用的是哪个工具决定，provider 不由参数选。
 - 返回统一结构：`{ session_id, turn, status, result, usage, cost_usd, can_continue }`。
 - 工具为同步阻塞：本轮结束才返回。这样结果直接进入对话，不依赖任何未公开的消息注入通道。
 
-两个派发工具各自带一个可选的 `model`：目录由接线行给，不写在代码里。行上的 `config.models` 是 `[{ id, description }]`，编译成参数 schema 的 `oneOf` 分支，于是每个候选模型在选择处就带着自己的说明；行上不给 `models` 时该参数退化为自由字符串，最终由 CLI 自己的设置决定。两个工具各带各的目录，避免把 Claude 的模型 id 递给 Codex。
+两个派发工具各自带一个可选的 `model`：目录由实体行的 `config.externalSession.tools` 给，不写在代码里。行上的 `config.models` 是 `[{ id, description }]`，编译成参数 schema 的 `oneOf` 分支，于是每个候选模型在选择处就带着自己的说明；行上不给 `models` 时该参数退化为自由字符串，最终由 CLI 自己的设置决定。两个工具各带各的目录，避免把 Claude 的模型 id 递给 Codex。
 
 模型按轮记录：`model` 写进该轮的 turn 记录，续轮可以换模型，账单与回归才归得到具体模型。
 
-每个工具还可以配一个 `default`：调用方省略 `model` 时用它。当前这台机器的口径是 claude 默认 `kaon/claude-opus-5-5`、codex 默认 `gpt-6-astra`，工具的说明文字会把默认档直接写出来，模型不必猜。
+每个工具还可以配一个 `default`：调用方省略 `model` 时用它；行上没配 `default` 时，省略 `model` 就是 CLI 自己配置的模型。当前这台机器的口径是 claude 默认 `kaon/claude-opus-5-5`、codex 默认 `gpt-6-astra`，工具的说明文字会把默认档直接写出来，模型不必猜。
+
 - 不做后台模式：一次调用占用当前轮，直到本轮结束。要改成后台派发，给工具加一个 `background` 参数即可，引擎与存储不动。
 
 这四个工具由本实体自己的 Loader 条目注册，随实体行一起装配：`web-all` 的 `config.externalSession.tools` 决定每个 provider 的开关与模型目录，控制工具只注册一次。工具不放在预设里——预设行由 `agentPresets` 在运行时装配，不属于 Loader 条目，而 HMR 只能替换「所有活着的 importer 都是 Loader 条目」的模块；工具一旦从预设平面 import，本文件的任何改动都要重启宿主才生效。工具注册仍是容忍式的：名字被占时不报错，先注册者拥有，被拒的一方发一条点名讯息。
@@ -220,9 +222,9 @@ Codex：
 
 | 对象 | 处置 |
 | --- | --- |
-| `tool-subagent-claude-code` / `tool-subagent-codex` 两行 | 由本能力承担，指向本包的工具入口（两种接线见 §13） |
+| `tool-subagent-claude-code` / `tool-subagent-codex` 两行 | 由本能力承担，指向本包的工具入口（接线见 §13） |
 | `@deepseek-ai/dsh-subagent` 服务、spawn/fork 本地子代理、Agent Team | 保留不动 |
-| ACP 两个强模型入口 `subagent_astra` / `subagent_opus55` | 退役：它们做的事已由本能力用 `model` 覆盖（codex→astra、claude→opus），provider 行与 tool 行一并置 `disabled: true` |
+| ACP 两个强模型入口 `subagent_astra` / `subagent_opus55` | 退役：它们做的事已由本能力用 `model` 覆盖（codex→astra、claude→opus），provider 行与 tool 行整段移除，不留 `disabled: true` |
 | `subagent_cursor` | 保留：本能力只驱动 claude 与 codex 两个 CLI，Cursor 没有对应通道 |
 | `~/.claude/settings.json`、Codex 原生配置 | 保留，仍是唯一凭据与模型来源 |
 
@@ -317,7 +319,7 @@ Codex：
 - **同步阻塞**：工具在本轮结束才返回，长任务的对话卡片只显示运行中，实时进度只在面板可见。
 - **互斥门 fail-closed**：原生外部 provider 没关时本能力完全不挂载，`/api/external-session/*` 返回 404（规则见 §12），不会与原生并存，也不会抢工具名。
   - 自查：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3080/api/external-session/list` 回 `404` 说明没挂载（已挂载但调用方不在围栏内是 `403`，正常是 `200`）；宿主日志里 external-session 的装配拒绝消息会点名 `tool-subagent-claude-code` 与 `tool-subagent-codex`；`grep externalSession ~/.dsh/profiles/web/cordis.patch.yml` 为空说明就是还没迁移。
-- **迁移前这两个工具名仍归原生**：引擎服务缺席时预设层入口不注册工具（机制见 §7），所以 `subagent_claude_code` 与 `subagent_codex` 在四个原生行关掉之前仍由原生实现提供。
+- **工具名归实体行，不归预设**：预设行在 Loader 之外实例化插件，工具注册只由实体自己的 Loader 条目承担（机制见 §7）。实体行缺席时这两个工具直接不出现，不会被预设层接管，也不会自动回落到原生实现。
 - **`auth-required` 是 fail-closed**：CLI 的 401 与未登录一律判 `auth-required`（要人处理），不伪装成可重试的 `provider-error`。
 - **codex 需要可写的宿主 home**：真实成功路径要 `~/.codex` 可写；只读 home 会在 CLI 自己的 app-server 初始化阶段先失败，那是宿主 permissions 差异，不是适配器差异。
 

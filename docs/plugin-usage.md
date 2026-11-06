@@ -26,7 +26,7 @@
 
 所以卡片上写「全局已停用，由 Agent 预设按会话提供」是正常状态。典型例子是工具面的行：`tool-bash`、`tool-fs`、`tool-web`、`tool-todo`、`tool-skill`、`tool-subagent`、`plan-mode`、`compaction-basic` 在全局平面都是停用，由预设发给会话。判定依据是 Agent 预设的组合列表，不是全局那一栏。
 
-反向也成立：全局开着的行可能在某个预设里被单独置成停用。许愿式编程预设就把 `tool-subagent-claude-code` 与 `tool-subagent-codex` 各自关了。
+反向也成立：全局开着的行可能在某个预设里被单独置成停用，判断依据同样是该预设的组合。
 
 还有一个容易读错的地方：`disabled` 可以是表达式而不是布尔值。`settings`、`config-editor`、`plugin-manager`、`hmr`、`plugin-market` 的停用条件都是「启动器没有提供 profileContext」，而 `dsh web` 提供了，所以它们实际是启用的；`bash-sandbox` 的停用条件是「平台是 Windows」，在 macOS 上它实际是启用的。**判断是否生效要看插件列表页（它显示求值后的生效状态），不要看配置文件里的字面量。**
 
@@ -309,17 +309,15 @@
 
 会话里的子代理导航由 `ui-subagent` 提供：在会话里列出子代理目录、进入它的可继续子会话，`@` 引用里也能选到子代理会话。
 
-外部后端都是 **one-shot**：只回最终答案，不能继续发消息、不能冷恢复、看不到中间过程。前置条件逐个是：
+`subagent_cursor` 仍是 **one-shot**：只回最终答案，不能继续发消息、不能冷恢复、看不到中间过程。三个工具的前置条件逐个是：
 
 | 工具 | 需要本机有什么 |
 | --- | --- |
-| `subagent_claude_code` | `~/.claude/settings.json` 与 Claude Code 原生登录可用；本 profile `permissionMode: auto` |
-| `subagent_codex` | 本机原生 Codex 配置与登录；本 profile 固定 `model: gpt-6-astra`，`permissionMode` 默认 `never` |
+| `subagent_claude_code` | `~/.claude/settings.json` 与 Claude Code 原生登录可用；本能力固定 `--permission-mode auto` |
+| `subagent_codex` | 本机原生 Codex 配置与登录；模型可当场选、默认 `gpt-6-astra`；新轮次带 `--approve-for-me`，续轮沿用该会话记录的策略 |
 | `subagent_cursor` | `/Users/leo/.local/bin/cursor-agent` 存在且 `CURSOR_API_KEY` 有效；`permission: allow` 等于无人值守批准它每个权限请求（含写文件与执行 shell） |
 
-注意许愿式编程预设把 `tool-subagent-claude-code` 与 `tool-subagent-codex` 各自置成停用，所以在那个预设的会话里看不到这两个外部工具；进程内的 `subagent` / `subagent_fork` 不受影响。
-
-现在这两行由本仓 external-session 能力承担，不再走官方 provider：它直接起 `claude` / `codex` CLI，因此多一个可选 `session_id` 用于续同一段对话，并额外提供 `external_session_list` 与 `external_session_stop`；模型可以用调用参数 `model` 当场选，候选目录与默认档在实体行的 `config.externalSession.tools` 里配、逐个带说明，不给 `model` 时用默认档。工具由 `web-all` 这个 Loader 条目注册，所以每个预设、每个会话都看得到。细节与迁移见 [external-session.md](external-session.md)。
+`subagent_claude_code` 与 `subagent_codex` 由本仓 external-session 能力承担，直接起 `claude` / `codex` CLI：因此多一个可选 `session_id` 用于续同一段对话，并额外提供 `external_session_list` 与 `external_session_stop`；模型可以用调用参数 `model` 当场选，候选目录与默认档在实体行的 `config.externalSession.tools` 里配、逐个带说明，不给 `model` 时用默认档。工具由 `web-all` 这个 Loader 条目注册，所以每个预设（含许愿式编程）、每个会话都看得到；进程内的 `subagent` / `subagent_fork` 不受影响。细节与迁移见 [external-session.md](external-session.md)。
 
 ### Agent Teams
 
