@@ -268,22 +268,26 @@ async function dismissFirstRunDialogs(page: Page): Promise<void> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const keyDialog = page.getByRole('dialog', { name: /API key|密钥/i }).first()
     if (await keyDialog.isVisible().catch(() => false)) {
+      // Every click in this helper is cleanup, never an assertion, so each one is bounded.
+      // Unbounded they inherit the whole 60 s case budget: on a shell build whose
+      // dismissal control has another word, the first case then dies inside cleanup with
+      // "target page has been closed" and reports nothing about the mount it was checking.
       await keyDialog
         .getByRole('button', { name: /Configure later|稍后|以后再说|暂不配置/i })
         .first()
-        .click({ force: true })
+        .click({ force: true, timeout: 3_000 })
         .catch(() => {})
       await keyDialog.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {})
     }
     const notice = page.getByRole('button', { name: /^(?:Continue|继续|知道了|OK|Got it)$/ }).first()
     if (await notice.isVisible().catch(() => false)) {
-      await notice.click({ force: true }).catch(() => {})
+      await notice.click({ force: true, timeout: 3_000 }).catch(() => {})
       await notice.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {})
     }
     const mask = page.locator('div[aria-hidden="true"][class*="_mask_"]').first()
     if (!(await mask.isVisible().catch(() => false))) break
     await page.keyboard.press('Escape').catch(() => {})
-    await mask.click({ force: true, position: { x: 5, y: 5 } }).catch(() => {})
+    await mask.click({ force: true, position: { x: 5, y: 5 }, timeout: 3_000 }).catch(() => {})
     await page.waitForTimeout(500)
   }
 }
