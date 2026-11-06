@@ -331,6 +331,7 @@ Codex：
 - **互斥门 fail-closed**：原生外部 provider 没关时本能力完全不挂载，`/api/external-session/*` 返回 404（规则见 §12），不会与原生并存，也不会抢工具名。
   - 自查：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3080/api/external-session/list` 回 `404` 说明没挂载（已挂载但调用方不在围栏内是 `403`，正常是 `200`）；宿主日志里 external-session 的装配拒绝消息会点名 `tool-subagent-claude-code` 与 `tool-subagent-codex`；`grep externalSession ~/.dsh/profiles/web/cordis.patch.yml` 为空说明就是还没迁移。
 - **工具名归实体行，不归预设**：预设行在 Loader 之外实例化插件，工具注册只由实体自己的 Loader 条目承担（机制见 §7）。实体行缺席时这两个工具直接不出现，不会被预设层接管，也不会自动回落到原生实现。
+- **真机验证是交付条件，不是可选项**：改动本能力的适配器或工具面时，除单测外要跑一次真机对（`DSH_EXT_SESSION_REAL_CLI=1` + `DSH_EXT_SESSION_CLAUDE_BIN=<claude>`，`tests/external-session-claude-provider.spec.ts` 的 `live progress and partial text` 一组）。2026-11-06 正是这一组抓到了单测覆盖不到的缺陷：取消会让子进程的 `done` reject，旧代码据此走了 failed 分支，把已产出的文本丢掉。单测全绿而真机红，说明这类缺陷只能在真机上暴露。
 - **`auth-required` 是 fail-closed**：CLI 的 401 与未登录一律判 `auth-required`（要人处理），不伪装成可重试的 `provider-error`。
 - **codex 需要可写的宿主 home**：真实成功路径要 `~/.codex` 可写；只读 home 会在 CLI 自己的 app-server 初始化阶段先失败，那是宿主 permissions 差异，不是适配器差异。
 
