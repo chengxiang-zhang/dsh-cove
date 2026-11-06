@@ -115,3 +115,23 @@ test('the repository patch is the rendered form of the shipped composition', () 
   )
   assert.ok(!patch.includes('.agent-presets'), 'no machine preset directory leaks into the package')
 })
+
+test('the desk preset patch is derived from its composition too', () => {
+  // Same hazard as code-vibe: the patch claimed verbatim fidelity with nothing
+  // checking it. The desk pair is byte-identical to a fresh render, and a
+  // hand-edited composition makes --check fail.
+  assert.equal(renderMain(['--check']), 0)
+  const root = mkdtempSync(join(tmpdir(), 'dsh-desk-preset-'))
+  try {
+    const dir = join(root, 'packages/dsh-web-all/presets/superagent-desk')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'preset.yml'), 'name: 秘书桌\ndescription: 测试用\n')
+    writeFileSync(join(dir, 'agent.cordis.yml'), '- id: persona\n  name: x\n')
+    assert.equal(renderMain([], { root }), 0)
+    assert.equal(renderMain(['--check'], { root }), 0)
+    writeFileSync(join(dir, 'agent.cordis.yml'), '- id: persona\n  name: y\n')
+    assert.equal(renderMain(['--check'], { root }), 1, 'drift must fail the check')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

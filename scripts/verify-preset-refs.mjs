@@ -19,9 +19,12 @@
  *   4. No backup or cache debris ships inside the preset.
  *   5. Every skill directory declares a frontmatter `name` equal to its
  *      directory, so the catalog and the filesystem cannot disagree.
- *   6. Every `subagent_*` / `external_session_*` name in a composition or in the
- *      skill prose is a tool the host registers or a composition declares, so a
- *      retired name cannot keep routing work to a channel that no longer exists.
+ *   6. Every `subagent_*` / `external_session_*` name in a composition, in the
+ *      skill prose, or in a script the preset ships is a tool the host registers
+ *      or a composition declares, so a retired name cannot keep routing work to
+ *      a channel that no longer exists. Scripts are read because a shipped
+ *      installer once wrote retired `toolName:` rows straight into a live
+ *      profile, where no document-level gate would have seen them.
  *
  * Usage:
  *   node scripts/verify-preset-refs.mjs            # report + exit code
@@ -148,11 +151,12 @@ const TOOL_NAME_ROW = /^\s*toolName:\s*['"]?([A-Za-z0-9_.-]+)['"]?\s*$/gmu
 const PRESETS_DIR = dirname(PRESET_DIR)
 
 /**
- * The documents rule 6 reads: every composition under `presets/` and every
- * `skills/**\/*.md`, references included. Two kinds are left out because a name
- * in them cannot be fixed independently: a loader patch is a rendered byte-copy of
- * a composition (rule 1 already pins the code-vibe pair) and `preset.yml` is the
- * flat roster metadata.
+ * The documents rule 6 reads: every composition under `presets/`, every
+ * `skills/**\/*.md` (references included), and every script the preset ships.
+ * A loader patch is left out because it is a rendered byte-copy of a
+ * composition (rule 1 pins each pair) and `preset.yml` is flat roster metadata.
+ * Scripts are included: a shipped installer once emitted retired `toolName:`
+ * rows into a live profile, which no document-only scan could catch.
  */
 export function presetToolNameDocs({ root = repoRoot } = {}) {
   const presetsRoot = join(root, PRESETS_DIR)
@@ -163,8 +167,16 @@ export function presetToolNameDocs({ root = repoRoot } = {}) {
     const file = basename(relative)
     const prose = file.endsWith('.md') && /(?:^|\/)skills\//u.test(relative)
     const composition = /\.ya?ml$/u.test(file) && file !== 'preset.yml' && !/\.patch\.ya?ml$/u.test(file)
-    if (!prose && !composition) continue
-    docs.push({ path: join(PRESETS_DIR, relative), text: readFileSync(join(presetsRoot, relative), 'utf8') })
+    const script = /\.(?:sh|mjs)$/u.test(file)
+    if (!prose && !composition && !script) continue
+    docs.push({
+      path: join(PRESETS_DIR, relative),
+      text: readFileSync(join(presetsRoot, relative), 'utf8'),
+      // Only a composition can declare a tool row. A script that mentions
+      // `toolName:` is emitting one, not declaring the host's contract, so it
+      // must never widen the allowed set it is checked against.
+      kind: composition ? 'composition' : script ? 'script' : 'prose',
+    })
   }
   return docs
 }
@@ -172,8 +184,9 @@ export function presetToolNameDocs({ root = repoRoot } = {}) {
 /** Every tool name a composition declares with a `toolName:` row. */
 export function declaredToolNames({ root = repoRoot } = {}) {
   const names = new Set()
-  for (const { text } of presetToolNameDocs({ root })) {
-    for (const match of text.matchAll(TOOL_NAME_ROW)) names.add(match[1])
+  for (const doc of presetToolNameDocs({ root })) {
+    if (doc.kind !== 'composition') continue
+    for (const match of doc.text.matchAll(TOOL_NAME_ROW)) names.add(match[1])
   }
   return names
 }

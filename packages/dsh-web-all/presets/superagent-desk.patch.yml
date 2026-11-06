@@ -1,8 +1,12 @@
 # Bundled `superagent-desk` preset: the secretary desk session.
 #
-# Composition copied verbatim from presets/superagent-desk/agent.cordis.yml and
-# the roster metadata from presets/superagent-desk/preset.yml. AGENT-PLANE list:
-# the only row is the persona; the host applies the tool face.
+# GENERATED FILE — do not edit. The composition below is copied verbatim from
+# presets/superagent-desk/agent.cordis.yml and the roster metadata from
+# presets/superagent-desk/preset.yml; regenerate with `node scripts/render-preset.mjs`
+# and let `--check` guard the pair in CI.
+#
+# The composition is an AGENT-PLANE list: the only row is the persona, and the
+# host applies the tool face.
 - insert:
     - id: preset-superagent-desk
       name: '@deepseek-ai/dsh-agent-preset'
@@ -12,6 +16,17 @@
         description: "superagent 桌子会话专用预设：只装秘书人格与规则摘要，不装编码技能、工具或子代理；工具面由宿主机械约束为九个桌面工具。"
         order: 50
         plugins:
+          # The `superagent-desk` agent preset: the secretary desk session.
+          #
+          # AGENT-PLANE composition. It deliberately mounts nothing but the persona: no
+          # tools, no skills, no subagent row. The SPIKES S1 reading showed that `restrict`
+          # only filters inherited tools, so anything the agent plane registers itself
+          # stays visible to the model; this preset keeps that plane empty. The tool face
+          # itself (restrict + nine scoped desk tools + guard) is applied by the host, and
+          # the per-turn dossier rides in the user message, never in a prompt section.
+          #
+          # Only the DSH built-in variables may appear in this text (system-prompt-audit).
+
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:

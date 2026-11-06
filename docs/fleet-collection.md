@@ -79,7 +79,7 @@ node scripts/dsh-fleet-collect.mjs --uninstall-schedule   # bootout
 
 1. 读 `.harvest/latest/HARVEST.md`：机器表给出版本与漂移计数，“Preset drift against the repository baseline”逐机器列出 `+added / ~modified / -removed`。
 2. 逐面评审：`diff -ru packages/dsh-web-all/presets/code-vibe .harvest/latest/<machine>/files/.agent-presets/code-vibe`。
-3. 合并进库后，预设的**唯一真源是** `packages/dsh-web-all/presets/code-vibe/agent.cordis.yml`（组合）+ `preset.yml`（roster 文案）；`presets/code-vibe.patch.yml` 由 `node scripts/render-preset.mjs` 生成，不得手改。`pnpm preset:check` 同时守生成物与引用完整性（技能名/脚本路径/备份文件/frontmatter 与目录一致）。
+3. 合并进库后，预设的**唯一真源是** `packages/dsh-web-all/presets/code-vibe/agent.cordis.yml`（组合）+ `preset.yml`（roster 文案）；`presets/code-vibe.patch.yml` 由 `node scripts/render-preset.mjs` 生成，不得手改。`pnpm preset:check` 同时守生成物与引用完整性（技能名/脚本路径/备份文件/frontmatter 与目录一致），并核对 `presets/superagent-desk.patch.yml` 与它自己的组合源；工具名规则会把预设自带的脚本（`*.sh` / `*.mjs`）也算进去，因为会写 `toolName:` 行的安装脚本正是这条规则存在的原因。
 4. `pnpm typecheck && pnpm test && pnpm docs:check` 之后提交；`DSH_RUNTIME_VERIFY=1` 时 `preset-bundle.spec.ts` 会用真实 `dsh` 把整个组合挂起来，逐行报告 `fiberState`——这是“预设真的能装起来”的证据，而不仅是文本断言。
 
 ## 分发

@@ -48,4 +48,4 @@ pnpm wish-review --excerpt <host>:<会话文件绝对路径>
 ## 与其它流程的关系
 
 - 机器侧的预设改动仍按 [fleet-collection.md](fleet-collection.md) 回收进仓库；本闭环只处理「会话证据 → 预设」这一段。
-- 预设的引用完整性门禁（签名、skill 路径、生成 patch）由 `node scripts/verify-preset-refs.mjs` 与 `node scripts/render-preset.mjs --check` 负责，二者随本闭环的每次改动一起跑。
+- 预设的引用完整性门禁（签名、skill 路径、生成 patch、退役工具名）由 `node scripts/verify-preset-refs.mjs` 与 `node scripts/render-preset.mjs --check` 负责，二者随本闭环的每次改动一起跑；工具名规则覆盖组合、技能正文与预设自带脚本，`superagent-desk` 的 patch 与 `code-vibe` 一样由生成器守。

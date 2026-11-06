@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Render the bundled `code-vibe` preset patch from its single source.
+ * Render the bundled preset patches from their single sources.
  *
  * `presets/code-vibe/agent.cordis.yml` is the composition the preset actually
  * runs (the deployed agent preset layer) and `presets/code-vibe/preset.yml` is
@@ -14,7 +14,7 @@
  *   node scripts/render-preset.mjs           # write the generated patch
  *   node scripts/render-preset.mjs --check   # fail on drift (used by CI/gates)
  */
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -24,6 +24,17 @@ export const PRESET_DIR = 'packages/dsh-web-all/presets/code-vibe'
 export const COMPOSITION_PATH = `${PRESET_DIR}/agent.cordis.yml`
 export const METADATA_PATH = `${PRESET_DIR}/preset.yml`
 export const PATCH_PATH = 'packages/dsh-web-all/presets/code-vibe.patch.yml'
+
+/**
+ * The desk preset is the same shape of pair, and it carried the same risk: its
+ * patch claims in a comment to be a verbatim copy of the composition while
+ * nothing checked that. Both pairs are derived here so a hand edit to one side
+ * cannot reach a profile unnoticed.
+ */
+export const DESK_DIR = 'packages/dsh-web-all/presets/superagent-desk'
+export const DESK_COMPOSITION_PATH = `${DESK_DIR}/agent.cordis.yml`
+export const DESK_METADATA_PATH = `${DESK_DIR}/preset.yml`
+export const DESK_PATCH_PATH = 'packages/dsh-web-all/presets/superagent-desk.patch.yml'
 
 /** Indentation of one composition row inside the generated loader patch. */
 export const ROW_INDENT = ' '.repeat(10)
@@ -85,6 +96,41 @@ ${indentComposition(composition)}
 `
 }
 
+const DESK_HEADER = `# Bundled \`superagent-desk\` preset: the secretary desk session.
+#
+# GENERATED FILE — do not edit. The composition below is copied verbatim from
+# presets/superagent-desk/agent.cordis.yml and the roster metadata from
+# presets/superagent-desk/preset.yml; regenerate with \`node scripts/render-preset.mjs\`
+# and let \`--check\` guard the pair in CI.
+#
+# The composition is an AGENT-PLANE list: the only row is the persona, and the
+# host applies the tool face.
+`
+
+/** Builds the desk loader patch text from its composition and roster. */
+export function renderDeskPatch({ composition, metadata }) {
+  const meta = readPresetMetadata(metadata)
+  return `${DESK_HEADER}- insert:
+    - id: preset-superagent-desk
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: superagent-desk
+        name: ${JSON.stringify(meta.name)}
+        description: ${JSON.stringify(meta.description)}
+        order: 50
+        plugins:
+${indentComposition(composition)}
+`
+}
+
+/** Reads the desk sources and returns the expected patch text. */
+export function expectedDeskPatch({ root = repoRoot } = {}) {
+  return renderDeskPatch({
+    composition: readFileSync(join(root, DESK_COMPOSITION_PATH), 'utf8'),
+    metadata: readFileSync(join(root, DESK_METADATA_PATH), 'utf8'),
+  })
+}
+
 /** Reads the sources and returns the expected patch text. */
 export function expectedPatch({ root = repoRoot } = {}) {
   return renderPatch({
@@ -95,27 +141,36 @@ export function expectedPatch({ root = repoRoot } = {}) {
 
 export function main(argv = process.argv.slice(2), { root = repoRoot } = {}) {
   const check = argv.includes('--check')
-  const target = join(root, PATCH_PATH)
-  const expected = expectedPatch({ root })
-  if (check) {
-    let actual = ''
-    try {
-      actual = readFileSync(target, 'utf8')
-    } catch {
-      console.error(`render-preset: ${PATCH_PATH} is missing; run node scripts/render-preset.mjs`)
-      return 1
+  const pairs = [
+    { patch: PATCH_PATH, composition: COMPOSITION_PATH, metadata: METADATA_PATH, expected: expectedPatch },
+    { patch: DESK_PATCH_PATH, composition: DESK_COMPOSITION_PATH, metadata: DESK_METADATA_PATH, expected: expectedDeskPatch },
+  ]
+  for (const pair of pairs) {
+    // A fixture tree may carry only one pair; a pair whose composition is absent
+    // is not part of this tree, so it is skipped instead of failing the other.
+    if (!existsSync(join(root, pair.composition))) continue
+    const target = join(root, pair.patch)
+    const expected = pair.expected({ root })
+    if (check) {
+      let actual = ''
+      try {
+        actual = readFileSync(target, 'utf8')
+      } catch {
+        console.error(`render-preset: ${pair.patch} is missing; run node scripts/render-preset.mjs`)
+        return 1
+      }
+      if (actual !== expected) {
+        console.error(
+          `render-preset: ${pair.patch} has drifted from ${pair.composition}; run node scripts/render-preset.mjs`,
+        )
+        return 1
+      }
+      continue
     }
-    if (actual !== expected) {
-      console.error(
-        `render-preset: ${PATCH_PATH} has drifted from ${COMPOSITION_PATH}; run node scripts/render-preset.mjs`,
-      )
-      return 1
-    }
-    console.log('render-preset OK')
-    return 0
+    writeFileSync(target, expected)
+    console.log(`render-preset: ${pair.patch} <- ${pair.composition} + ${pair.metadata}`)
   }
-  writeFileSync(target, expected)
-  console.log(`render-preset: ${PATCH_PATH} <- ${COMPOSITION_PATH} + ${METADATA_PATH}`)
+  if (check) console.log('render-preset OK')
   return 0
 }
 

@@ -152,6 +152,17 @@ test('rule 6 fails a retired tool name and passes a registered one', () => {
     ['subagent_astra', 'subagent_opus55'],
   )
   assert.deepEqual(danglingToolNames('先派 `subagent_codex`；收尾 `external_session_stop`。', ALWAYS_ON_TOOLS), [])
+
+  // A shipped installer once wrote retired `toolName:` rows into a live profile;
+  // a document-only scan would have missed it, so scripts are read too.
+  const scriptRoot = makePreset({ scripts: { 'install.sh': 'toolName: subagent_astra\n' } })
+  try {
+    const result = verifyPreset({ root: scriptRoot })
+    assert.equal(result.violations.some(v => v.message.includes('subagent_astra')), true,
+      'a shipped script naming a retired tool must fail the gate')
+  } finally {
+    rmSync(scriptRoot, { recursive: true, force: true })
+  }
 })
 
 test('rule 6 reports one site per name, at its first line', () => {
