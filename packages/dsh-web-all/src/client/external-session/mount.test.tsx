@@ -81,6 +81,9 @@ describe('external-session position mount', () => {
     const { bodies, tabs } = harness()
     expect(tabs.map(tab => tab.id)).toEqual(['dsh-web-all/external-session'])
     expect(tabs.map(tab => tab.kind)).toEqual([EXTERNAL_SESSION_TAB_KIND])
+    // No `guide`: the tab stays openable from a dropdown row but does not add a
+    // launcher entry beside the native tools (workspace files, terminal, git).
+    expect(tabs[0]?.guide).toBeUndefined()
     expect(bodies.map(row => row.key)).toEqual(['dsh-web-all/external-session'])
     expect(bodies[0]?.spec.locale).toBe('web-all-external-session')
     expect(bodies[0]?.spec.inject?.('s1')).toEqual({ sessionId: 's1' })
@@ -376,5 +379,18 @@ describe('external-session panel data state', () => {
 
     const text = container.textContent ?? ''
     for (const leak of ['undefined', 'null', 'NaN']) expect(text).not.toContain(leak)
+  })
+})
+
+describe('version skew with an older host', () => {
+  it('shows rows unscoped when no row carries an origin, instead of an empty list', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, value: { sessions: [{ id: 'ext-9', provider: 'claude', title: 'legacy', status: 'idle', cwd: '/tmp', createdAt: '2026-11-04T09:00:00Z', lastTurnAt: '2026-11-04T09:01:00Z', canContinue: true, turns: [] }] } }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )) as never
+    const { bodies } = harness()
+    const body = bodies[0]!
+    const { container } = render(createElement(body.Body, { ...body.spec.inject?.('s1'), useTabInfo: TAB_INFO }))
+    await waitFor(() => expect(container.textContent).toContain('legacy'))
   })
 })

@@ -15,7 +15,6 @@ import { createElement } from 'react'
 import type { ComponentType } from 'react'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
-import { IconCodeOutline16 } from '../ui-icons.ts'
 import { createExternalSessionApi } from './api.ts'
 import { createExternalSessionStore, type ExternalSessionStore } from './store.ts'
 import { NS, en, interpolate, zh, type ExternalSessionLocaleKey } from './i18n.ts'
@@ -70,9 +69,19 @@ function currentConversation(ctx: ClientContext): string | undefined {
   return undefined
 }
 
-/** Only the sessions this conversation dispatched; legacy rows have no origin. */
+/**
+ * Only the sessions this conversation dispatched.
+ *
+ * Two degrade cases, both real:
+ * - no conversation face (a shell that cannot say which conversation is open)
+ *   means there is nothing to scope by, so nothing is listed;
+ * - a host older than the `originSessionId` field returns rows without it. That
+ *   is a version skew, not an unattributable session, so the list is shown
+ *   unscoped (the behaviour before the field existed) instead of going empty.
+ */
 function scopedToConversation(sessions: readonly ExternalSessionView[], conversationId: string | undefined): readonly ExternalSessionView[] {
   if (conversationId === undefined) return []
+  if (sessions.length > 0 && sessions.every(session => session.originSessionId === undefined)) return sessions
   return sessions.filter(session => session.originSessionId === conversationId)
 }
 
@@ -82,8 +91,6 @@ export const EXTERNAL_SESSION_TAB_KIND = 'web-ui.external-session'
 /** 页签在注册表里的 key。 */
 const TAB_KEY = 'dsh-web-all/external-session'
 
-/** 引导条目顺序：排在 Git（30）与 Agent 浏览器（32）之后。 */
-const TAB_ORDER = 34
 
 /** 下拉分组的同步防抖：官方弹层是批量挂载的，一帧内只同步一次。 */
 const GROUP_SYNC_DEBOUNCE_MS = 60
@@ -182,21 +189,20 @@ interface FaceDeps {
   readonly openSession: (sessionId: string) => void
 }
 
-/** 向官方的右栏页签注册表登记本能力的页签。 */
+/**
+ * 向官方的右栏页签注册表登记本能力的页签，**不进右栏的启动菜单**。
+ *
+ * 右栏那排入口（工作区文件 / 终端 / Git / Agent 浏览器）是各页签注册时 `guide`
+ * 数组的展开；外援会话是按会话产生的从属视图，不是一件常驻工具，放在那里只会
+ * 占一格并与原生工具混在一起。不登记 `guide` 之后：`openTab` 仍能打开它（从
+ * 会话头部的下发条目点进来），但它不出现在启动菜单里。
+ */
 function registerTab(scope: ClientContext, tabs: TabRegistry, deps: FaceDeps): () => void {
   const title = (): string => deps.t('tab.title')
   const disposeRegister = tabs.register({
     id: TAB_KEY,
     kind: EXTERNAL_SESSION_TAB_KIND,
     title,
-    guide: [{
-      id: 'external-session',
-      order: TAB_ORDER,
-      title,
-      description: () => deps.t('tab.description'),
-      // 与右侧栏另外两个页签同一套图标解析（运行时名字优先，缺了退化为空组件）。
-      icon: IconCodeOutline16,
-    }],
   })
   // keyed 槽：key 用类型 id，inject(sessionId) 由框架按会话作用域给出。
   const disposeSlot = scope.slots.inject('sidebar.right.pane.tab' as never, () => scope.slots.register(

@@ -166,6 +166,10 @@ export function ExternalSessionPanel({
   // 列表——它们无法归属，只能进「全部会话」。
   const scoped = useMemo(() => {
     if (showAll || conversationId === undefined) return snapshot.sessions
+    // A host older than the origin field cannot attribute anything; showing the
+    // list unscoped is the pre-field behaviour, and an empty panel would hide
+    // live work for no reason.
+    if (snapshot.sessions.length > 0 && snapshot.sessions.every(session => session.originSessionId === undefined)) return snapshot.sessions
     return snapshot.sessions.filter(session => session.originSessionId === conversationId)
   }, [snapshot.sessions, conversationId, showAll])
   const [pending, setPending] = useState<'continue' | 'cancel' | 'close' | undefined>(undefined)
