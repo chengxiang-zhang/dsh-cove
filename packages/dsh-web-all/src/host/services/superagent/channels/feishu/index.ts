@@ -47,6 +47,7 @@ import { registerInboxTools, type InboxReplyCapability, type InboxReplySender } 
 import { LarkWizard, writeWithConflictRetry, type SpawnFn } from './admin/wizard.ts'
 import { registerResources } from '../../../resources.ts'
 import { createFeishuChannel, type FeishuChannelHooks } from './channel.ts'
+import { makeTestIngressRoutes, TEST_INGRESS_PATH } from './testbed.ts'
 import type { ChannelReactPort } from './react.ts'
 const SECTION_ORDER = 210
 
@@ -186,6 +187,11 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
   let activeResponder: ReplyResponder | undefined
   /** The responder the runtime being built owns, so a late teardown cannot free it. */
   let ownResponder: ReplyResponder | undefined
+  /**
+   * The running runtime's inbound path, exposed to the test harness (testbed.ts).
+   * Undefined until a runtime exists, and replaced whenever one is rebuilt.
+   */
+  let activeIngest: ((event: unknown, meta: { mentionBot: boolean; botOpenId?: string }) => { stored: 'appended' | 'duplicate' | 'rejected'; reason?: string }) | undefined
 
   /**
    * The protocol channel over this domain's live handles.
@@ -394,6 +400,9 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
       retentionDays: active.retentionDays,
       credentials: resolved.credentials ?? null,
       credentialsError: resolved.error ?? '',
+      // The harness decides whether a socket is opened and which sender is built,
+      // so it belongs to the inputs the runtime is built around: flipping it rebuilds.
+      testHarness: active.testHarness,
     })
     if (key === appliedKey && (runtime !== undefined || !active.enabled)) return
     appliedKey = key
@@ -421,40 +430,65 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
       staleTimeoutMs: active.staleTimeoutMs,
     })
     activeStore = store
+    /**
+     * The one inbound path: parse, gate, append, admit.
+     *
+     * The socket calls it with the SDK's event; the test harness calls it with the
+     * same raw v2 body over HTTP, so a test exercises the production path and not a
+     * re-implementation of it. Parsing and admission are local decisions, so a
+     * poison event is dropped here; storage is not local, and `store.append` is
+     * deliberately outside the try so a write failure reaches the caller (the SDK
+     * turns it into a non-200 ACK and the platform redelivers).
+     * @param event - raw Feishu v2 event.
+     * @param meta - what the gateway learned about the event.
+     * @returns what happened to it, for the harness's response.
+     */
+    const ingest = (event: unknown, meta: { mentionBot: boolean; botOpenId?: string }): { stored: 'appended' | 'duplicate' | 'rejected'; reason?: string } => {
+      let envelope: LarkInboxEnvelope
+      let config: Required<LarkInboxConfig>
+      try {
+        envelope = toEnvelope(event, { mentionBot: meta.mentionBot })
+        config = effectiveConfig(current())
+      } catch (error) {
+        log.error('dsh-lark-inbox: 无法解析飞书事件或当前配置，已丢弃：%s', error instanceof Error ? error.message : String(error))
+        return { stored: 'rejected', reason: 'unparsable' }
+      }
+      // A stored envelope the protocol cannot turn into an inbound event is a row
+      // nobody can ever answer. The socket never produces one, but the harness (and
+      // a future replay tool) can, so the shape is checked before it is written.
+      if (envelope.eventId === '' || envelope.chatId === undefined || envelope.senderOpenId === undefined
+        || envelope.messageId === undefined || envelope.chatType === undefined) {
+        log.warn('dsh-lark-inbox: 丢弃形状不完整的飞书事件（event=%s chat=%s sender=%s）',
+          envelope.eventId === '' ? 'missing' : envelope.eventId, envelope.chatId ?? 'missing', envelope.senderOpenId ?? 'missing')
+        return { stored: 'rejected', reason: 'incomplete-envelope' }
+      }
+      const input: GateInput = {
+        chatType: envelope.chatType,
+        senderType: readSenderType(event),
+        senderOpenId: envelope.senderOpenId,
+        mentionBot: meta.mentionBot,
+        ...(meta.botOpenId === undefined ? {} : { botOpenId: meta.botOpenId }),
+      }
+      const decision = gateEvent(input, gatingConfig(config))
+      if (!decision.accept) {
+        log.warn('dsh-lark-inbox: 丢弃飞书事件 %s：%s', envelope.eventId, decision.reason)
+        return { stored: 'rejected', reason: decision.reason }
+      }
+      const stored = store.append(envelope)
+      // Only a message this call actually stored is admitted: a redelivery has
+      // already been considered once, and re-running admission on it could open
+      // a second batch for one question. The channel decides who answers it; the
+      // kick stays here because the responder is this domain's, not the channel's.
+      if (stored === 'appended') channel.deliver(envelope, () => activeResponder?.kick(envelope))
+      return { stored }
+    }
+    activeIngest = ingest
     const gatewayOptions: ConstructorParameters<typeof LarkGateway>[0] = {
       appId: credentials.appId, appSecret: credentials.appSecret, domain: credentials.domain, sdk: deps.gatewaySdk,
       log: (level, message) => level === 'info' ? log.info(message) : level === 'warn' ? log.warn(message) : log.error(message),
       onStatus: health => { gatewayHealth = health },
       onEvent: (event, meta) => {
-        // Parsing and admission are local decisions, so they are handled here: a
-        // poison event that can never be stored must not be retried forever.
-        // Storage is NOT local — `store.append` below is deliberately outside the
-        // try, so a write failure reaches the SDK as a non-200 ACK and the
-        // platform redelivers the message.
-        let envelope: LarkInboxEnvelope
-        let config: Required<LarkInboxConfig>
-        try {
-          envelope = toEnvelope(event, { mentionBot: meta.mentionBot })
-          config = effectiveConfig(current())
-        } catch (error) {
-          log.error('dsh-lark-inbox: 无法解析飞书事件或当前配置，已丢弃：%s', error instanceof Error ? error.message : String(error))
-          return
-        }
-        const input: GateInput = {
-          chatType: envelope.chatType,
-          senderType: readSenderType(event),
-          senderOpenId: envelope.senderOpenId,
-          mentionBot: meta.mentionBot,
-          botOpenId: meta.botOpenId,
-        }
-        const decision = gateEvent(input, gatingConfig(config))
-        if (!decision.accept) { log.warn('dsh-lark-inbox: 丢弃飞书事件 %s：%s', envelope.eventId, decision.reason); return }
-        const stored = store.append(envelope)
-        // Only a message this call actually stored is admitted: a redelivery has
-        // already been considered once, and re-running admission on it could open
-        // a second batch for one question. The channel decides who answers it; the
-        // kick stays here because the responder is this domain's, not the channel's.
-        if (stored === 'appended') channel.deliver(envelope, () => activeResponder?.kick(envelope))
+        ingest(event, { mentionBot: meta.mentionBot, ...(meta.botOpenId === undefined ? {} : { botOpenId: meta.botOpenId }) })
       },
     }
     // Housekeeping, deliberately on the inbox domain rather than the answer path:
@@ -486,13 +520,22 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
     }
 
     let gateway: ReturnType<NonNullable<LarkInboxServiceDeps['createGateway']>>
-    try {
-      gateway = (deps.createGateway ?? (options => new LarkGateway(options)))(gatewayOptions)
-    } catch (error) {
-      try { store.close() } catch { /* the constructor failure is the error worth reporting */ }
-      if (activeStore === store) activeStore = undefined
-      replyCapability = { error: `dsh-lark-inbox: 网关构造失败：${error instanceof Error ? error.message : String(error)}` }
-      throw error
+    if (active.testHarness) {
+      // The harness drives `ingest` over HTTP (testbed.ts). No socket: a second
+      // client on the same application would steal events from the live host, and
+      // the whole point of the harness is to not touch Feishu at all.
+      gatewayHealth = { status: 'connected' }
+      gateway = { start: async () => undefined, stop: async () => undefined, isRunning: () => true }
+      log.warn('dsh-lark-inbox: 测试台开启（testHarness），飞书长连接不启动；入站走 POST %s', TEST_INGRESS_PATH)
+    } else {
+      try {
+        gateway = (deps.createGateway ?? (options => new LarkGateway(options)))(gatewayOptions)
+      } catch (error) {
+        try { store.close() } catch { /* the constructor failure is the error worth reporting */ }
+        if (activeStore === store) activeStore = undefined
+        replyCapability = { error: `dsh-lark-inbox: 网关构造失败：${error instanceof Error ? error.message : String(error)}` }
+        throw error
+      }
     }
     runtime = {
       store,
@@ -514,7 +557,9 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
     }
     attachResponder(store)
     log.info('dsh-lark-inbox: 使用飞书应用 %s', describeFeishuCredentials(credentials))
-    void gateway.start().catch(error => log.error('dsh-lark-inbox: 网关启动失败：%s', error instanceof Error ? error.message : String(error)))
+    if (!active.testHarness) {
+      void gateway.start().catch(error => log.error('dsh-lark-inbox: 网关启动失败：%s', error instanceof Error ? error.message : String(error)))
+    }
     if (active.announceToAgent) {
       disposeSection = ctx.systemPrompt.section({ name: 'plugin:lark-inbox', order: SECTION_ORDER, text: LARK_INBOX_GUIDANCE })
     }
@@ -599,6 +644,21 @@ export function register(ctx: Context, base: LarkInboxConfig = {}, deps: LarkInb
       accessTrustOf(ctx).isTrusted,
       () => effectiveConfig(current()).enabled,
     )) own(ctx.webServer.register(route))
+
+    // The live test harness (testbed.ts): the same ingest path over HTTP, behind
+    // the same fence, gated by the live flag. Registered unconditionally and
+    // refuses per request, so flipping `testHarness` needs no restart.
+    for (const route of makeTestIngressRoutes({
+      isTrusted: accessTrustOf(ctx).isTrusted,
+      enabled: () => {
+        const active = effectiveConfig(current())
+        return active.enabled && active.testHarness
+      },
+      ingest: (raw, mentionBot) => (activeIngest === undefined
+        ? { stored: 'rejected', reason: 'runtime-not-started' }
+        : activeIngest(raw, { mentionBot })),
+      log: message => log.warn('lark-inbox: %s', message),
+    })) own(ctx.webServer.register(route))
     sync()
   })
 

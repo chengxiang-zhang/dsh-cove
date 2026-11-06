@@ -67,4 +67,10 @@ export interface LarkInboxConfig {
    * conversation is told so. See `ROUTER_PREAMBLE_LINES` and `mayAcknowledgeOnly`.
    */
   autoReplyRouter?: (typeof ROUTER_MODES)[number]
+  /**
+   * The live test harness: no Feishu socket, the same inbound path over
+   * `POST /superagent/test/inbound` behind the shared fence, and a capture file
+   * instead of the reply sender. Off by default; see `channels/feishu/testbed.ts`.
+   */
+  testHarness?: boolean
 }

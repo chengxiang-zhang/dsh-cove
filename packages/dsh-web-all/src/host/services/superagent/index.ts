@@ -23,7 +23,8 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { accessTrustOf } from '../access-trust/index.ts'
 import { familyNamespace } from '../family-config.ts'
 import { createFeishuTextSender } from '../feishu/index.ts'
-import { LARK_INBOX_SETTINGS_NAMESPACE } from './channels/feishu/admin/config.ts'
+import { LARK_INBOX_SETTINGS_NAMESPACE, effectiveConfig, resolveQueueDir, type LarkInboxConfig } from './channels/feishu/admin/config.ts'
+import { createTestEgress } from './channels/feishu/testbed.ts'
 import { deliverReaction } from './channels/feishu/react.ts'
 import { deliverText } from './channels/feishu/send.ts'
 import * as feishu from './channels/feishu/index.ts'
@@ -540,6 +541,7 @@ export function register(ctx: Context): () => Promise<void> {
     react: async (messageId, emoji) => deliverReaction(replySender as never, messageId, emoji),
   }
   const home = dshHome(process.env)
+  const inboxNamespace = () => familyNamespace<LarkInboxConfig>(LARK_INBOX_SETTINGS_NAMESPACE)
   const assembly = createSuperagent({
     config: () => parseSuperagentConfig(familyNamespace(LARK_INBOX_SETTINGS_NAMESPACE)),
     controller,
@@ -561,6 +563,15 @@ export function register(ctx: Context): () => Promise<void> {
       return store
     },
     createSender: credentials => {
+      // The live test harness (testbed.ts): the same sender port, but every line is
+      // captured to a file instead of reaching Feishu. Read here, at the one moment
+      // the sender is built, so the flag cannot change under a running runtime.
+      if (effectiveConfig(inboxNamespace()).testHarness) {
+        const egress = createTestEgress(resolveQueueDir(effectiveConfig(inboxNamespace()), home))
+        log.warn('superagent: testHarness 开启，出站写入 %s', egress.file)
+        replySender = egress.sender as never
+        return egress.sender as never
+      }
       const s = createFeishuTextSender({ credentials, log: m => log.warn('%s', m) })
       replySender = s as never
       return s

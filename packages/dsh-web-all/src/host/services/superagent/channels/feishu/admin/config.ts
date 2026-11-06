@@ -213,6 +213,11 @@ export const Config = z.object({
   // and it appends to the instructions every conversation is carrying. Shipping it
   // off means a bundle hot-reload cannot change an answer that is being written.
   autoReplyRouter: z.union(ROUTER_MODES).default('off'),
+  // The live test harness (`testbed.ts`): the socket does not open, the same
+  // ingest path is reachable over `POST /superagent/test/inbound` behind the
+  // shared fence, and the reply sender writes a capture file instead of calling
+  // Feishu. Off by default; a production profile never turns it on.
+  testHarness: z.boolean().default(false),
 }) as unknown as z<LarkInboxConfig>
 
 /**
