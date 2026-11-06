@@ -21,17 +21,19 @@
 | 预设散文与技能（`presets/code-vibe/**`） | `node scripts/render-preset.mjs` 后**新开会话**；预设按会话组合，改的是下一次组合的输入 |
 | 客户端代码（`src/client/**` → `lib/client.js`） | 构建 + **刷新页面**：宿主按请求从磁盘读客户端 bundle，重建后服务端发出的 `&rev=` 内容哈希已变（2026-11-06 实测 `fcfd31d5586b` → `80167e2f45eb`），页面重新加载即拿到新代码 |
 | 宿主代码（`src/host/**`、`src/core/**` → `lib/index.js`） | 构建 + 一次 profile 重组，**无需重启进程** |
-| profile 配置（`~/.dsh/profiles/<name>/cordis.patch.yml`） | 一次 profile 重组；**保存文件本身不触发** |
+| profile 配置（`~/.dsh/profiles/<name>/cordis.patch.yml`） | 一次 profile 重组；保存一次**合法**编辑会触发重组（实测 6 秒内生效），非法 YAML 不会 |
 | DSH 自身包、或改进程静态图的模块 | 只能重启（重组会返回 `restart-required`） |
 
-"一次 profile 重组"= 在 Plugin Manager 里做任意一次写操作（开关一个 bundle、安装/卸载）。这是当前版本唯一的写入口：`dsh` CLI 没有重组子命令，也没有对应的 HTTP 路由，Plugin Manager 走 typert RPC。
+"一次 profile 重组"= 在 Plugin Manager 里做任意一次写操作（开关一个 bundle、安装/卸载），或向 profile 的 `cordis.patch.yml` 保存一次合法编辑。`dsh` CLI 没有重组子命令，也没有对应的 HTTP 路由；Plugin Manager 走 typert RPC，脚本侧用[`scripts/dev-reload.mjs`](../scripts/dev-reload.mjs)把「构建 + 一次重组 + 等生效」做成一条命令。
 
 ## 实测读数
 
 | 结论 | 读数 |
 | --- | --- |
 | 当前进程挂着 HMR | `~/.dsh/logs/web.launchd.log` 里有 `dsh-hmr` 的 `runExclusive` 栈帧 |
-| 保存 profile patch 不触发重组 | 2026-11-06 实验：向 `~/.dsh/profiles/web/cordis.patch.yml` 追加一段故意非法的 YAML，等待 10 秒，日志新增 **0 行**（连 `config reload ... failed` 都没有），随后从备份恢复并校验 sha256 一致 |
+| 只构建、不保存 profile | 2026-11-06 对照：改一处宿主字符串 `pnpm build` 后 20 秒内探测仍是旧值，进程 pid 不变 |
+| 保存一次合法 patch 触发重组 | 同上再向 `cordis.patch.yml` 追加一行注释，6 秒内同一探测变为新值，进程 pid 不变 |
+| 非法 YAML 的保存不触发 | 2026-11-06 实验：追加一段故意非法的 YAML，等待 10 秒，日志新增 **0 行**（连 `config reload ... failed` 都没有），随后从备份恢复并校验 sha256 一致 |
 | 客户端 bundle 每次请求从磁盘读 | 同一天重建后，`curl /` 的 `@dsh-cove/dsh-web-all/client.js&rev=` 从 `fcfd31d5586b` 变为 `80167e2f45eb`，且取回的 bundle 已含新代码——说明客户端改动不需要重组，刷新页面即可 |
 | 实体行化之后重组返回 `applied` | `docs/external-session.md` §13：同一 profile 连续两次 `set_bundle` 都回 `applied`，工具说明文字随之改变；挂预设平面的旧结构返回 `restart-required` + `unmanaged-plugin` |
 | `patchReload` 在 0.2.1-rc.5 里无人读取 | 全包搜索命中 0，因此 profile manifest 里写 `patchReload: live` 不改变行为 |
