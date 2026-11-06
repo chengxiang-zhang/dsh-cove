@@ -13,7 +13,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
+  ALWAYS_ON_TOOLS,
+  danglingToolNames,
   declaredSkillName,
+  declaredToolNames,
   referencedScripts,
   referencedSkills,
   scriptResolves,
@@ -137,4 +140,83 @@ test('extracts references in both forms and ignores plain prose', () => {
 test('reads the declared name only from a frontmatter block', () => {
   assert.equal(declaredSkillName('---\nname: alpha\ndescription: x\n---\n\n# A\n'), 'alpha')
   assert.equal(declaredSkillName('# A\nname: alpha\n'), null)
+})
+
+test('rule 6 fails a retired tool name and passes a registered one', () => {
+  // Negative control for the rule with no preset tree in the way: the prose that
+  // shipped is fed straight to the checker, so the case cannot pass by luck of
+  // whatever a staged preset happens to contain.
+  const retired = danglingToolNames('先派 `subagent_astra`；订阅断了换 `subagent_opus55`。', ALWAYS_ON_TOOLS)
+  assert.deepEqual(
+    retired.map((site) => site.name),
+    ['subagent_astra', 'subagent_opus55'],
+  )
+  assert.deepEqual(danglingToolNames('先派 `subagent_codex`；收尾 `external_session_stop`。', ALWAYS_ON_TOOLS), [])
+})
+
+test('rule 6 reports one site per name, at its first line', () => {
+  const text = 'intro\n`subagent_astra` 与 `subagent_opus55`\n再提一次 `subagent_astra`\n'
+  assert.deepEqual(danglingToolNames(text, ALWAYS_ON_TOOLS), [
+    { name: 'subagent_astra', line: 2 },
+    { name: 'subagent_opus55', line: 2 },
+  ])
+})
+
+test('rule 6 catches a retired tool name in skill prose at path:line', () => {
+  const root = makePreset({ skills: { alpha: '# Alpha\n\n派 `subagent_astra` 去审。\n' } })
+  try {
+    assert.match(
+      violationsFor(root).join('\n'),
+      /skills\/alpha\/SKILL\.md:3 references unknown tool `subagent_astra`/u,
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('rule 6 accepts the always-on names and the composition rows', () => {
+  const root = makePreset({
+    persona: '- id: tool\n  toolName: subagent_fork\n',
+    skills: { alpha: '# Alpha\n\n`subagent_codex`、`external_session_list`、`subagent_fork`。\n' },
+  })
+  try {
+    assert.deepEqual(violationsFor(root), [])
+    assert.deepEqual([...declaredToolNames({ root })], ['subagent_fork'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('rule 6 accepts a name only a composition row declares', () => {
+  // `subagent_cursor` exists in this deployment's web profile, not in the four
+  // names the entity registers, so this case passes only because the row declares
+  // it: the allowed set has to come from the composition, not a second list.
+  const root = makePreset({
+    persona: '- id: tool\n  toolName: subagent_cursor\n',
+    skills: { alpha: '# Alpha\n\n`subagent_cursor` 由这一行声明。\n' },
+  })
+  try {
+    assert.deepEqual(violationsFor(root), [])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('rule 6 leaves MAINTENANCE.md and docs/ quotable and stays out of rendered patches', () => {
+  const root = makePreset({ skills: { alpha: '# Alpha\n' } })
+  try {
+    const preset = join(root, 'packages/dsh-web-all/presets/code-vibe')
+    writeFileSync(join(preset, 'MAINTENANCE.md'), '15. `subagent_astra` 已退役。\n')
+    writeFileSync(join(preset, 'skills/alpha/MAINTENANCE.md'), '3. `subagent_opus55` 已退役。\n')
+    mkdirSync(join(preset, 'skills/alpha/docs'), { recursive: true })
+    writeFileSync(join(preset, 'skills/alpha/docs/legacy.md'), '`subagent_astra`\n')
+    writeFileSync(join(root, 'packages/dsh-web-all/presets/code-vibe.patch.yml'), 'hand edit: `subagent_astra`\n')
+    const found = violationsFor(root).join('\n')
+    assert.doesNotMatch(found, /unknown tool/u)
+    // The rendered patch is still rule 1's business: a name there is fixed in the
+    // composition and re-rendered, never edited in place.
+    assert.match(found, /drifted from agent\.cordis\.yml/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

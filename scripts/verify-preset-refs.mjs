@@ -19,6 +19,9 @@
  *   4. No backup or cache debris ships inside the preset.
  *   5. Every skill directory declares a frontmatter `name` equal to its
  *      directory, so the catalog and the filesystem cannot disagree.
+ *   6. Every `subagent_*` / `external_session_*` name in a composition or in the
+ *      skill prose is a tool the host registers or a composition declares, so a
+ *      retired name cannot keep routing work to a channel that no longer exists.
  *
  * Usage:
  *   node scripts/verify-preset-refs.mjs            # report + exit code
@@ -27,7 +30,7 @@
  * Exit: 0 ok, 1 violations, 2 usage.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expectedPatch, PATCH_PATH, PRESET_DIR, repoRoot } from './render-preset.mjs'
 
@@ -118,6 +121,85 @@ export function declaredSkillName(text) {
   return name ? name[1] : null
 }
 
+/**
+ * Tools the host entity registers for every session: a preset may name them
+ * without mounting a row of its own, so they cannot be read off a composition.
+ * Every other name has to arrive through a `toolName:` row; the overlap is
+ * deliberate, since the native `subagent`/`subagent_fork` rows this preset mounts
+ * are registered as well as declared.
+ */
+export const ALWAYS_ON_TOOLS = new Set([
+  'subagent_claude_code',
+  'subagent_codex',
+  'external_session_list',
+  'external_session_stop',
+])
+
+/**
+ * Presets-root documents whose tool names are the historical record. A report
+ * about a retired channel has to stay quotable rather than be rewritten into a
+ * lie, so these are excluded from the scan instead of being kept clean forever.
+ */
+const TOOL_NAME_HISTORY = [/(?:^|\/)MAINTENANCE\.md$/u, /(?:^|\/)docs\//u]
+
+const TOOL_NAME = /\b(?:subagent|external_session)_[a-z0-9_]+/gu
+const TOOL_NAME_ROW = /^\s*toolName:\s*['"]?([A-Za-z0-9_.-]+)['"]?\s*$/gmu
+const PRESETS_DIR = dirname(PRESET_DIR)
+
+/**
+ * The documents rule 6 reads: every composition under `presets/` and every
+ * `skills/**\/*.md`, references included. Two kinds are left out because a name
+ * in them cannot be fixed independently: a loader patch is a rendered byte-copy of
+ * a composition (rule 1 already pins the code-vibe pair) and `preset.yml` is the
+ * flat roster metadata.
+ */
+export function presetToolNameDocs({ root = repoRoot } = {}) {
+  const presetsRoot = join(root, PRESETS_DIR)
+  if (!existsSync(presetsRoot)) return []
+  const docs = []
+  for (const relative of walk(presetsRoot)) {
+    if (TOOL_NAME_HISTORY.some((pattern) => pattern.test(relative))) continue
+    const file = basename(relative)
+    const prose = file.endsWith('.md') && /(?:^|\/)skills\//u.test(relative)
+    const composition = /\.ya?ml$/u.test(file) && file !== 'preset.yml' && !/\.patch\.ya?ml$/u.test(file)
+    if (!prose && !composition) continue
+    docs.push({ path: join(PRESETS_DIR, relative), text: readFileSync(join(presetsRoot, relative), 'utf8') })
+  }
+  return docs
+}
+
+/** Every tool name a composition declares with a `toolName:` row. */
+export function declaredToolNames({ root = repoRoot } = {}) {
+  const names = new Set()
+  for (const { text } of presetToolNameDocs({ root })) {
+    for (const match of text.matchAll(TOOL_NAME_ROW)) names.add(match[1])
+  }
+  return names
+}
+
+/** The tool names a preset document may use: registered by the host or declared. */
+export function allowedToolNames({ root = repoRoot } = {}) {
+  return new Set([...ALWAYS_ON_TOOLS, ...declaredToolNames({ root })])
+}
+
+/**
+ * The name/line sites in `text` that no composition declares and the host does
+ * not register, one per name at its first line: a routing table naming the same
+ * dead channel six times is one defect, and the reader needs the first line only.
+ * `allowed` is a parameter so the rule can be proven against a synthetic sentence
+ * with no preset tree on disk.
+ */
+export function danglingToolNames(text, allowed) {
+  const known = allowed instanceof Set ? allowed : new Set(allowed)
+  const sites = new Map()
+  for (const match of text.matchAll(TOOL_NAME)) {
+    if (known.has(match[0]) || sites.has(match[0])) continue
+    sites.set(match[0], text.slice(0, match.index).split('\n').length)
+  }
+  const ordered = [...sites].sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : 1))
+  return ordered.map(([name, line]) => ({ name, line }))
+}
+
 /** Runs every check and returns the violation list (`{ path, message }`). */
 export function verifyPreset({ root = repoRoot } = {}) {
   const violations = []
@@ -169,6 +251,16 @@ export function verifyPreset({ root = repoRoot } = {}) {
         path: join(PRESET_DIR, 'skills', name, 'SKILL.md'),
         message: `frontmatter name \`${declared}\` differs from directory \`${name}\``,
       })
+    }
+  }
+
+  // 6. tool names resolve. This is the only place a retired `subagent_*` name is
+  // visible before it fails inside a user session: the loader happily mounts a
+  // persona that mentions a channel nobody registers, and the model routes to it.
+  const allowedTools = allowedToolNames({ root })
+  for (const { path, text } of presetToolNameDocs({ root })) {
+    for (const { name, line } of danglingToolNames(text, allowedTools)) {
+      violations.push({ path: `${path}:${line}`, message: `references unknown tool \`${name}\`` })
     }
   }
   return { violations, catalog }
