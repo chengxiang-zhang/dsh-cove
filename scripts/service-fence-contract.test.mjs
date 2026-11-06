@@ -60,7 +60,6 @@ const PRIVILEGED_FENCE_TOKEN = new Map([
   ['memory-view', 'accessTrustOf'],
   ['superagent', 'accessTrustOf'],
   ['notify', 'accessTrustOf'],
-  ['playwright-sessions', 'accessTrustOf'],
   ['remote-access', 'isTrusted'],
   ['right-pane', 'accessTrustOf'],
   ['schedule-mode', 'accessTrustOf'],

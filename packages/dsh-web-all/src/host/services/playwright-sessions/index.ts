@@ -12,8 +12,6 @@ import { publicPlaywrightToolName } from '../../../core/playwright-sessions/name
 import { PLAYWRIGHT_CLOSE_TOOL, playwrightSessionId, playwrightToolNeedsApproval, resolvePlaywrightSessionsConfig, UNSCOPED_PLAYWRIGHT_SESSION, type PlaywrightSessionsConfig, type PlaywrightToolContract } from '../../../core/playwright-sessions/contracts.ts'
 import { createSessionBrowser, extractText } from './child.ts'
 import { SessionBrowserManager } from './manager.ts'
-import { PlaywrightSessionsController } from './controller.ts'
-import { registerPlaywrightControlRoutes } from './routes.ts'
 import { abortable } from '../lifecycle.ts'
 import { registerAsyncResources } from '../resources.ts'
 import { pruneStaleProfiles, removeProfileDir } from './profile-gc.ts'
@@ -44,7 +42,6 @@ export async function register(ctx: Context, input: PlaywrightSessionsConfig = {
   const require = createRequire(import.meta.url)
   const root = sessionsRoot(config.sessionsRoot)
   mkdirSync(root, { recursive: true })
-  let controller: PlaywrightSessionsController
   const manager = new SessionBrowserManager(sessionId => createSessionBrowser({
     cliPath: cliPath(require),
     sessionId,
@@ -63,22 +60,11 @@ export async function register(ctx: Context, input: PlaywrightSessionsConfig = {
     idleTimeoutMs: config.idleTimeoutMs,
     maxConcurrentBrowsers: config.maxConcurrentBrowsers,
     onDispose: sessionId => {
-      controller?.release(sessionId)
       if (config.mode === 'launch' && config.pruneProfileOnDispose) removeProfileDir(root, sessionId)
     },
   })
-  const sessionExists = async (sessionId: string): Promise<boolean> => {
-    try {
-      const sessions = (ctx as unknown as { sessionController: { inspect(id: string): Promise<unknown> } }).sessionController
-      await sessions.inspect(sessionId)
-      return true
-    } catch { return false }
-  }
   return registerAsyncResources(async own => {
     own(() => manager.disposeAll())
-    controller = new PlaywrightSessionsController({ config, manager, sessionExists })
-    own(() => controller.dispose())
-    own(registerPlaywrightControlRoutes(ctx, controller))
     let tools = await abortable(enumerate(require), ownerSignal)
     if (!config.unsafeTools) tools = tools.filter(tool => tool.name !== 'browser_run_code_unsafe')
     ownerSignal?.throwIfAborted()
@@ -93,9 +79,8 @@ export async function register(ctx: Context, input: PlaywrightSessionsConfig = {
           output: output(tool.name),
           execute: async (args, exec) => {
             const id = playwrightSessionId(exec)
-            if (config.mode === 'extension') {
-              if (id === UNSCOPED_PLAYWRIGHT_SESSION) throw new Error('local Chrome requires a scoped DSH session')
-              controller.requireOwner(id)
+            if (config.mode === 'extension' && id === UNSCOPED_PLAYWRIGHT_SESSION) {
+              throw new Error('local Chrome requires a scoped DSH session')
             }
             const browser = await manager.get(id)
             try {
@@ -115,9 +100,7 @@ export async function register(ctx: Context, input: PlaywrightSessionsConfig = {
       ? ctx.on('tools/pre-execute', async (exec, next) => {
           const tool = toolContracts.get(exec.name)
           if (tool === undefined) return next()
-          const id = playwrightSessionId(exec)
-          if (id === UNSCOPED_PLAYWRIGHT_SESSION) return { kind: 'deny', reason: 'local Chrome requires a scoped DSH session' }
-          try { controller.requireOwner(id) } catch (error) { return { kind: 'deny', reason: error instanceof Error ? error.message : String(error) } }
+          if (playwrightSessionId(exec) === UNSCOPED_PLAYWRIGHT_SESSION) return { kind: 'deny', reason: 'local Chrome requires a scoped DSH session' }
           if (playwrightToolNeedsApproval(tool.name, config.approvalPolicy)) {
             return { kind: 'ask', reason: `This action (${tool.title || tool.name}) will operate tabs in your logged-in Chrome.` }
           }

@@ -22,7 +22,6 @@ import {
 } from '../src/host/services/access-trust/index.ts'
 import { registerGitRoutes } from '../src/host/services/git-graph/routes.ts'
 import type { GitService } from '../src/host/services/git-graph/service.ts'
-import { makePlaywrightControlRoutes } from '../src/host/services/playwright-sessions/routes.ts'
 import { makeRoutes as makeSshRoutes } from '../src/host/services/ssh/routes.ts'
 import { makeScheduleModeRoutes } from '../src/host/services/schedule-mode/routes.ts'
 import { makeWorktreeRoutes } from '../src/host/services/worktree/routes.ts'
@@ -253,21 +252,6 @@ describe('route families consult the shared fence', () => {
     const local = response()
     await handlerOf(allowed.routes, '/git')(request({ url: '/git/status', method: 'POST', host: '127.0.0.1:3080', body: { path: '/repo' } }) as never, local.res as never)
     expect(local.status()).toBe(200)
-  })
-
-  it('playwright control: default fence stays loopback, the mounted fence admits the entry', async () => {
-    const controller = { status: () => ({ mode: 'extension', state: 'disconnected', ownedByThisSession: false, busy: false }) }
-    const strict = makePlaywrightControlRoutes(controller as never)[0]
-    const refused = response()
-    await strict.handler(request({ url: '/api/playwright-sessions/status?sessionId=s1', host: CANONICAL }) as never, refused.res as never)
-    expect(refused.status()).toBe(403)
-
-    const built = deployment({ authenticated: true })
-    const route = makePlaywrightControlRoutes(controller as never, accessTrustOf(built.ctx).isTrusted)[0]
-    const accepted = response()
-    await route.handler(request({ url: '/api/playwright-sessions/status?sessionId=s1', host: CANONICAL }) as never, accepted.res as never)
-    expect(accepted.status()).toBe(200)
-    expect(accepted.body()).toMatchObject({ ok: true })
   })
 
   it('fences are sourced from the service, not from a local loopback check', async () => {
