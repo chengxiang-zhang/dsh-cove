@@ -49,7 +49,7 @@ function facts(overrides: Partial<MomentFacts> = {}): MomentFacts {
   return {
     committedInThisTurn: true,
     commitmentTerminal: true,
-    dispositionIsAnswerOrCheck: true,
+    dispositionAnswersInbound: true,
     hasAskedAssumptionOrRoute: true,
     brokenOrAtRiskOrDispatchFailed: true,
     isAgendaTurnWithSignal: true,
@@ -226,9 +226,27 @@ describe('timing and wording', () => {
     // `pushback` is produced by the pushback tool and never by say.
     expect(momentAllowed('pushback', facts())).toBe(false)
     expect(momentAllowed('deliver', facts({ commitmentTerminal: false }))).toBe(false)
-    expect(momentAllowed('cannot', facts({ brokenOrAtRiskOrDispatchFailed: false }))).toBe(false)
-    expect(momentAllowed('alert', facts({ isAgendaTurnWithSignal: false }))).toBe(false)
+    // A model-authored `cannot` still has to earn it; the host's own timeout line is
+    // the exception (its idem key carries the `cannot:` prefix).
+    expect(momentAllowed('cannot', facts({ brokenOrAtRiskOrDispatchFailed: false, byHost: false }))).toBe(false)
+    expect(momentAllowed('cannot', facts({ brokenOrAtRiskOrDispatchFailed: true, byHost: false }))).toBe(true)
+    expect(momentAllowed('cannot', facts({ brokenOrAtRiskOrDispatchFailed: false, byHost: true }))).toBe(true)
+    expect(momentAllowed('alert', facts({ isAgendaTurnWithSignal: false, byHost: false }))).toBe(false)
+    // The second-voice alarm is the host's own interruption (11), never the model's.
+    expect(momentAllowed('alert', facts({ isAgendaTurnWithSignal: false, byHost: true }))).toBe(true)
     expect(momentAllowed('brief', facts({ byHost: false }))).toBe(false)
+  })
+
+  it('14. the two dispositions a live turn actually used both have a moment', () => {
+    // judge(ask): the desk recorded "this needs the owner's decision"; asking is the
+    // moment that disposition exists for. Without the fact it stays refused.
+    expect(momentAllowed('ask', facts({ hasAskedAssumptionOrRoute: false }))).toBe(false)
+    expect(momentAllowed('ask', facts({ hasAskedAssumptionOrRoute: true }))).toBe(true)
+    // judge(decline): the identity notice is the answer to the inbound message.
+    expect(momentAllowed('answer', facts({ dispositionAnswersInbound: false }))).toBe(false)
+    expect(momentAllowed('answer', facts({ dispositionAnswersInbound: true }))).toBe(true)
+    // A timeout turn with no commitment can still close itself (host authored).
+    expect(momentAllowed('cannot', facts({ brokenOrAtRiskOrDispatchFailed: false, byHost: true }))).toBe(true)
   })
 
   it('13. a first message to a non-owner chat says who is speaking and still fits', () => {

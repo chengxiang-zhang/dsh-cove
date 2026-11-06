@@ -124,6 +124,7 @@ function mount(options: MountOptions = {}): Harness {
     startupCheck,
     rotate,
     roleOf: () => undefined,
+    settleStaleTurns: () => 0,
     ...options.presence,
   }
 

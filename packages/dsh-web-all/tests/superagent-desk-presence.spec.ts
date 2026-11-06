@@ -535,4 +535,50 @@ describe('desk presence', () => {
     expect(creates(r).map(c => c.sessionId)).toEqual([SID, deskSessionId('p2p:oc_1', 1)])
     expect(prompts(r)).toHaveLength(2)
   })
+
+  it('23. a turn whose end was lost is closed at boot, released by the clock, and never mutes the desk', async () => {
+    const r = rig()
+    const now = r.t.clock.now()
+    // What a crash leaves behind: a desk open on a turn nothing is driving.
+    r.t.db.prepare('INSERT INTO sa_desk (desk_id, chat_id, chat_type, generation, turn_open, event_count, created_at, updated_at) VALUES (?, ?, ?, 0, 1, 0, ?, ?)')
+      .run('p2p:oc_1', 'oc_1', 'p2p', now, now)
+    r.t.db.prepare(`INSERT INTO sa_deliberation (deliberation_id, request_id, desk_id, trigger_kind, state, shadow, started_at, created_at, updated_at)
+      VALUES (?, ?, ?, 'intake', 'running', 0, ?, ?, ?)`).run('D:stale', 'in:stale:1', 'p2p:oc_1', now, now, now)
+
+    // Inside the timeout the clock leaves a live turn alone.
+    r.t.clock.advance(60_000)
+    expect(r.presence.settleStaleTurns(r.t.clock.now(), { boot: false })).toBe(0)
+    expect(rows(r, 'SELECT state FROM sa_deliberation')).toEqual([{ state: 'running' }])
+
+    // A restarted process has nothing in flight, so every running row is stale by definition.
+    expect(r.presence.settleStaleTurns(r.t.clock.now(), { boot: true })).toBe(1)
+    expect(rows(r, 'SELECT state, end_reason, ops FROM sa_deliberation')).toEqual([{ state: 'done', end_reason: 'orphaned', ops: 0 }])
+    expect(rows(r, 'SELECT turn_open FROM sa_desk')).toEqual([{ turn_open: 0 }])
+
+    // The desk answers the next message instead of skipping it forever.
+    deliver(r, { text: 'after the crash' })
+    await closeWindow(r)
+    expect(prompts(r)).toHaveLength(1)
+    expect(prompts(r)[0].content[0].text).toContain('after the crash')
+  })
+
+  it('23b. a turn older than the timeout is released by the clock, not only at boot', () => {
+    const r = rig()
+    const now = r.t.clock.now()
+    r.t.db.prepare('INSERT INTO sa_desk (desk_id, chat_id, chat_type, generation, turn_open, event_count, created_at, updated_at) VALUES (?, ?, ?, 0, 1, 0, ?, ?)')
+      .run('p2p:oc_1', 'oc_1', 'p2p', now, now)
+    r.t.db.prepare(`INSERT INTO sa_deliberation (deliberation_id, request_id, desk_id, trigger_kind, state, shadow, started_at, created_at, updated_at)
+      VALUES (?, ?, ?, 'intake', 'running', 0, ?, ?, ?)`).run('D:stale', 'in:stale:1', 'p2p:oc_1', now, now, now)
+    r.t.clock.advance(600_000)
+    expect(r.presence.settleStaleTurns(r.t.clock.now(), { boot: false })).toBe(1)
+    expect(rows(r, 'SELECT turn_open FROM sa_desk')).toEqual([{ turn_open: 0 }])
+  })
+
+  it('24. a desk flagged open with no running turn behind it is released by the clock', () => {
+    const r = rig()
+    r.t.db.prepare('INSERT INTO sa_desk (desk_id, chat_id, chat_type, generation, turn_open, event_count, created_at, updated_at) VALUES (?, ?, ?, 0, 1, 0, ?, ?)')
+      .run('p2p:oc_2', 'oc_2', 'p2p', r.t.clock.now(), r.t.clock.now())
+    expect(r.presence.settleStaleTurns(r.t.clock.now(), { boot: false })).toBe(0)
+    expect(r.t.db.prepare('SELECT turn_open FROM sa_desk WHERE desk_id = ?').get('p2p:oc_2')).toEqual({ turn_open: 0 })
+  })
 })

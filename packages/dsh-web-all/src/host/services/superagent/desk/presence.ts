@@ -37,6 +37,8 @@ export interface DeskConfig {
   dossierTokens: number
   /** Owner principal (union_id): decides owner_p2p and owner-said. */
   owner: string
+  /** Executor candidates for `commit`, formatted for the dossier reader (`08` 派给谁). */
+  executorCandidates?: readonly string[]
   tz?: string
 }
 
@@ -74,6 +76,13 @@ export interface Presence {
   onSessionEvent(sessionId: string, event: unknown): void
   /** Self-check of every desk with a session; failing desks are not enabled. */
   startupCheck(): Promise<{ enabled: string[]; disabled: string[] }>
+  /**
+   * Close turns no live process is running (11: a `turn/end` lost to a crash or a
+   * hot-reload window must not leave the desk mute forever). At boot every running
+   * row is stale by definition; afterwards only rows past the turn timeout are.
+   * @returns how many deliberations were closed.
+   */
+  settleStaleTurns(now: number, opts: { boot: boolean }): number
   /** Resolves when every launched turn has finished. */
   drain(): Promise<void>
 }
@@ -269,12 +278,14 @@ export function createPresence(deps: DeskDeps): Presence {
     if (ctx.shadow) return
     const first = ctx.batch[0]
     // No `event_id`: that event already got its ack, and one inbound allows one
-    // reply-tier line. The closing line is a new line in the same chat.
+    // reply-tier line. The closing line is a new line in the same chat. The host
+    // prefix (`cannot:`) is what lets the outlet accept it: a model-authored
+    // `cannot` still has to earn its moment through a broken commitment.
     deps.outlet.submit({
       ...(first ? { reply_to: first.message_id } : {}),
       chat_id: ctx.chatId, moment: 'cannot', audience: 'requester', payload: 'text',
       text: TURN_TIMEOUT_MESSAGE,
-      idem_key: `sa:to:${trigger.deliberation_id}`.slice(0, 50),
+      idem_key: `cannot:${trigger.deliberation_id}`.slice(0, 50),
     }, deps.outletPolicy, deps.mode())
   }
 
@@ -372,7 +383,8 @@ export function createPresence(deps: DeskDeps): Presence {
     const audience = audienceOf(current, batch, owner)
     const projection = compileNow(view, audience)
     const dossier = compileDossier(view, projection, batch,
-      { tz: cfg().tz ?? 'UTC', nowMs: now, generation: current.generation, deskLabel: deskId }, cfg().dossierTokens)
+      { tz: cfg().tz ?? 'UTC', nowMs: now, generation: current.generation, deskLabel: deskId,
+        executorCandidates: cfg().executorCandidates ?? [] }, cfg().dossierTokens)
     const ctx = newTurnContext({ deskId, chatId: chatOf(deskId), sessionId, deliberationId: trigger.deliberation_id,
       shadow: deps.mode() === 'shadow', batch, audience })
     turns.set(sessionId, ctx)
@@ -442,10 +454,49 @@ export function createPresence(deps: DeskDeps): Presence {
       }
       if (!t.templated && now - t.startedAt >= ACK_TEMPLATE_MS) {
         t.templated = true
-        deps.outlet.submit({ event_id: first.event_id, chat_id: t.ctx.chatId, reply_to: first.message_id, moment: 'ack', audience: 'requester',
+        // Deliberately without `event_id`: one inbound has one text reply (`02`), and
+        // the fallback must not consume the slot the desk is still going to answer in.
+        // The timeout line works the same way; the commit ack carries the event id.
+        deps.outlet.submit({ chat_id: t.ctx.chatId, reply_to: first.message_id, moment: 'ack', audience: 'requester',
           payload: 'text', text: ACK_TEMPLATE, idem_key: `sa:ack:${first.event_id}`.slice(0, 50) }, deps.outletPolicy, deps.mode())
       }
     }
+  }
+
+  /**
+   * Close turns the ledger still calls running but nothing in this process is.
+   *
+   * A crash or a hot-reload window loses the `turn/end`; without this the desk's
+   * `turn_open` stays 1, `tick` skips the desk forever and every later message gets
+   * only the 60-second acknowledgement. At boot every running row is stale by
+   * definition (this process has not launched anything yet); during the clock the
+   * turn timeout is the same threshold `tick` cancels at, so a live turn is never
+   * closed out from under itself.
+   */
+  function settleStaleTurns(now: number, opts: { boot: boolean }): number {
+    const rows = ledger.read.all<{ deliberation_id: string; desk_id: string | null; started_at: number | null }>(
+      `SELECT deliberation_id, desk_id, started_at FROM ${PHYSICAL.deliberation} WHERE state = 'running'`)
+    let closed = 0
+    for (const row of rows) {
+      if (inflight.has(row.deliberation_id)) continue
+      if (!opts.boot && now - (row.started_at ?? now) < TURN_TIMEOUT_MS) continue
+      try {
+        ledger.open(tx => {
+          tx.finishTurn(row.deliberation_id, { ops: 0, tool_errors: 0, tokens: 0, end_reason: 'orphaned',
+            rule_trace: { reason: opts.boot ? 'stale turn closed at startup' : 'stale turn closed by reconcile' } })
+          if (row.desk_id !== null) tx.run(`UPDATE ${D} SET turn_open = 0, updated_at = ? WHERE desk_id = ?`, tx.now, row.desk_id)
+        }, { module: 'desk' })
+        closed += 1
+        log.warn(`desk ${row.desk_id ?? '?'}: closed stale turn ${row.deliberation_id} (${opts.boot ? 'startup' : 'reconcile'})`)
+      } catch (error) {
+        // Finished between the read and the write: nothing to repair.
+        log.warn(`desk ${row.desk_id ?? '?'}: stale turn ${row.deliberation_id} already closed (${String(error)})`)
+      }
+    }
+    // A desk flagged open with no running row behind it is stale by definition.
+    ledger.open(tx => tx.run(`UPDATE ${D} SET turn_open = 0, updated_at = ? WHERE turn_open = 1
+      AND NOT EXISTS (SELECT 1 FROM ${PHYSICAL.deliberation} AS d WHERE d.desk_id = ${D}.desk_id AND d.state = 'running')`, tx.now), { module: 'desk' })
+    return closed
   }
 
   async function tick(now: number): Promise<string[]> {
@@ -551,6 +602,7 @@ export function createPresence(deps: DeskDeps): Presence {
     },
     tick,
     onSessionEvent,
+    settleStaleTurns,
     async startupCheck() {
       const enabled: string[] = []
       const failed: string[] = []

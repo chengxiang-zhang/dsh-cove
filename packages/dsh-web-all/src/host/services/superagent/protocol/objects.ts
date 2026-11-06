@@ -118,6 +118,19 @@ export function parseEndReason(raw: unknown): EndReason {
   return parseEnum(END_REASONS, raw) ?? 'unknown'
 }
 
+/**
+ * Fold a model-typed work class into the protocol's kebab-case id space.
+ *
+ * `08` first judgement names the class freely and the class table starts empty, so
+ * the first model to name one is also the first to spell it: a live turn died with
+ * `status_query` and the turn was lost. Folding is the host's job, not the model's -
+ * the ledger keeps one spelling per class (`primary class` readings group by it).
+ */
+export function normalizeClassId(raw: string): string {
+  return raw.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+    .replace(/^[^a-z]+/, '').replace(/-{2,}/g, '-').slice(0, 41).replace(/-+$/, '')
+}
+
 /** Commitment state machine from 02, edge by edge. Terminal states have no outgoing edges. */
 export const COMMITMENT_TRANSITIONS: Readonly<Record<CommitmentState, readonly CommitmentState[]>> = {
   proposed: ['open', 'released', 'withdrawn', 'orphaned'],

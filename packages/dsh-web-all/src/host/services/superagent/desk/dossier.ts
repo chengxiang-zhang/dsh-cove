@@ -49,6 +49,13 @@ export interface DossierContext {
   nowMs: number
   generation: number
   deskLabel: string
+  /**
+   * The executor profiles this deployment registered, already formatted for the
+   * reader (`08` "宿主先算候选，秘书在候选里选"). The tool schema cannot enumerate
+   * them (desk may not import executors), so the candidates travel in the dossier
+   * and the model picks one by id.
+   */
+  executorCandidates?: readonly string[]
 }
 
 export interface Dossier {

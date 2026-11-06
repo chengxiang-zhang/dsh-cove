@@ -25,6 +25,7 @@ import type { KernelTx } from '../kernel/ledger.ts'
 import { PHYSICAL } from '../protocol/db.ts'
 import type { InboundEvent } from '../protocol/events.ts'
 import type { Disposition, IntakeRow } from '../protocol/objects.ts'
+import { normalizeClassId } from '../protocol/objects.ts'
 import type { JudgeInput, ToolErrorCode, ToolResult } from '../protocol/tools.ts'
 import { commitmentVisibleAt, threadOf, type JudgmentDeps, type TurnContext } from './gates.ts'
 
@@ -76,7 +77,10 @@ export function judgeTool(deps: JudgmentDeps) {
           reason: input.reason,
           about: input.about,
           corrects: input.corrects,
-          class: input.class,
+          // The model names the class freely; the host keeps one spelling (`02` closes
+          // the enum, `08` leaves the naming to the reader). A live turn was lost to
+          // `status_query`, which the class regex could not accept.
+          class: normalizeClassId(input.class),
           confidence: input.confidence,
           ...(input.new_thread === undefined ? {} : { new_thread: input.new_thread }),
           deliberation_id: ctx.deliberationId,

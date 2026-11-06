@@ -88,7 +88,7 @@ export const DESK_TOOL_CONTRACTS: Record<DeskToolName, DeskToolContract> = {
       event_id: req(str('event id from this batch')),
       disposition: req(oneOfEnum(DISPOSITIONS, 'what this event is')),
       about: str('commitment id (C-n) this event is about, if any'),
-      class: req(str('class id from the class table')),
+      class: req(str('work class id: lowercase kebab case, a-z then a-z0-9- (e.g. status-query); the host creates it on first use')),
       confidence: req({ type: 'number', description: '0..1' }),
       reason: req(str('one sentence, the grounds')),
       corrects: str('event id this event corrects'),
@@ -111,7 +111,7 @@ export const DESK_TOOL_CONTRACTS: Record<DeskToolName, DeskToolContract> = {
         items: { type: 'object', additionalProperties: false, properties: {
           question: req(str('the open question')), taken: req(str('the assumption taken')), reversible: req({ type: 'boolean' }) } },
       },
-      executor: req(str('executor profile id')),
+      executor: req(str('executor profile id; pick one of the candidates listed under 可派执行体 in the dossier')),
       executor_reason: req(str('why this executor')),
       eta_minutes: req({ type: 'number', description: 'minutes until done' }),
       target: str('where the work lands: local/..., netbird/..., external/...'),

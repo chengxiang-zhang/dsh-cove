@@ -122,12 +122,17 @@ describe('judgment commit', () => {
       .toEqual({ parent_id: 'C-1', creditor: 'on_col', on_behalf_of: OWNER })
   })
 
-  it('4. a new well-formed work class gets a row; "Run Tests" is CLASS_UNKNOWN', () => {
+  it('4. a work class the model typed is folded into kebab case instead of failing the turn', () => {
     const r = rig()
     const e = arrive(r, {}, { cls: 'ship-docs' })
     expect(r.commit(turn(e), input(e))).toMatchObject({ ok: true })
     expect(rows(r, 'SELECT class_id, samples FROM sa_work_class')).toEqual([{ class_id: 'ship-docs', samples: 0 }])
-    const bad = arrive(r, {}, { cls: 'Run Tests' })
+    // A live turn died on `status_query`: the host keeps one spelling, the turn lives.
+    const folded = arrive(r, { thread: 'om_cls2' }, { cls: 'status_query' })
+    expect(r.commit(turn(folded), input(folded))).toMatchObject({ ok: true })
+    expect(rows(r, 'SELECT class_id FROM sa_work_class ORDER BY class_id').map(x => x.class_id)).toContain('status-query')
+    // A class that cannot be folded is still refused.
+    const bad = arrive(r, { thread: 'om_cls3' }, { cls: '---' })
     expect(r.commit(turn(bad), input(bad))).toMatchObject({ ok: false, code: 'CLASS_UNKNOWN' })
   })
 
@@ -150,11 +155,25 @@ describe('judgment commit', () => {
     expect(rows(r, 'SELECT * FROM sa_attempt')).toHaveLength(0)
   })
 
-  it('7. a read-only profile for repo work is EXECUTOR_MISMATCH; an unregistered one EXECUTOR_UNKNOWN', () => {
+  it('7. a read-only profile for repo work is EXECUTOR_MISMATCH; an unregistered one EXECUTOR_UNKNOWN, naming the candidates', () => {
     const r = rig()
     const e = arrive(r)
     expect(r.commit(turn(e), input(e, { executor: 'oneshot-read' }))).toMatchObject({ ok: false, code: 'EXECUTOR_MISMATCH' })
-    expect(r.commit(turn(e), input(e, { executor: 'robot-9' }))).toMatchObject({ ok: false, code: 'EXECUTOR_UNKNOWN' })
+    const unknown = r.commit(turn(e), input(e, { executor: 'robot-9' }))
+    expect(unknown).toMatchObject({ ok: false, code: 'EXECUTOR_UNKNOWN' })
+    // The refusal has to be able to correct the guess in the next step: the ids are
+    // in the message because the desk tool face cannot enumerate them.
+    if (!unknown.ok) {
+      expect(unknown.message).toContain('oneshot-read')
+      expect(unknown.message).toContain('durable-full')
+    }
+  })
+
+  it('7b. the executor id the model types is folded: case and surrounding space do not fail the turn', () => {
+    const r = rig()
+    const e = arrive(r)
+    expect(r.commit(turn(e), input(e, { executor: '  Durable-Full  ' }))).toMatchObject({ ok: true, commitment_id: 'C-1' })
+    expect(rows(r, 'SELECT executor FROM sa_attempt')).toEqual([{ executor: 'durable-full' }])
   })
 
   it('8. one transaction writes commitment, pending attempt, subscription and brief; boundary carries the owner quote; ack is said', () => {

@@ -23,15 +23,24 @@ export interface MomentFacts {
   committedInThisTurn: boolean
   /** The commitment the message is about is in a terminal state. */
   commitmentTerminal: boolean
-  /** The disposition of this batch is `answer` or `check`. */
-  dispositionIsAnswerOrCheck: boolean
-  /** An asked assumption, or a route decision, is open on the desk. */
+  /**
+   * The bath's disposition is one that answers the inbound message: `answer` or
+   * `check` (work being asked about), but also `decline` (R4 identity notice) and
+   * `acknowledge` (a greeting). All four are replies to what just arrived; a live
+   * turn that disposed `decline` could not speak its own notice until this held.
+   */
+  dispositionAnswersInbound: boolean
+  /**
+   * There is something to ask the owner about: an open `asked` assumption, a
+   * `route` decision, or a judged `ask`. `ask` itself is the desk's record of
+   * "this needs the owner's decision", so it is the route decision (`02` say 时刻).
+   */
   hasAskedAssumptionOrRoute: boolean
   /** The commitment turned broken or at_risk, or the dispatch ended. */
   brokenOrAtRiskOrDispatchFailed: boolean
   /** This is an agenda turn and the host reported a signal. */
   isAgendaTurnWithSignal: boolean
-  /** The host itself is the author (fallback acknowledgement, daily brief). */
+  /** The host itself is the author (fallback acknowledgement, daily brief, timeout line). */
   byHost: boolean
 }
 
@@ -53,13 +62,18 @@ export function momentAllowed(moment: OutboxMoment, facts: MomentFacts): boolean
     case 'deliver':
       return facts.commitmentTerminal
     case 'answer':
-      return facts.dispositionIsAnswerOrCheck
+      return facts.dispositionAnswersInbound
     case 'ask':
       return facts.hasAskedAssumptionOrRoute
     case 'cannot':
-      return facts.brokenOrAtRiskOrDispatchFailed
+      // The host is the author of the two closing lines nobody else can produce:
+      // the turn timeout (`10`) and the dispatch-failure note. A model-authored
+      // `cannot` still has to earn it through a broken/at-risk commitment.
+      return facts.brokenOrAtRiskOrDispatchFailed || facts.byHost
     case 'alert':
-      return facts.isAgendaTurnWithSignal
+      // An agenda turn that saw a signal, or the host's own second-voice alarm (11):
+      // both are the host deciding to break silence, never the model choosing to.
+      return facts.isAgendaTurnWithSignal || facts.byHost
     case 'brief':
       return facts.byHost
     case 'pushback':

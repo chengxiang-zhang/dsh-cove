@@ -59,7 +59,7 @@ export interface ReconcileDeps {
   executors: Pick<Executors, 'dispatch' | 'cancel'>
   closure: Pick<Closure, 'close'>
   escalation: Pick<Escalation, 'escalate'>
-  presence: Pick<Presence, 'rotate'>
+  presence: Pick<Presence, 'rotate' | 'settleStaleTurns'>
   log: HostLog
   /** One line through the outlet; returns whether it was written. */
   speak(speech: RecoverySpeech): boolean
@@ -194,6 +194,11 @@ export function createReconciler(deps: ReconcileDeps): Reconciler {
   return {
     async reconcile(now: number): Promise<ReconcileResult> {
       const result: ReconcileResult = { orphaned: 0, closed: 0, healed: 0 }
+
+      // Step 0: a desk turn whose `turn/end` was lost (crash, hot-reload window) is
+      // still marked running. Left alone it mutes the desk for every later message.
+      const staleTurns = deps.presence.settleStaleTurns(now, { boot: false })
+      if (staleTurns > 0) log.warn(`superagent/recovery: closed ${staleTurns} stale desk turn(s)`)
 
       // Step 2's second half, run first: an attempt marked last round is re-checked
       // and repaired before this round can mark new ones. That ordering is what makes

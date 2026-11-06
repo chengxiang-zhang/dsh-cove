@@ -159,3 +159,33 @@ verdict **PASS-WITH-NITS**，判据对象 `e83c811`（干净树）：DONE-1..5 �
 设计与方案里到处写着"新服务域进 bundle 后要用户重启才生效（F23）"。实测不成立：`pnpm build` 完成后约 11 秒，新服务域就在**已经在运行的**进程里起来了（证据：`sa_lease.created_at` = 09:01:16，`holder` = 当时的 pid 13918，而该进程启动于 11-05 21:25）。所以 `@dsh-cove/dsh-web-all` 的代码改动**不需要重启**，实体在 `lib/` 变化时自己重载；需要重启的只有 profile、`cordis.patch.yml` 与预设的改动。
 
 同一次实测还确认了重启的正确做法与错误做法，已写进 [tools/dsh-launchd/README.md](../../../tools/dsh-launchd/README.md) 的 Restart 段：`kill` 不会把 LaunchDaemon 拉起来（`KeepAlive` 是 `SuccessfulExit: false`，SIGTERM 算成功退出），必须 `sudo launchctl kickstart -k system/ai.deepseek.dsh.web`。这次 `kill` 让本机入口断了 1 小时 33 分，是我执行方式错了。
+
+## 运行时修正（2026-11-06 15:35–16:00，Lead 执行）
+
+真机审计（7 条真实消息、95 条 deliberation、0 件承诺）定位到三个单点，均属"代码按设计写完、机制在真机不可达"。本轮按最小改动集修复，判据是"一条真实消息能走到承诺"。
+
+### 改了什么
+
+1. **时刻矩阵补洞**（`surface/moment.ts`、`index.ts`）
+   - `answer` 的时刻事实扩到 `answer/check/decline/acknowledge`：拒收的身份说明（14:19 那条 7ms 拒收）此前无任何合法出口。
+   - `ask` 的时刻事实补上 `judge(ask)`：判 ask 就是"这件事需要老板拍板"的路由决定；此前只有 `route` 或已存在的 `asked` 假设才算，导致 14:37 那个回合 6 次 `say` 全部 `MOMENT_FORBIDDEN` 后 600 秒超时。
+   - `cannot` 与 `alert` 允许主机自证（`byHost`）：超时句、派发失败、孤儿重启简报、第二声音告警都是主机写的，模型仍必须靠 broken/at_risk 才能说 `cannot`。
+   - 快路径没有模型，它的 `say` 改用 `sa:fp:` 主机键（拒绝通知、问候回执）。
+2. **兜底回执不再占回复位**（`desk/presence.ts`）：60 秒的"收到，正在判断"不带 `event_id`。`02` 的"一条入站至多一条 reply 档"是唯一索引，带 id 就会把桌子稍后要说的那句挡成 `REPLY_EXISTS`——14:37 正是回执照先占了位。
+3. **commit 可达**（`desk/sections/precedent.ts`、`index.ts`、`judgment/translate.ts`、`judgment/judge.ts`）
+   - 宿主把注册的执行体候选（id/生命周期/工具面/成本档）写进判例段；
+   - `EXECUTOR_UNKNOWN` 的报错列出全部候选，猜错能在同回合自我纠正；执行体 id 先折叠大小写与空白再查；
+   - 工作类先归一化（`normalizeClassId`：小写、非字母数字折叠为 `-`）再校验与落库，`status_query` 这类写法不再报废整个回合。
+4. **卡死回合恢复**（`desk/presence.ts`、`recovery/startup.ts`、`recovery/reconcile.ts`）：新增 `settleStaleTurns`——启动时把账本里仍 `running` 的回合判 `orphaned` 并释放 `turn_open`，时钟每轮只处理超过 10 分钟超时线的行；否则一次崩溃会让桌子永久沉默、之后每条消息只收到回执。
+
+### 验收读数（本机）
+
+- `pnpm typecheck` 退出 0；`pnpm --filter @dsh-cove/dsh-web-all test`：138 文件 / 1954 passed / 6 skipped
+- `pnpm docs:check` 通过；`pnpm test:scripts`：614 pass / 0 fail
+- 新增用例：时刻矩阵三档（ask/decline/超时）、执行体候选与折叠、class 归一化、判例段候选行、stale turn 的启动/时钟/无 running 行三种形态
+
+### 与设计文本的偏离（记录在案）
+
+- `02-协议.md:126` 的 `ask` 时刻原文只认"asked 假设或 route"；这里把 `judge(ask)` 视为同一个路由决定。理由：处置表里 `ask` 与 `route` 是不同值，但 `say` 的时刻表没有给裸 `ask` 任何出口，协议自身在此不闭合。
+- 兜底回执从"带 event_id 的 reply 档"改为"不带 event_id 的同聊天行"；`02:102` 的一入站一文本回复不变，改变的是主机兜底不再抢模型的位置。
+- 未动 `03-内核.md:110` 的影子期 journal 义务（协议缺列，仍按 N18 执行）。

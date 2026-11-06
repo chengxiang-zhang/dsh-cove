@@ -18,6 +18,7 @@ import { PHYSICAL } from '../protocol/db.ts'
 import type { InboundEvent } from '../protocol/events.ts'
 import { threadKeyOf } from '../kernel/claim.ts'
 import type { AttemptRow, Capability, CommitmentRow, Strength, WorkClassRow } from '../protocol/objects.ts'
+import { normalizeClassId } from '../protocol/objects.ts'
 import type { CommitInput, ToolErrorCode } from '../protocol/tools.ts'
 
 /** Turn context as the desk injects it; T21's TurnContext is structurally assignable. */
@@ -146,7 +147,7 @@ export function translateToCommit(ctx: JudgmentTurn, input: CommitInput, deps: T
   if (rawAssumptions.length > MAX_ASSUMPTIONS) return fail('TOO_MANY_ASSUMPTIONS', `${rawAssumptions.length} > ${MAX_ASSUMPTIONS}`)
   const intake = read.get<{ class: string | null; about: string | null }>(
     `SELECT class, about FROM ${PHYSICAL.intake} WHERE event_id = ? AND shadow = ?`, event.event_id, ctx.shadow ? 1 : 0)
-  const classId = intake?.class ?? ''
+  const classId = normalizeClassId(intake?.class ?? '')
   const cls = CLASS_NAME.test(classId) ? deps.classes.get(classId) : undefined
   const norm = normalizeAssumptions(rawAssumptions, cls)
   if ('error' in norm) return fail('ASK_REQUIRED', norm.error)
@@ -167,9 +168,15 @@ export function translateToCommit(ctx: JudgmentTurn, input: CommitInput, deps: T
   // 6. Budget scale.
   const scale = input.budget_scale ?? 1
   if (!(scale > 0) || scale > MAX_BUDGET_SCALE) return fail('BUDGET_OVER_CAP', `budget_scale ${scale} > ${MAX_BUDGET_SCALE}`)
-  // 7-9. Executor and mandate.
-  const profile = deps.profiles.get(input.executor)
-  if (!profile) return fail('EXECUTOR_UNKNOWN', `${input.executor} is not a registered profile`)
+  // 7-9. Executor and mandate. The id is typed by the model, so fold case and
+  // whitespace before rejecting, and name the candidates when it still does not
+  // resolve: a blind guess must be able to correct itself in the next step.
+  const profile = deps.profiles.get(input.executor.trim())
+    ?? deps.profiles.get(input.executor.trim().toLowerCase())
+  if (!profile) {
+    const available = deps.profiles.all().map(p => p.id).join(', ')
+    return fail('EXECUTOR_UNKNOWN', `${input.executor} is not a registered profile; available: ${available}`)
+  }
   const facts = deps.facts(ctx, event)
   const need = capabilityOf(input, profile)
   const mandate = facts.g3_mandate(need.capability, need.path)

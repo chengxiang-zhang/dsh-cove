@@ -245,6 +245,18 @@ describe('now projection', () => {
 })
 
 describe('dossier', () => {
+  it('shows the executor candidates the host computed, inside 判例(同类)', () => {
+    const view = baseView()
+    const ctx = { ...CTX, executorCandidates: ['oneshot-read(一次性/只读/成本1)', 'durable-full(长期/全工具/成本2)'] }
+    const { text } = compileDossier(view, compileNow(view, OWNER_P2P), BATCH, ctx, 6000)
+
+    expect(text).toContain('可派执行体: oneshot-read')
+    expect(text).toContain('durable-full')
+    // It rides in the precedent section, so the six-section layout is unchanged.
+    expect(text.indexOf('可派执行体')).toBeGreaterThan(text.indexOf('判例(同类)'))
+    expect(text.indexOf('可派执行体')).toBeLessThan(text.indexOf('注意力'))
+  })
+
   it('renders the six sections in the fixed order', () => {
     const view = baseView()
     const { text } = compileDossier(view, compileNow(view, OWNER_P2P), BATCH, CTX, 6000)

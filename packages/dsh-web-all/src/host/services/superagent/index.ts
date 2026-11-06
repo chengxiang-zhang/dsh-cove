@@ -224,7 +224,7 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
         // 09 reply tier: an answer to what just arrived, or a delivery the requester is waiting on.
         isReplyToInbound: p.event_id !== undefined || (p.moment === 'deliver' && c?.origin_kind === 'event'), interruptsToday: interrupts, quotaPerDay: a.interruptQuota, localHHMM: hhmm(now), quiet: a.quiet }
     }
-    const HOST_KEYS = /^(sa:(fb|rx|ack|toolface|brief):|cannot:)/
+    const HOST_KEYS = /^(sa:(fb|fp|rx|ack|toolface|brief):|cannot:|orphan:|second-voice:)/
     const outletPolicy = createOutletPolicy({
       attentionCtx,
       momentFacts: p => {
@@ -236,8 +236,10 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
         return {
           committedInThisTurn: !!c && c.created_at >= now - 120_000,
           commitmentTerminal: !!c && c.closed_at !== null,
-          dispositionIsAnswerOrCheck: intake?.disposition === 'answer' || intake?.disposition === 'check',
-          hasAskedAssumptionOrRoute: intake?.disposition === 'route' || (!!c && read.get(`SELECT 1 FROM ${PHYSICAL.assumption} WHERE commitment_id = ? AND mode = 'asked' AND status = 'open'`, c.commitment_id) !== undefined),
+          dispositionAnswersInbound: intake?.disposition !== null && intake?.disposition !== undefined
+            && ['answer', 'check', 'decline', 'acknowledge'].includes(intake.disposition),
+          hasAskedAssumptionOrRoute: intake?.disposition === 'route' || intake?.disposition === 'ask'
+            || (!!c && read.get(`SELECT 1 FROM ${PHYSICAL.assumption} WHERE commitment_id = ? AND mode = 'asked' AND status = 'open'`, c.commitment_id) !== undefined),
           brokenOrAtRiskOrDispatchFailed: !!c && (c.state === 'broken' || c.state === 'at_risk'
             || read.get(`SELECT 1 FROM ${PHYSICAL.attempt} WHERE commitment_id = ? AND end_reason = 'dispatch_failed'`, c.commitment_id) !== undefined),
           isAgendaTurnWithSignal: !!c && read.get(`SELECT 1 FROM ${PHYSICAL.deliberation} WHERE commitment_id = ? AND trigger_kind = 'agenda'`, c.commitment_id) !== undefined,
@@ -265,7 +267,10 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
     const outletSay = (ctx: JudgmentTurn | JudgeTurn, p: Omit<SpeechProposal, 'idem_key'>): ToolResult<SayOutput> => {
       const n = (sayCounters.get(ctx.deliberationId) ?? 0) + 1
       sayCounters.set(ctx.deliberationId, n)
-      const proposal: SpeechProposal = { ...p, idem_key: idemKeyOf(`j:${ctx.deliberationId}`, n) }
+      // Fast-path turns have no model: their lines are the host's own (decline notice,
+      // greeting reaction), so they carry the host prefix and the host moment rules.
+      const scope = ctx.deliberationId.startsWith('fp:') ? `fp:${ctx.deliberationId.slice(3)}` : `j:${ctx.deliberationId}`
+      const proposal: SpeechProposal = { ...p, idem_key: idemKeyOf(scope, n) }
       if (ctx.shadow) {
         const v = outletPolicy.check(proposal, ledger.nowMs())
         ;(ctx as JudgmentTurn).shadowOps?.push({ tool: 'say', input: p, verdict: v.ok ? 'ok' : v.code })
@@ -303,7 +308,9 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       config: () => {
         const d = deps.config().superagentDesk
         return { seatDir: d.seatDir ?? deps.seatDir, preset: d.preset ?? DESK_PRESET, ...(d.model ? { model: d.model } : {}),
-          idleEvictMs: 1_800_000, rotateEvents: 4000, collectWindowMs: 3000, dossierTokens: 6000, owner: owner(), ...(deps.tz ? { tz: deps.tz } : {}) }
+          idleEvictMs: 1_800_000, rotateEvents: 4000, collectWindowMs: 3000, dossierTokens: 6000, owner: owner(),
+          executorCandidates: profiles.all().map(p => `${p.id}(${p.lifetime === 'durable' ? '长期' : '一次性'}/${p.tools === 'full' ? '全工具' : '只读'}/成本${String(p.cost_tier)})`),
+          ...(deps.tz ? { tz: deps.tz } : {}) }
       },
       degrade: e => { recovery?.degrade(e.reason, e.scope) },
       recover: e => { recovery?.recover(e.reason, e.scope) },

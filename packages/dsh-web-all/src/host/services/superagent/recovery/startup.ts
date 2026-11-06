@@ -51,7 +51,7 @@ export type { Role, RoleSources } from './roles.ts'
 export type RecoveryExecutors = Pick<Executors, 'dispatch' | 'cancel' | 'roleOf'>
 export type RecoveryClosure = Pick<Closure, 'close'>
 export type RecoveryEscalation = Pick<Escalation, 'escalate'>
-export type RecoveryPresence = Pick<Presence, 'startupCheck' | 'rotate' | 'roleOf'>
+export type RecoveryPresence = Pick<Presence, 'startupCheck' | 'rotate' | 'roleOf' | 'settleStaleTurns'>
 
 export interface RecoveryDeps {
   ledger: Ledger
@@ -152,6 +152,12 @@ export function createRecovery(deps: RecoveryDeps): Recovery {
         degraded.push(degrades.degrade('lease_not_held', 'outlet'))
         log.warn(`superagent/recovery: outlet lease is held by ${acquired.holder} (epoch ${acquired.epoch}); judging only, not speaking`)
       }
+
+      // A turn that was running when the previous process died is not running now:
+      // close it before the reconciler reads the ledger, or the desk's `turn_open`
+      // stays 1 and every later message gets nothing but the fallback acknowledgement.
+      const staleTurns = deps.presence.settleStaleTurns(now, { boot: true })
+      if (staleTurns > 0) log.warn(`superagent/recovery: closed ${staleTurns} stale desk turn(s) at startup`)
 
       const reconciled = await reconciler.reconcile(now)
 
