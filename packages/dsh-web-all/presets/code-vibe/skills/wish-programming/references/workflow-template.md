@@ -9,7 +9,7 @@
 - workflow 脚本**纯协调**：没有 filesystem / bash / 网络，只能 `agent()` / `pipeline()` / `parallel()` / `phase()` / `log()`。
 - 所以**闸门（journey.sh / verify.sh / replay.sh）必须由 conductor 在阶段之间用 bash 跑**，不能放进 workflow。
 - 每个 `agent()` 的 prompt 必须**自包含**（子代理看不到本对话）：只传**切片上下文块**（见下），不灌整份 contract/plan。验证者用 `agent()` 天然 fresh-context——**绝不用 fork 做验证**。
-- **模型路由（继承优先，同族启发）**：默认不传 `model`/`provider`。要换档就留在当前 provider、选同族兄弟（DeepSeek pro↔flash，Codex sol↔luna/terra），按任务轻重判断——不是死表。勿因目录热闹就跳到 Claude/GLM/Kimi；换族仅用户点名或任务明确需要。跨 provider 须同时传两者。不确定就继承。
+- **模型路由（继承优先）**：`agent()` 默认不传 `model`/`provider`，子代理继承本会话；需要换档时用 `agent()` 自带的 `provider`/`model` 覆盖（这是 workflow 脚本自己的能力，与 `subagent_*` 工具的参数不是一回事），取值以当次可用目录为准，拿不准就继承。换到另一个模型族仅用户点名或任务明确需要时做。
 
 ## 切片结构（conductor 读 plan.md 后作为 args 传入）
 
@@ -85,7 +85,7 @@ return { built, verified }
 | 语义敏感 / 评审 / 裁决 | 同族强档，或直接继承 |
 | 换到无关模型族 | 仅用户点名或任务明确需要该族 |
 
-同族示例：DeepSeek pro↔flash；Codex sol↔luna/terra。强档推理、快档窄 I/O；开放设计不要丢快档。
+同族示例：同一 provider 内的强弱档（如 flash 档 ↔ 高档），具体 id 以当次可用目录为准。强档推理、快档窄 I/O；开放设计不要丢快档。
 
 ## 并行 vs 串行
 

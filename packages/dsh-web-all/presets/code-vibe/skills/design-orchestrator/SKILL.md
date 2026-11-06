@@ -37,7 +37,7 @@ description: Use at the START of any design request (设计/方案/架构/IA/交
 
 ## 2.5 方案先行（L2 / L3 必做，L1 可跳）
 
-写任何设计件之前，先派一次强模型档（顺序：`subagent_astra` → `subagent_opus55`，见 `design-dispatch`），
+写任何设计件之前，先派一次强模型档（顺序：`subagent_codex` → `subagent_claude_code`，见 `design-dispatch`），
 要它交"候选方案 + 取舍理由 + 被忽略的约束"，本栈负责：
 
 1. 把它落成该档最小件（`brief` / 各层文件 / `adr/`）；
@@ -55,7 +55,7 @@ description: Use at the START of any design request (设计/方案/架构/IA/交
 
 **派工方式**：按层并行 `subagent`（每个 fresh 上下文），一个 reviewer 一个 subagent；Lead 不替 reviewer 写结论。
 
-**派工可选外部强 agent**：需要独立强判断时（L3、或本轮结论要冻结/进 ADR），reviewer 可以是外部 agent —— **默认只跑一路**（结构化审阅用 `subagent_astra`，需要它自己翻找多处用 `subagent_opus55`），只有第二路带**不同的攻击切片**时才并行；packet 与路由规则见 `design-dispatch`。外部结论与本地 reviewer 同权，都是输入；**finding 必须本地复现才计入**，Lead 写裁决并区分已证实/推断/未证实。
+**派工可选外部强 agent**：需要独立强判断时（L3、或本轮结论要冻结/进 ADR），reviewer 可以是外部 agent —— **默认只跑一路**（结构化审阅用 `subagent_codex`，需要它自己翻找多处用 `subagent_claude_code`），只有第二路带**不同的攻击切片**时才并行；packet 与路由规则见 `design-dispatch`。外部结论与本地 reviewer 同权，都是输入；**finding 必须本地复现才计入**，Lead 写裁决并区分已证实/推断/未证实。
 
 每个 reviewer 的 brief 只含：
 1. 本层 artifact 路径（只读，禁止修改）；

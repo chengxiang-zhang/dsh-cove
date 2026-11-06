@@ -1,6 +1,6 @@
 ---
 name: design-dispatch
-description: 把复杂设计/排障/独立评审任务派发给外部强 agent（codex+astra、claude code+opus 5.5）拿独立结论再合成；Use when a design needs a second/third independent judgement, an ADR/freeze is about to be written, or local analysis keeps converging on the same answer without new evidence.
+description: 把复杂设计/排障/独立评审任务派发给外部强 agent（subagent_codex = codex CLI + gpt-6-astra；subagent_claude_code = claude CLI + kaon/claude-opus-5-5）拿独立结论再合成；Use when a design needs a second/third independent judgement, an ADR/freeze is about to be written, or local analysis keeps converging on the same answer without new evidence.
 ---
 
 # 外部强 agent 派发（Design Dispatch）
@@ -27,41 +27,38 @@ description: 把复杂设计/排障/独立评审任务派发给外部强 agent�
 **按爆炸半径判，不按文件数判**：单文件但动 `access-trust/`、release workflow、权限/信任围栏、数据删除路径
 —— 派一次 S 复审；单文件且纯展示层 —— 不派。
 
-## 1. 三个工具
+## 1. 两个委派工具（外加两个控制工具）
 
-| 顺序 | 工具 | 通道 | 模型 | 何时用 |
+派发面只有两个委派工具：**选哪个工具就是选 provider**，`model` 是唯一档位参数，取值必须是 profile 为这个工具列出的 id。
+
+| 顺序 | 工具 | CLI | `model` | 何时用 |
 |---|---|---|---|---|
-| 1 | `subagent_astra` | ChatGPT **订阅**（原生 OAuth） | `gpt-6-astra` | **默认**。架构/选型/新结构/跨模块契约/复杂排障根因未知，一律先走这个 |
-| 2 | `subagent_opus55` | kaon-router（Claude Code 侧无订阅通道） | `kaon-rp/claude-opus-5-5` | **订阅断了的第一个替补**（429/配额耗尽/认证失效），也用于需要它自己多处翻找的探查型任务 |
+| 1 | `subagent_codex` | codex CLI（本机原生登录） | 省略 = profile 默认 `gpt-6-astra`；`gpt-6-astra-pro` 当前账号 400 | **默认档**。架构/选型/新结构/跨模块契约/复杂排障根因未知：结构化审阅与结论型判断 |
+| 2 | `subagent_claude_code` | claude CLI | `kaon/claude-opus-5-5`（最强，也是默认）/ `kaon/claude-sonnet-5-5`（均衡）/ `kaon/claude-haiku-5-5`（最快最便宜） | codex 不可用时的**替补**；需要它自己在仓库多处翻找的探查型任务；窄 I/O 用 haiku |
 
-- **默认只跑一路**，按任务形态选（2026-11-03 实测）：
-  - 单文件/结构化审阅、结论型判断 → `subagent_astra`：1 turn、32.6s、非缓存输入约 1.7 万 token；
-  - 需要它自己在仓库里多处翻找的探查型任务 → `subagent_opus55`：会自己开到 9 turn / 70.8s，输入侧约 37.6 万 token。
+控制工具（查状态、关会话）：`external_session_list(status?)` / `external_session_stop(session_id)`。
+
+- **默认只跑一路**，按任务形态选：结构化审阅与结论型判断走 `subagent_codex`；需要它自己在仓库里多处翻找的探查型任务走 `subagent_claude_code`（这类它会自己开到多轮，输入侧远大于单轮审阅）。
 - **两路并行不是默认值**。只有第二路带**不同的攻击切片**（不同约束集、不同反例方向）时才并行；
   同一份 packet 跑两路，实测边际新发现为 0，成本翻倍。第二路连续 N 次 unique-finding=0 就砍掉。
 - 降级阶梯（自动执行，但每一次降级都要在回执里写明）：
-  1. `subagent_astra` 失败（429 / 配额耗尽 / `model_not_found` / 认证失效）→ **直接换 `subagent_opus55`**；
-  2. 两条都不可用 → 停止派发，改本地执行，并在结论里标注质量已降级（这是 §2 里"停下"的唯一条件）。
-  Codex 侧**不接 kaon**：订阅不可用就换 claude，不做同引擎换计费。
-- 模型已知边界：`gpt-6-astra-pro` 在订阅账号下不被支持（400）；`kaon/gpt-6-astra` 在 kaon 侧无路由；claude 侧只有 `kaon-rp/claude-opus-5-5` 前缀可用（`kaon/claude-opus-5-5*` 会被 CLI 400 拒）。
+  1. `subagent_codex` 失败（`400` / `429` / `auth-required`）→ **直接换 `subagent_claude_code`**（`model: kaon/claude-opus-5-5`）；
+  2. 两个都不可用（`provider-missing` / 反复 `auth-required`）→ 停止派发，改本地执行，并在结论里标注质量已降级（这是本 skill 里唯一允许停下的条件）。
+- 模型已知边界：`gpt-6-astra-pro` 当前账号不支持（400）；claude 的 opus 类模型要求 Claude Code ≥ 2.1.280（2.1.318 实测返回 `anthropic/claude-opus-5.5`，老版本同一条命令 400）；不在 profile 目录里的 id 会在参数校验层被拒，**不会静默换档**。
 
-## 2. 装机（每台机器一次）与 preflight（每会话一次）
+## 2. 没有装机步骤，只有 preflight（每会话首次派发前一次）
 
 ```sh
-# 装机：装 adapter + 落探针与兜底壳 + 追加 profile 的三个工具行 + 跑 preflight
-sh <preset-root>/skills/design-dispatch/scripts/install.sh
-
-# 之后每次会话首次派发前，只跑 preflight
-sh <preset-root>/skills/design-dispatch/scripts/preflight.sh          # 三条通道全查
-sh <preset-root>/skills/design-dispatch/scripts/preflight.sh codex    # 只查订阅
+# 查两个 CLI、实体行与挂载状态；不产生模型调用，不花 token
+sh <preset-root>/skills/design-dispatch/scripts/preflight.sh
+sh <preset-root>/skills/design-dispatch/scripts/preflight.sh codex    # 只查 codex 侧
+sh <preset-root>/skills/design-dispatch/scripts/preflight.sh claude   # 只查 claude 侧
 ```
 
-- `install.sh` 幂等：重复跑不会重复加行；`--check` 只体检不改动；`--uninstall` 只摘 profile 块（不删 adapter）。
-- 非默认 profile：`--profile-dir <dir>`；非默认根目录：`--root <dir>`；换模型：`--astra-model/--kaon-model/--opus-model`。
-- `PREFLIGHT_ALL_OK` = 三通道都 `stopReason=end_turn`。退出码 1 = 通道不可用，2 = 机器前置缺失。
-- 读取 preflight 的方式是**按通道**，不是一刀切：两路都绿 → 正常并行；只剩一路 → 单路运行并在回执标注；
-  **三路全红才停下**并报告缺件。preflight 红一条就把整个方案停掉，等于把可用的通道也废了。
-- 生效方式按仓库契约写，不许夸口：本机实测 profile patch 热重载后三个工具在**下一轮请求**可见；若下一轮工具表里没有它们，**按仓库 AGENTS.md 标注「需要用户重启 DSH 服务后生效」并交给用户重启**，不要声称已经可用。
+- 这两个工具由**实体 Loader 行**注册（profile 的 `web-all` → `config.externalSession`）：不写 profile、不装 adapter。旧的 `install.sh` 与 ACP 探针已随 ACP 通道退役，不要再按老文档装机。
+- preflight 退出码：0 两侧可用；1 有一侧不可用（CLI 缺失 / 未登录）；2 机器前置缺失（两个 CLI 都没有，或 profile 里没有 `externalSession` 配置）。
+- 读数**按侧读**，不一刀切：两侧绿 → 正常并行；只剩一侧 → 单路运行并在回执标注；**两侧全红才停下**并报告缺件。preflight 红一条就把整个方案停掉，等于把可用的通道也废了。
+- 生效方式按仓库契约写，不许夸口：工具注册在实体行上，改 `cordis.patch.yml` 需要**重启进程**才生效（`dsh.profile.patchReload` 在当前版本未实现）。只有工具真的出现在下一轮请求的工具表里才算可用；没出现，就按仓库 AGENTS.md 标注「需要用户重启 DSH 服务后生效」并交给用户重启。
 
 ## 3. Design Packet（派发内容必须自包含）
 
@@ -98,7 +95,7 @@ sh <preset-root>/skills/design-dispatch/scripts/preflight.sh codex    # 只查�
   质量门只信这种确定性信号，不信它自报的置信度或语气。
 - **写的人不当评分人**：评分 = `verify-claims.mjs` + 一次独立复跑；所以"全程只读、Lead 重抄正文"不再是
   默认——它把抄写和评分压在同一个人身上。
-- 回执必带：用了哪个工具、走哪条通道（订阅 / kaon）、耗时、`usage` token、**写域内写了哪些文件**、失败与降级记录，以及一行 `escalation_reason`（判据不完备 / 订阅不可用 / 需要外部视角）。
+- 回执必带：用了哪个工具、`model` 是哪个、耗时、`usage` token、**写域内写了哪些文件**、失败与降级记录，以及一行 `escalation_reason`（判据不完备 / 委派工具不可用 / 需要外部视角）。
 - **看 `escalation_reason` 的分布**：多数失败是"packet 没写清"就改 Packet，不是多派强模型；升级率失控时先怀疑门太严。
 
 ## 6. 已知限制（别当全能）
@@ -106,5 +103,4 @@ sh <preset-root>/skills/design-dispatch/scripts/preflight.sh codex    # 只查�
 - **one-shot**：不支持续接与中途 steer；要追问就重新打包一次。
 - **只回最终文本**：中间推理、工具调用过程看不到，过程质量不可审计。
 - claude 侧经网关的 `total_cost_usd` 是本地价目表估算，**不可用于计费**，只认 `usage` token。
-- codex 走 kaon 会多一条 `Model metadata … not found` 警告，cosmetic，不影响出答案。
-- 这些 agent 写文件的能力取决于 ACP `permission`（当前 `allow`）：派发时必须在包里写清写域，不要让它们越界改仓库。
+- 这些 agent 写文件的能力由 CLI 自己的设置决定（claude：`~/.claude/settings.json`；codex：本机配置）：派发时必须按 §5 在包里写清写域，不要让它们越界改仓库。

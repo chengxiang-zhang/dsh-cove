@@ -69,12 +69,12 @@ T5 重估：每 5 轮 / 每里程碑 / 每次压缩后 / 触发升级条件 → 
 | 探索 / 搜索 / 大文件摘要 / 批量小改 | 是 | 本栈（或便宜档子代理扇出） |
 | 一致性 / 契约 / 交叉引用审计 | 是 | 本栈 fresh 子代理 |
 
-**强模型档内的固定顺序（不许自选）**：`subagent_astra`（codex + ChatGPT 订阅）→ `subagent_opus55`（claude code + opus 5.5；**订阅断了直接换这个**）。
+**强模型档内的固定顺序（不许自选）**：`subagent_codex`（codex CLI，`model` 省略即 `gpt-6-astra`）→ `subagent_claude_code`（claude CLI，`model: kaon/claude-opus-5-5`；**codex 不可用时直接换这个**）。两者都没有 `provider` 参数：换族就是换工具。
 
 路由纪律：
 - **派一次就够**，默认单路；第二路只在带**不同攻击切片**时开。
 - 派发内容与格式见 `design-dispatch`。
-- 每个强模型派发都记一行 `escalation_reason`（判据不完备 / 订阅不可用 / 需要外部视角），月底看这个分布：多数失败是"packet 没写清"就改 packet，不是多派。
+- 每个强模型派发都记一行 `escalation_reason`（判据不完备 / 委派工具不可用 / 需要外部视角），月底看这个分布：多数失败是"packet 没写清"就改 packet，不是多派。
 
 ## 2. 上下文可容性（规划门，不计分）
 
@@ -127,7 +127,7 @@ T5 重估：每 5 轮 / 每里程碑 / 每次压缩后 / 触发升级条件 → 
 | 调研结论要求实施 | TR→T2/T3 | 先交 findings+gap+handoff |
 | 用户说"直接做/简单点" | 降 1–2 档 | 立即改档并记录 |
 | 用户说"按程序来/开环/带团队" | 升 T3 | 立即改档 |
-| 结论要冻结/进 ADR，或本地两轮无新证据 | 升级复审 | 加载 `design-dispatch`：默认只派 **一路** 外部强 agent（`subagent_astra` 结构化审阅 / `subagent_opus55` 探查），finding 本地复现才计入；别用同一份 packet 跑两路 |
+| 结论要冻结/进 ADR，或本地两轮无新证据 | 升级复审 | 加载 `design-dispatch`：默认只派 **一路** 外部强 agent（`subagent_codex` 结构化审阅 / `subagent_claude_code` 探查），finding 本地复现才计入；别用同一份 packet 跑两路 |
 
 ## 6. 各档最小契约（细节在对应路径 skill）
 

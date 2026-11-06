@@ -89,8 +89,9 @@
     - 生效路径（规则 #8）：新增 skill 目录由 `skill-filesystem` 目录扫描发现，persona 改动走 standing stamp → **新会话生效，无需重启**；adapter 与 DSH profile 的三个工具行属于机器前置，不在本仓。
     - 已知边界：外部 agent 是 one-shot（不能续接/中途 steer）；只回最终文本（过程不可审计）；claude 经网关的 `total_cost_usd` 不可信，只认 `usage`；`gpt-6-astra-pro` 订阅不支持、`kaon/gpt-6-astra` 无路由、claude 仅 `kaon-rp/claude-opus-5-5` 前缀可用。
     - 回滚：删除 `skills/design-dispatch/`，persona 与 `design-orchestrator` 的两句话回退即可，然后 `node scripts/render-preset.mjs`。
+    - **2026-11-06 更正**：ACP 双通道已整体退役（`8416d2e`），本条的装机脚本、ACP 探针与三通道 preflight 全部作废并删除；路由改由 `subagent_codex` / `subagent_claude_code` 承担，见 #17。
 
-13. **Codex 不接 kaon（2026-11-03 用户裁决）**：`kaon/gpt-6-astra` 在 kaon 侧 `404 no available route`；`kaon/gpt-6-astra-pro` 有路由但走 OpenRouter 公共额度，实测 3/3 `rate_limit_exceeded`；`kaon/gpt-5.5` 可用但换了模型等于换了能力。结论：**订阅不可用就换 claude，不做同引擎换计费**。已删除 profile 的两行（`subagent-acp-astra-kaon` / `tool-subagent-astra-kaon`）、仓内 `codex-acp-kaon.sh`、以及 `install.sh` / `preflight.sh` 里的对应分支。回滚：`/tmp/cordis.patch.yml.bak-drop-kaon-20261103` + `git checkout` 该轮改动。
+13. **Codex 不接 kaon（2026-11-03 用户裁决）**：`kaon/gpt-6-astra` 在 kaon 侧 `404 no available route`；`kaon/gpt-6-astra-pro` 有路由但走 OpenRouter 公共额度，实测 3/3 `rate_limit_exceeded`；`kaon/gpt-5.5` 可用但换了模型等于换了能力。结论：**订阅不可用就换 claude，不做同引擎换计费**。已删除 profile 的两行（`subagent-acp-astra-kaon` / `tool-subagent-astra-kaon`）、仓内 `codex-acp-kaon.sh`、以及 `install.sh` / `preflight.sh` 里的对应分支。回滚：`/tmp/cordis.patch.yml.bak-drop-kaon-20261103` + `git checkout` 该轮改动。 **2026-11-06 状态**：该裁决针对的 ACP 双通道已不存在，条目仅作历史；当前 codex 侧只有 profile 配置的 codex CLI 路由。
 
 16. **派发写域 + 断言机械化（2026-11-04，用户裁决"改预设而不是每次手工"）**：来源是一次真实派发——`subagent_opus55` 返回约 4000 字设计正文，产物 30 处 `file:line` 里只有 8 处被本机跑过，而**抄写与评分压在同一个人身上**：Lead 把正文吸进上下文重写一遍，再人肉逐条复现。用户选了"让它直接写盘"，并指出这属于预设缺陷，不该每次靠人自觉。
     - 规则改动（`skills/design-dispatch/SKILL.md` §5）：**删掉**「派发默认只读 → `git status` 必须为空」（它把"不许写"当成安全，实际代价是手抄）；**删掉**「对"被接受的结论"抽样复核」（机械全量判定取代抽样）；**删掉**「质量门只信确定性信号」独立条目（内容并入新条目）。**新增**三条：写域由 packet 声明（`只读` 或 `写域=<路径>`，对的是"域"不是"空"）、产物自带 `claims.jsonl`、写的人不当评分人。§3 第 6 段同步要求断言另存一份，否则仍要手抄。**净行实测 106→109（+3）**：没做到规则 #2 的"净负"，因为三条新规则都是硬约束；schema 已外移到脚本头注释，避免它在 SKILL.md 与脚本里各写一份。
@@ -99,3 +100,11 @@
     - 已知边界：`command` 只能跑 argv（`shell: false`），denylist 防误删误推，**不是沙箱**（`node -e`、解释器、名单外的二进制仍能干真事）；断言来自我们选择给了写权限的 agent，这条只防手滑不防恶意。折行归一化会让跨行短语匹配，但不制造跨远行的假通过（合行保序）。
     - 备份：用 git（`git show HEAD:...`），**不落 `.bak-*`**——`scripts/verify-preset-refs.mjs` 的 `DEBRIS_PATTERNS` 明确禁止备份垃圾进预设。
     - 回滚：`git checkout 8c78ba5 -- packages/dsh-web-all/presets/code-vibe/skills/design-dispatch/SKILL.md`，删 `scripts/verify-claims.mjs`，删本条。persona 与 `agent.cordis.yml` **未改**，所以不需要 `render-preset.mjs`。
+
+17. **派发路由对齐已退役的 ACP 工具（2026-11-06）**：`8416d2e` 把委派工具搬到实体行并退役 `subagent_astra` / `subagent_opus55`，但只改了 composition 的工具行；persona 与 5 个技能的派发指令仍指向旧名。`pnpm preset:check` 一直是绿的，因为它只校验技能目录与脚本路径，**不认工具名**。
+    - 改了什么：persona 两条常驻行（`PATHS` 的 executor 路由、`MODEL ROUTING`）；`design-dispatch`（§1 改成两个委派工具 + 两个控制工具、§2 去掉装机只留 preflight、§5 回执字段、§6 已知限制）、`task-router`、`incident-runbook`、`design-orchestrator`、`wish-programming` 与 `agent-operation` 的模型路由块、`workflow-template` 的同族示例。
+    - 删了什么：`skills/design-dispatch/scripts/install.sh`（装机已无意义——工具由实体行注册）与 `scripts/acp-probe.mjs`（ACP 探针）。
+    - 重写了什么：`scripts/preflight.sh` 改成零 token 探测——CLI 在不在（读 profile 的 `claudeBin` / `codexBin`，退回 PATH）、profile 有没有 `externalSession`、域挂载状态（200 已挂载 / 403 不在围栏 / 404 没挂载）。本机实测 `PREFLIGHT_OK codex 0.166.0-alpha.6` / `PREFLIGHT_OK claude 2.1.318` / `PREFLIGHT_OK mount 200` → `PREFLIGHT_ALL_OK`。
+    - 为什么这次不会再烂：`scripts/verify-preset-refs.mjs` 加了第 6 条规则——预设文本里任何 `subagent_*` / `external_session_*` 名字必须落在「composition 的 `toolName:` ∪ 实体注册的工具」里，否则 `pnpm preset:check` 判红。`MAINTENANCE.md` 与 `docs/` 被规则显式排除（历史记录允许出现旧名）。
+    - 口径：`model` 只有一个来源——profile 的 `externalSession.tools.<provider>.models`；`gpt-6-astra-pro` 在当前账号 400；claude 的 opus 类要求 Claude Code ≥ 2.1.280（2.1.318 实测可用）。换族 = 换工具，两个委派工具都没有 `provider` 参数。
+    - 回滚：`git revert` 本次提交（旧 `install.sh` / `acp-probe.mjs` 一并回来），然后 `node scripts/render-preset.mjs`。
