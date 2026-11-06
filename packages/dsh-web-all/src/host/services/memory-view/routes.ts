@@ -22,6 +22,7 @@ import {
   MEMORY_VIEW_API_PREFIX,
   compareMemoryNodes,
   isMemoryScope,
+  isPlaceholderDirectoryAbstract,
   isSafeVikingUri,
   isUriUnder,
   joinMemoryPath,
@@ -173,7 +174,10 @@ function toNode(entry: { uri: string; isDir: boolean; size: number; modTime: str
     size: entry.size,
     modTime: entry.modTime,
   }
-  if (entry.abstract !== undefined && entry.abstract !== '') node.abstract = entry.abstract
+  const abstract = entry.abstract?.trim()
+  if (abstract !== undefined && abstract !== '' && !isPlaceholderDirectoryAbstract(abstract)) {
+    node.abstract = abstract
+  }
   return node
 }
 

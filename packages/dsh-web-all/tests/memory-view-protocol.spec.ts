@@ -15,6 +15,7 @@ import {
   VIKING_SCHEME,
   compareMemoryNodes,
   isMemoryScope,
+  isPlaceholderDirectoryAbstract,
   isSafeVikingUri,
   isUriUnder,
   isVikingUri,
@@ -243,6 +244,20 @@ describe('scope roots', () => {
       ROOT,
       'viking://user/admin/peers/github.com-a-b/memories',
     ])
+  })
+})
+
+describe('placeholder directory abstracts', () => {
+  it('recognises the not-ready marker OpenViking returns for directories', () => {
+    expect(isPlaceholderDirectoryAbstract('# viking://user/admin/memories/cases [Directory abstract is not ready]')).toBe(true)
+    expect(isPlaceholderDirectoryAbstract('  # viking://user/admin/peers/a-b/memories/events [Directory abstract is not ready]  ')).toBe(true)
+  })
+
+  it('keeps every real summary', () => {
+    expect(isPlaceholderDirectoryAbstract('用户级偏好：热更与重启')).toBe(false)
+    expect(isPlaceholderDirectoryAbstract('# 标题不是占位串')).toBe(false)
+    expect(isPlaceholderDirectoryAbstract('')).toBe(false)
+    expect(isPlaceholderDirectoryAbstract('# viking://user/admin/memories/cases [Directory abstract is ready]')).toBe(false)
   })
 })
 

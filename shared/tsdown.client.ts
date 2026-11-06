@@ -14,7 +14,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
-import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path'
+import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { UserConfig } from 'tsdown'
 import { transform } from 'lightningcss'
@@ -253,7 +253,7 @@ function clientConfig(id: string, entry: string): UserConfig {
         // One <style data-plugin> per module file; idempotent under re-evaluation.
         return [
           `const css = ${JSON.stringify(code.toString())};`,
-          `const tagId = ${JSON.stringify(`${id}/${basename(fileId)}`)};`,
+          `const tagId = ${JSON.stringify(`${id}/${fileId}`)};`,
           'if (typeof document !== \'undefined\' && document.querySelector(\'style[data-plugin-css=\' + JSON.stringify(tagId) + \']\') === null) {',
           '  const tag = document.createElement(\'style\');',
           `  tag.dataset.plugin = ${JSON.stringify(id)};`,

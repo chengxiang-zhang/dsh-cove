@@ -373,6 +373,17 @@ export function workspacePeerFromRoot(root: string): string {
   return sanitizePeerId(root)
 }
 
+/**
+ * OpenViking 尚未为目录生成摘要时回一句占位串，形如
+ * `# viking://user/admin/memories/cases [Directory abstract is not ready]`。
+ *
+ * 它不是内容，直接展示会把每个目录行都变成一行噪音，因此目录项在出宿主前
+ * 丢掉这种摘要；文件与检索命中的摘要不受影响。
+ */
+export function isPlaceholderDirectoryAbstract(value: string): boolean {
+  return /^# viking:\/\/\S+ \[Directory abstract is not ready\]$/u.test(value.trim())
+}
+
 /** 排序：目录在前，同类按名称升序（`localeCompare` 不与运行环境绑定语言）。 */
 export function compareMemoryNodes(left: MemoryNode, right: MemoryNode): number {
   if (left.isDir !== right.isDir) return left.isDir ? -1 : 1
