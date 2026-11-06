@@ -63,7 +63,7 @@ sh <preset-root>/skills/design-dispatch/scripts/preflight.sh claude   # 只查 c
 - 这两个工具由**实体 Loader 行**注册（profile 的 `web-all` → `config.externalSession`）：不写 profile、不装 adapter。旧的 `install.sh` 与 ACP 探针已随 ACP 通道退役，不要再按老文档装机。
 - preflight 退出码：0 两侧可用；1 有一侧不可用（CLI 缺失 / 未登录）；2 机器前置缺失（两个 CLI 都没有，或 profile 里没有 `externalSession` 配置）。
 - 读数**按侧读**，不一刀切：两侧绿 → 正常并行；只剩一侧 → 单路运行并在回执标注；**两侧全红才停下**并报告缺件。preflight 红一条就把整个方案停掉，等于把可用的通道也废了。
-- 生效方式按仓库契约写，不许夸口：工具注册在实体行上，改 `cordis.patch.yml` 需要**重启进程**才生效（`dsh.profile.patchReload` 在当前版本未实现）。只有工具真的出现在下一轮请求的工具表里才算可用；没出现，就按仓库 AGENTS.md 标注「需要用户重启 DSH 服务后生效」并交给用户重启。
+- 生效方式按仓库 `docs/hmr.md` 判定，不许夸口：宿主/客户端代码构建后由一次 profile 重组热替换，保存 `cordis.patch.yml` 本身不触发；只有变更落进进程静态图或不受 Loader 管理时才需要重启。只有工具真的出现在下一轮请求的工具表里才算可用；没出现，就标注实际需要的动作（重组 / 刷新页面 / 重启）并交给用户。
 
 ## 3. Design Packet（派发内容必须自包含）
 

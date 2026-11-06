@@ -319,7 +319,7 @@ Codex：
 
 已知限制：
 
-- **生效时机**：预设与包的组合在每次 profile 重组时装配。保存 `cordis.patch.yml` 不触发重载——`dsh.profile.patchReload` 在 0.2.1-rc.5 中未实现（该安装包全量搜索命中 0 次），也没有代码注册 `hmr.watchConfig`；Plugin Manager 的写操作会触发 `hmr.reconcileProfile()`，但已链接包存在时一律返回 `restart-required` / `unmanaged-plugin`，所以本 profile 的接线改动实际生效点就是下一次进程启动。
+- **生效时机**：按 [hmr.md](hmr.md) 判定。宿主代码与客户端代码在构建后由一次 profile 重组热替换（Plugin Manager 的写操作会触发 `hmr.reconcileProfile()`；保存 `cordis.patch.yml` 本身不触发）；预设散文在下一个会话组合时生效；只有变更落进进程静态图或不受 Loader 管理时才需要重启。
 - **每轮一个进程**：续轮复用 CLI 的会话号而不是常驻进程，每轮都有冷启动延迟，长会话的总耗时包含这段延迟。
 - **成本是估值**：`cost_usd` 是 CLI 内置价表估算，不是网关账单；工具返回与面板都标注为估值。
 - **宿主需要有 `claude`**：解析规则见 §9；解析不到时本轮返回 `provider-missing`。

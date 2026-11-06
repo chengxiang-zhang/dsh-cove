@@ -125,3 +125,8 @@
     - 模型侧同口径：`external_session_list` 默认只列本会话（`originSessionId` 比对），`scope: "all"` 才是全host 视图；不这么做，别条会话的外援会进本会话上下文。
     - 读数：`engine-progress` 3 条绑定用例、`model-selection` 2 条（来源透传 + 列表范围）、客户端 69 条；external-session 两套 193 passed。
     - 回滚：`git revert` 本次提交；client 与 host 两侧要一起回，否则下拉会因缺字段而恒空。
+
+20. **生效方式按热更现实写（2026-11-06）**：旧口径是"改 `cordis.patch.yml` 或包行一律要重启"，与实测不符，且会让每个 conductor 都去打断用户。
+    - 事实（见 `docs/hmr.md`）：发行版 base 层把 HMR 的 `root` 设为 `[]`，本部署没有"改文件自动生效"；宿主与客户端代码在**构建后由一次 profile 重组**热替换（实体行化之后重组返回 `applied`）；保存 patch **不触发**重组（实测：非法 YAML 保存后 10 秒日志 0 新增行）；预设散文按会话组合生效。
+    - 改动：`design-dispatch` §2 的生效段改为指向 `docs/hmr.md` 并按"重组 / 刷新页面 / 重启"三档写清；仓库根 `AGENTS.md` 的运行中服务条款同步，并明确"不允许把需要刷新页面写成需要重启"。
+    - 回滚：`git revert` 本条对应的提交；该条只改文档与技能措辞，不涉及运行时代码。

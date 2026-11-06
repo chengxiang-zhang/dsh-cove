@@ -56,7 +56,7 @@ NetBird 中每台电脑的规范入口、DNS 命名、`80 → 3080` 代理拓扑
 本机 DSH Web 由托管服务拉起：Linux 主机是 systemd 单元 `dsh-web.service`，macOS 主机是 LaunchDaemon `ai.deepseek.dsh.web`；逐台清单、启动器与重启顺序见 [tools/dsh-netbird/README.zh.md](tools/dsh-netbird/README.zh.md) 与 [tools/dsh-launchd/README.md](tools/dsh-launchd/README.md)，本地审计流程见 [docs/development.md](docs/development.md#本地验证)。
 
 - 会话运行期间不得中断或重启当前正在运行的 DSH 服务（`dsh web` 及其宿主进程）：禁止 `kill` / `pkill` / `SIGTERM`，禁止抢占其端口另起替代实例。
-- 改动需要服务重启才生效时（例如 bundle 行或 `cordis.patch.yml` 变化），不要自行重启；改为在交付报告中明确标注「需要用户重启 DSH 服务后生效」，由用户自行重启验证。页面刷新、只读探测等不打扰服务的验证不受此限制。
+- 改动是否需要重启，先按 [docs/hmr.md](docs/hmr.md) 判定：宿主与客户端代码在构建后由一次 profile 重组热替换，预设散文在下一个会话生效，只有变更落进进程静态图或不受 Loader 管理时才需要重启。判定要重启时不要自行重启，而是在交付报告中写明理由与「需要用户重启 DSH 服务后生效」。不允许把「需要刷新页面」写成「需要重启」。页面刷新、只读探测等不打扰服务的验证不受此限制。
 
 ## 远程访问契约
 

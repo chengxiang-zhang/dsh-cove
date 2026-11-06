@@ -25,6 +25,7 @@ This page is the map of the repository's long-lived documentation. Each document
 | External harness sessions | [docs/external-session.md](external-session.md) |
 | Built-in plugin usage for operators | [docs/plugin-usage.md](plugin-usage.md) |
 | Development workflow | [docs/development.md](development.md), [docs/i18n.md](i18n.md) |
+| What applies hot, and when a restart is really required | [docs/hmr.md](hmr.md) |
 | Remote and self-hosted deployment | [docs/remote-access.md](remote-access.md), [tools/dsh-netbird/README.md](../tools/dsh-netbird/README.md) |
 | Feishu secretary agent design | [docs/superagent/README.md](superagent/README.md), index of 12 documents |
 | Fleet collection and merge-back | [docs/fleet-collection.md](fleet-collection.md), [docs/preset-self-review.md](preset-self-review.md) |
