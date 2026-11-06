@@ -436,12 +436,14 @@ export function createClaudeAdapter(deps: ExternalAdapterDeps, config: ExternalA
       const poller = setInterval(pump, LIVE_POLL_MS)
       poller.unref?.()
 
-      let exit: ExternalProcessOutcome
+      let exit: ExternalProcessOutcome | undefined
+      let exitError: unknown
       try {
         exit = await handle.done
       } catch (error) {
-        clearInterval(poller)
-        return failed(startedAt, UNSETTLED_TURN_CODE, diagnostic(undefined, '', error))
+        // A killed child rejects `done`; the abort branch below still owns that
+        // ending, so the text it produced must not be thrown away here.
+        exitError = error
       } finally {
         clearInterval(poller)
       }
@@ -466,6 +468,9 @@ export function createClaudeAdapter(deps: ExternalAdapterDeps, config: ExternalA
           ...(summary.usage === undefined ? {} : { usage: summary.usage }),
           ...(summary.costUsd === undefined ? {} : { costUsd: summary.costUsd }),
         }
+      }
+      if (exitError !== undefined) {
+        return failed(startedAt, UNSETTLED_TURN_CODE, diagnostic(undefined, stderrText, exitError), summary.usage, summary.costUsd, sessionId)
       }
       if (summary.authFailure) return failed(startedAt, 'auth-required', '', summary.usage, summary.costUsd, sessionId)
       if (summary.resumeMissing && request.providerSessionId !== undefined) {

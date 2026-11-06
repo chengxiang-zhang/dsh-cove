@@ -487,3 +487,51 @@ describe.skipIf(!REAL_CLI)('claude adapter against the real CLI', () => {
     expect(outcome.status === 'failed' ? outcome.error?.message ?? '' : '').toContain('no CLI conversation id')
   }, 120_000)
 })
+/**
+ * The non-blocking contract against the real CLI.
+ *
+ * The defect these pin is measured, not hypothetical: a delegation blocked the
+ * caller for the turn's whole runtime, and a cancelled turn answered with an
+ * empty string because only the terminal frame was ever read. Both are checked
+ * here against `claude` itself, not a scripted double.
+ */
+describe.skipIf(!REAL_CLI)('claude adapter: live progress and partial text', () => {
+  it('publishes frames while the turn is still running', async () => {
+    const adapter = createClaudeAdapter(realDeps(), { bin: CLAUDE_BIN })
+    const seen: Array<{ frames: number; chars: number }> = []
+    const outcome = await adapter.runTurn({
+      prompt: 'Reply with exactly this text and nothing else: SMOKE-42',
+      cwd: PROBE_DIR,
+      report: progress => { seen.push({ frames: progress.frames, chars: progress.chars }) },
+    })
+    expect(outcome.status).toBe('completed')
+    expect(outcome.result).toContain('SMOKE-42')
+    // Progress is the liveness signal a polling caller judges a slow turn by:
+    // without it a running dispatch is indistinguishable from a dead one.
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen[seen.length - 1]?.frames).toBeGreaterThan(0)
+  }, 120_000)
+
+  it('returns the text it had already produced when the caller aborts', async () => {
+    const adapter = createClaudeAdapter(realDeps(), { bin: CLAUDE_BIN })
+    const controller = new AbortController()
+    let aborted = false
+    const outcome = await adapter.runTurn({
+      prompt: 'Write about 700 words on the history of the JSON Lines format. Then print DONE.',
+      cwd: PROBE_DIR,
+      signal: controller.signal,
+      report: progress => {
+        // Abort once the model has written something and before the CLI settles:
+        // that is the window in which the old code answered with an empty string.
+        if (!aborted && progress.chars > 0) {
+          aborted = true
+          controller.abort(new Error('test abort'))
+        }
+      },
+    })
+    expect(outcome.status).toBe('aborted')
+    // The answer text survives the cancellation; an empty string here is the defect.
+    expect(outcome.result.length).toBeGreaterThan(0)
+    expect(outcome.partial === true || outcome.result.length > 0).toBe(true)
+  }, 120_000)
+})
