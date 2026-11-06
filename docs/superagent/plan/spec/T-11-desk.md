@@ -92,7 +92,7 @@ export interface ToolFace {                               // 工具面三件套�
 
 - 分支 A（S1 第 2 步成立）：对桌子会话的 agent scope 施加 `restrict({ allow: [] })`，在该 scope 注册 9 个桌面工具，再装 `guard(exec => DESK_TOOL_NAMES.includes(exec.name) ? undefined : 'desk-has-no-such-tool')`。
 - 分支 B（S1 第 2 步不成立、第 3 步成立，执行 N3）：全局 guard 按 `exec.agent` 的会话 id 判 `roleOf(sessionId)` 为桌子则拒绝非桌面工具；桌面工具全局注册但 guard 对非桌子会话拒绝它们。
-- `selfCheck(deskId)`：回合开始前读 `visible(sessionId)`（分支 B 读"可执行集合"），不恰等于 9 个桌面工具 → fail-closed：本回合不跑、写 `degrade_event(reason='desk_toolface', scope=deskId)`、经出口发宿主模板"我这边工具面不对，已停"（每桌每小时至多一次）。
+- `selfCheck(deskId)`：回合开始前读 `visible(sessionId)`（分支 B 读"可执行集合"），按三项判 fail-closed（N3 的降级形态）：9 个桌面工具缺一、可见集里出现宿主特权工具（`bash`/`exec`/`shell`/`terminal`/`write`/`edit`，前缀 `ssh_`/`worktree_`/`lark_inbox_`/`terminal_`/`job_`）、或本会话真的执行过非桌面工具。失败时本回合不跑、写 `degrade_event(reason='desk_toolface', scope=deskId)`、事件按失败上限处置（见失败模式）；自愈的一回合由 `recover` 关掉这条降级。Agent 面多出来的工具（`subagent`、Agent Team 集合）只记进 `rule_trace.selfcheck.extra`，其执行由 guard 拒绝。内部故障不进出口（B14/R5）：主人只看得到 status 与简报。
 
 `tools.ts` 中本任务自己实现的三个工具（其余六个是注入的判断处理器）：
 
@@ -105,6 +105,7 @@ export interface ToolFace {                               // 工具面三件套�
 | 失败 | 行为 |
 | --- | --- |
 | 会话控制器不可用 | 桌子不起回合；快路径、直通、执行体、出口照常（`11` 失败隔离）；`degrade_event(reason='desk_unavailable')` |
+| 同一事件连续失败（会话建不起来 / 工具注册被拒 / 自检不过） | 失败次数按账本累计（`rule_trace.events` 或 request id 指到该事件，跨重启有效）：未到 `MAX_EVENT_FAILURES`（3）时事件回队、等一个议程窗口再试；到线则 `disposeIntake(disposition='acknowledge', reason=宿主错误码 + 消息)` 终态关闭，不再重试。`degrade_event` 一直开着，直到某一回合真的跑起来（`recover`） |
 | 模型调未知工具 | guard 拒绝；错误进下一轮案卷；连续 2 次由宿主模板兜底 |
 | 指纹不一致 | 降级为只含公共核心的案卷并写一条 journal note |
 | 回合超时（10 分钟无 turn/end） | `cancel`，`finishTurn(end_reason='timeout')`，事件留 pending 由下一回合处理 |
