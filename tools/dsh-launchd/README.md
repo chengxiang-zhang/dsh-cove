@@ -111,3 +111,21 @@ zsh ~/.dsh/bin/recover-dsh.sh
   executable lives elsewhere.
 - `install-dsh-daemons.sh` sources `lib-dsh-launchd.sh` from its own directory
   or from `~/.dsh/launchd/`; deploy both files together.
+
+## Restart
+
+Act through the supervisor, once per operation and only with explicit authorization:
+
+```sh
+sudo launchctl kickstart -k system/ai.deepseek.dsh.web
+```
+
+Killing the process does not bounce the daemon. The job sets `KeepAlive` with `SuccessfulExit: false`, so a `SIGTERM` counts as a successful exit and launchd leaves the host down until someone kickstarts it again. On 2026-11-06 a `kill` at 09:02:47 left `127.0.0.1:3080` without a listener for 1h33m until the operator restarted it by hand. Agents must not restart the service at all ([docs/development.md](../../docs/development.md)).
+
+A rebuilt `@dsh-cove/dsh-web-all` bundle is picked up without a restart: the entity reloads when its `lib/` changes. On 2026-11-06 a `pnpm build` completed at 09:01:05 and the new service domain was live in the already-running process at 09:01:16 (the `sa_lease` row it created is stamped with that process id). Profile, `cordis.patch.yml` and preset changes still need a restart; code changes in that package do not.
+
+Verify a restart by the supervisor's own evidence, not by the request returning:
+
+- `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3080/` returns `200`.
+- The new pid owns the listener (`lsof -nP -iTCP:3080 -sTCP:LISTEN`).
+- A subsystem that stamps its pid confirms it, e.g. `SELECT holder FROM sa_lease` reports `host:<new pid>`.

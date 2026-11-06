@@ -153,3 +153,9 @@ verdict **PASS-WITH-NITS**，判据对象 `e83c811`（干净树）：DONE-1..5 �
 1. **DONE-6**：用户重启 DSH 服务 → 把 `lark-inbox.superagentMode` 切到 `shadow` → 跑满 72 小时 → `node scripts/superagent-check.mjs --shadow --since-hours 72` 退出码 0，且 `shadow_owner_mismatch=0`、`shadow_outbox_rows=0`、`intake_shadow>=30`。
 2. **退役 `responder.ts` / `reply-machine.ts` 的判断部分**：账本已达 `accounted=67/67`（57 migrated + 10 not-applicable，0 retired），但 PLAN §8 把退役列为需老板授权的不可逆动作，且要求接管档稳定运行后再做。
 3. **围栏只拦"整块消失"不拦"整块缺项"**：删掉一个模块（如 `timing/`）后文件数 132→~123 仍过。补法是加"模块覆盖断言"（对每个已存在模块断言其文件存在），属新增判据，留给下一轮。
+
+## 事实修正：生效方式（2026-11-06 实测）
+
+设计与方案里到处写着"新服务域进 bundle 后要用户重启才生效（F23）"。实测不成立：`pnpm build` 完成后约 11 秒，新服务域就在**已经在运行的**进程里起来了（证据：`sa_lease.created_at` = 09:01:16，`holder` = 当时的 pid 13918，而该进程启动于 11-05 21:25）。所以 `@dsh-cove/dsh-web-all` 的代码改动**不需要重启**，实体在 `lib/` 变化时自己重载；需要重启的只有 profile、`cordis.patch.yml` 与预设的改动。
+
+同一次实测还确认了重启的正确做法与错误做法，已写进 [tools/dsh-launchd/README.md](../../../tools/dsh-launchd/README.md) 的 Restart 段：`kill` 不会把 LaunchDaemon 拉起来（`KeepAlive` 是 `SuccessfulExit: false`，SIGTERM 算成功退出），必须 `sudo launchctl kickstart -k system/ai.deepseek.dsh.web`。这次 `kill` 让本机入口断了 1 小时 33 分，是我执行方式错了。
