@@ -95,7 +95,8 @@ export function register(ctx: Context, deps: ExternalSessionServiceDeps = {}): (
   // The delegation tools belong to this Loader entry, not to a preset row: a preset
   // mounts its plugin outside the Loader, and a module imported from there can never
   // be replaced without a restart.
-  const disposeTools = registerDelegationTools(ctx, gateway, config.delegation, warn)
+  const disposeTools = registerDelegationTools(ctx, gateway, config.delegation, warn,
+    { defaultMs: config.defaultWaitMs, maxMs: config.maxWaitMs })
 
   // The first read is eager so the panel and the tools see the persisted
   // sessions immediately; a failure here degrades to an empty store with a

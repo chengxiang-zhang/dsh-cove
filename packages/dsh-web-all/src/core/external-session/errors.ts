@@ -35,6 +35,13 @@ export type ExternalErrorCode =
    */
   | 'provider-error'
   /**
+   * The turn produced no output for the configured stall window and the host
+   * cancelled it. The text it had already written comes back with `partial`.
+   */
+  | 'turn-stalled'
+  /** The turn hit the host's wall-clock ceiling for one dispatch. Same partial rule. */
+  | 'turn-timeout'
+  /**
    * The host could not persist a session record: an unwritable directory, a full
    * disk, a failed rename. Distinct from `session-unknown` on purpose — retrying
    * with another id cannot help, and only the operator can fix storage.
@@ -52,6 +59,8 @@ export const EXTERNAL_ERROR_CODES: readonly ExternalErrorCode[] = [
   'limit',
   'auth-required',
   'provider-error',
+  'turn-stalled',
+  'turn-timeout',
   'store-unavailable',
 ]
 
@@ -104,6 +113,14 @@ const MESSAGES: MessageTable = {
   'provider-error': context =>
     `${cliLabel(context)} ran the turn but did not report a result. `
     + 'Retry the turn; if it fails again, ask the operator to check the host log for the CLI diagnostics.',
+  'turn-stalled': context =>
+    `${cliLabel(context)} stopped producing output and the turn was cancelled as stalled. `
+    + 'The text it had already produced is returned with partial set; continue the same session '
+    + 'to pick the work up, or retry with a smaller ask.',
+  'turn-timeout': context =>
+    `${cliLabel(context)} hit the host ceiling for one dispatch and the turn was cancelled. `
+    + 'The text it had already produced is returned with partial set; split the job into smaller '
+    + 'turns, or continue the same session to carry on from where it stopped.',
   'store-unavailable': () =>
     'The host could not save the external session record. Retrying cannot help: '
     + 'the session store on the host is unwritable or full, so ask the operator to fix '

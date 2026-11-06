@@ -8,7 +8,9 @@ describe('external-session error vocabulary', () => {
     expect([...EXTERNAL_ERROR_CODES]).toEqual([
       'provider-missing', 'cwd-invalid', 'session-unknown', 'session-closed',
       'session-unresumable', 'busy', 'limit', 'auth-required', 'provider-error',
-      'store-unavailable',
+      // The two deadline codes describe a turn that started and was cut short;
+      // they belong to the same vocabulary the model reads.
+      'turn-stalled', 'turn-timeout', 'store-unavailable',
     ])
     expect(new Set(EXTERNAL_ERROR_CODES).size).toBe(EXTERNAL_ERROR_CODES.length)
   })

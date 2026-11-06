@@ -23,6 +23,13 @@
  * costs no adapter change, which is what the upgrade drill in the design asks
  * for.
  *
+ * One more property belongs to this adapter rather than to the engine: stdout is
+ * readable from the process handle while the child is still alive. The stream is
+ * therefore polled and decoded incrementally, so the answer accumulates and is
+ * published through `report` before the process exits. That is what lets a
+ * cancelled turn return the text it had already produced instead of an empty
+ * result — the exit code is not a verdict, but it is also not the only evidence.
+ *
  * Two environment facts belong to the host, not to this module:
  *
  * - the CLI's own config directory is `~/.codex` on a real host. A test may point
@@ -35,6 +42,7 @@
  *   the terminal event decides, not an intermediate one.
  * @module host/services/external-session/providers/codex
  */
+import { TURN_TAIL_MAX_CHARS } from '../../../../core/external-session/adapters.ts'
 import type {
   ExternalAdapter,
   ExternalAdapterConfig,
@@ -42,6 +50,7 @@ import type {
   ExternalProcessHandle,
   ExternalProcessOutcome,
   TurnOutcome,
+  TurnProgress,
   TurnRequest,
 } from '../../../../core/external-session/adapters.ts'
 import { externalError } from '../../../../core/external-session/errors.ts'
@@ -50,6 +59,16 @@ import type { ExternalUsage } from '../../../../core/external-session/types.ts'
 /** Bounded stream capacities; the event stream carries one line per tool call. */
 const STDOUT_MAX_BYTES = 8 << 20
 const STDERR_MAX_BYTES = 1 << 20
+
+/**
+ * Interval at which a running turn's stdout is polled.
+ *
+ * The CLI emits its frames seconds apart, so a shorter interval only spends
+ * wakeups; a longer one would let a cancelled turn lose the answer that had just
+ * arrived. A quarter second keeps a report close enough to the frame it describes
+ * while staying far below the rate at which a turn writes.
+ */
+const PROGRESS_POLL_MS = 250
 
 /**
  * Code reported when the CLI ran but never settled a turn. The exit facts still
@@ -141,6 +160,27 @@ function usageOf(value: unknown): ExternalUsage | undefined {
 }
 
 /**
+ * Decode one stdout line into the event type and payload this adapter reads.
+ *
+ * The app-server dialect wraps its payload in `params` and names the event in
+ * `method`; the exec dialect tags the event itself in `type`. Both shape into one
+ * reading here so the verdict decoder and the progress accumulator cannot read
+ * the same stream two different ways.
+ * @param value - one parsed JSON line.
+ * @returns the event, or undefined when the line is not an object.
+ */
+function decodeEvent(value: unknown): { type: string | undefined; payload: Record<string, unknown> } | undefined {
+  const event = record(value)
+  if (event === undefined) return undefined
+  const method = text(event.method)
+  const params = record(event.params)
+  return {
+    type: method ?? text(event.type),
+    payload: method === undefined ? event : params ?? {},
+  }
+}
+
+/**
  * Reduce one turn's event stream to the facts the engine stores.
  * @param stdout - complete JSONL stdout of the turn.
  * @param stderr - complete stderr of the turn.
@@ -167,17 +207,12 @@ export function summarizeCodexStream(stdout: string, stderr: string): CodexStrea
       summary.damagedLines += 1
       continue
     }
-    const event = record(parsed)
+    const event = decodeEvent(parsed)
     if (event === undefined) {
       summary.damagedLines += 1
       continue
     }
-    // The app-server dialect wraps its payload in `params` and names the event
-    // in `method`; the exec dialect tags it in `type`.
-    const method = text(event.method)
-    const params = record(event.params)
-    const type = method ?? text(event.type)
-    const payload = method === undefined ? event : params ?? {}
+    const { type, payload } = event
 
     if (type === 'thread.started' || type === 'thread/started') {
       const thread = record(payload.thread)
@@ -213,6 +248,113 @@ export function summarizeCodexStream(stdout: string, stderr: string): CodexStrea
   summary.authFailure = AUTH_FAILURE_PATTERN.test(report)
   summary.resumeMissing = RESUME_MISSING_PATTERN.test(report)
   return summary
+}
+
+/**
+ * Live accumulation of one turn's stdout.
+ *
+ * `cursor` and `remainder` are stream bookkeeping; the rest are exactly the facts
+ * {@link TurnProgress} reports. Keeping them in one object is what lets the poll
+ * loop and the settle-time rebuild fold a stream the same way, so the text a
+ * cancelled turn returns cannot disagree with the progress it published.
+ */
+interface CodexLiveStream {
+  /** Whole-stream offset the next poll resumes from. */
+  cursor: number
+  /** Trailing fragment of the previous poll: a line that is still being written. */
+  remainder: string
+  /** Well-formed frames seen so far. */
+  frames: number
+  /** Tool-call frames seen so far. */
+  toolCalls: number
+  /** Model-authored text accumulated so far. */
+  text: string
+  /** Clock reading of the most recent frame. */
+  lastFrameAt: number
+}
+
+function newLiveStream(): CodexLiveStream {
+  return { cursor: 0, remainder: '', frames: 0, toolCalls: 0, text: '', lastFrameAt: 0 }
+}
+
+/**
+ * Whether a frame carries an `item`, in either dialect.
+ *
+ * Everything else is a turn-level frame. `item.started` and `item.completed` are
+ * the pair the CLI emits today; a frame type this adapter does not recognise is
+ * simply not counted as a tool call rather than guessed at.
+ */
+function isItemFrame(type: string | undefined): boolean {
+  return type === 'item.started' || type === 'item.completed'
+    || type === 'item/started' || type === 'item/completed'
+}
+
+/**
+ * Fold one stdout delta into the running accumulation.
+ *
+ * Only complete lines are consumed, so a frame split across two polls is decoded
+ * once, whole: the trailing fragment waits for the next delta instead of being
+ * parsed as if it were finished.
+ * @param live - the running accumulation.
+ * @param delta - stdout text that has not been consumed yet.
+ * @param at - clock reading to stamp on every frame this delta carries.
+ * @returns how many well-formed frames the delta added, so the caller knows
+ *   whether the poll produced anything worth reporting.
+ */
+function consumeDelta(live: CodexLiveStream, delta: string, at: number): number {
+  const buffered = live.remainder + delta
+  const lines = buffered.split('\n')
+  live.remainder = lines.pop() ?? ''
+  let added = 0
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (line.length === 0) continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      // Damage is the verdict decoder's business. Progress counts only frames it
+      // can read, so a broken line can never be allowed to decide anything here.
+      continue
+    }
+    const event = decodeEvent(parsed)
+    if (event === undefined) continue
+    added += 1
+    live.frames += 1
+    live.lastFrameAt = at
+    // `thread.started` and `turn.started` are progress too, and they used to be
+    // dropped: a frame is evidence the CLI is alive even when it decides nothing.
+    if (!isItemFrame(event.type)) continue
+    const item = record(event.payload.item)
+    if (item === undefined) continue
+    const message = agentMessageText(item)
+    // Any item that is not an agent message is an action the model took: a
+    // command, a file edit, a reasoning frame. The count stays a progress fact
+    // and is never read as a verdict.
+    if (message === undefined) live.toolCalls += 1
+    else live.text += message
+  }
+  return added
+}
+
+/** Bounded tail of the accumulated answer: the END of the text, not its start. */
+function tailOf(text: string): string {
+  return text.slice(-TURN_TAIL_MAX_CHARS)
+}
+
+/**
+ * Text a turn had already produced when it ended without a terminal frame.
+ * @param stdout - the whole stream, read after the process exited.
+ * @returns the accumulated answer, or undefined when the stream carried none.
+ */
+function partialAnswer(stdout: string): string | undefined {
+  const live = newLiveStream()
+  consumeDelta(live, stdout, 0)
+  // The stream is over, so a trailing line that never got its newline is a whole
+  // frame. The poll loop cannot assume that: for it the same fragment may still be
+  // the first half of a line another write will finish.
+  if (live.remainder.length > 0) consumeDelta(live, '\n', 0)
+  return live.text.length > 0 ? live.text : undefined
 }
 
 /** A bounded diagnostic for a failed turn; never the model-facing explanation. */
@@ -251,21 +393,28 @@ export function createCodexAdapter(deps: ExternalAdapterDeps, config: ExternalAd
     return deps.process.resolveExecutable(config.bin)
   }
 
-  /** Failed turn carrying the vocabulary code for this failure. */
+  /**
+   * Failed turn carrying the vocabulary code for this failure.
+   * @param startedAt - clock reading the turn started at.
+   * @param code - the vocabulary code this failure maps to.
+   * @param result - model-facing result text: the accumulated answer when the
+   *   stream produced one, otherwise the diagnostic fallback.
+   * @param facts - usage, conversation id and whether `result` is partial.
+   */
   function failed(
     startedAt: number,
     code: Parameters<typeof externalError>[0],
     result: string,
-    usage?: ExternalUsage,
-    providerSessionId?: string,
+    facts: { usage?: ExternalUsage; providerSessionId?: string; partial?: boolean } = {},
   ): TurnOutcome {
     return {
       status: 'failed',
       result,
       durationMs: deps.now() - startedAt,
       error: externalError(code, { provider: 'codex' }),
-      ...(providerSessionId === undefined ? {} : { providerSessionId }),
-      ...(usage === undefined ? {} : { usage }),
+      ...(facts.providerSessionId === undefined ? {} : { providerSessionId: facts.providerSessionId }),
+      ...(facts.usage === undefined ? {} : { usage: facts.usage }),
+      ...(facts.partial === true ? { partial: true } : {}),
     }
   }
 
@@ -292,22 +441,80 @@ export function createCodexAdapter(deps: ExternalAdapterDeps, config: ExternalAd
         return failed(startedAt, UNSETTLED_TURN_CODE, diagnostic(undefined, '', error))
       }
 
+      // A turn is observed while it runs, not only once it exits. The same read
+      // that makes cancellation observable is the one that keeps the answer, so
+      // the loop below is the only reason a cancelled dispatch is not silent.
+      const live = newLiveStream()
+
+      /** Publish the current accumulation; bookkeeping, so it may never fail a turn. */
+      const publish = (): void => {
+        const progress: TurnProgress = {
+          frames: live.frames,
+          toolCalls: live.toolCalls,
+          chars: live.text.length,
+          lastFrameAt: live.lastFrameAt,
+          tail: tailOf(live.text),
+        }
+        try {
+          request.report?.(progress)
+        } catch {
+          // Ignored on purpose: progress is bookkeeping. Failing the turn here would
+          // report a healthy process as broken because a caller's callback threw.
+        }
+      }
+
+      /** Read the delta since the last poll, and publish when it carried a frame. */
+      const poll = (): void => {
+        const reader = handle.collected.stdout
+        if (reader === undefined) return
+        const read = reader.readFrom(live.cursor)
+        if (!read.lossy && read.text.length === 0) return
+        if (read.lossy) {
+          // The in-memory tail window slid, so `cursor` no longer addresses it and
+          // the read carries the whole surviving tail — exactly what a read from 0
+          // returns. Restart from 0: the accumulation is rebuilt from that tail,
+          // never appended to, because appending it would replay text the answer
+          // already holds.
+          live.remainder = ''
+          live.frames = 0
+          live.toolCalls = 0
+          live.text = ''
+        }
+        live.cursor = read.nextOffset
+        if (consumeDelta(live, read.text, deps.now()) > 0) publish()
+      }
+
+      const timer = setInterval(poll, PROGRESS_POLL_MS)
       let exit: ExternalProcessOutcome
       try {
         exit = await handle.done
       } catch (error) {
         return failed(startedAt, UNSETTLED_TURN_CODE, diagnostic(undefined, '', error))
+      } finally {
+        // The poll loop belongs to the process: once it is gone, nothing may keep
+        // reading a stream nobody will classify again.
+        clearInterval(timer)
       }
 
+      // The verdict still comes from the whole stream after exit, exactly as it did
+      // before progress existed: the poll loop only adds facts, it never decides.
       const stdoutText = handle.collected.stdout?.readFrom(0).text ?? ''
       const stderrText = handle.collected.stderr?.readFrom(0).text ?? ''
       const summary = summarizeCodexStream(stdoutText, stderrText)
+      // A turn that never reached its terminal frame has no answer of its own, so
+      // the text it had already produced is the only thing a caller can act on. It
+      // is rebuilt from the whole stream through the same fold the poll loop uses,
+      // because a turn can settle between two polls and accumulate nothing at all.
+      const partial = summary.settled ? undefined : partialAnswer(stdoutText)
 
       if (request.signal?.aborted === true) {
         return {
           status: 'aborted',
-          result: summary.finalMessage,
+          // A cancelled turn keeps the text it already produced, flagged so no
+          // reader mistakes it for a finished answer.
+          result: partial ?? summary.finalMessage,
           durationMs: deps.now() - startedAt,
+          ...(partial === undefined ? {} : { partial: true }),
           ...(summary.threadId === undefined ? {} : { providerSessionId: summary.threadId }),
           ...(summary.usage === undefined ? {} : { usage: summary.usage }),
         }
@@ -315,19 +522,38 @@ export function createCodexAdapter(deps: ExternalAdapterDeps, config: ExternalAd
       // Exit code 2 is the CLI's own authentication verdict; the stream may also
       // say so directly.
       if (summary.authFailure || exit.exitCode === 2) {
-        return failed(startedAt, 'auth-required', '', summary.usage, summary.threadId)
+        return failed(startedAt, 'auth-required', partial ?? '', {
+          usage: summary.usage,
+          providerSessionId: summary.threadId,
+          partial: partial !== undefined,
+        })
       }
       if (summary.resumeMissing && request.providerSessionId !== undefined) {
-        return failed(startedAt, 'session-unresumable', diagnostic(exit, stderrText), summary.usage, summary.threadId)
+        return failed(startedAt, 'session-unresumable', partial ?? diagnostic(exit, stderrText), {
+          usage: summary.usage,
+          providerSessionId: summary.threadId,
+          partial: partial !== undefined,
+        })
       }
       const detail = diagnostic(exit, stderrText)
       const failureText = `${summary.failureMessage ?? ''}\n${detail}`
       if (summary.failed) {
         const limited = LIMIT_PATTERN.test(failureText)
-        return failed(startedAt, limited ? 'limit' : UNSETTLED_TURN_CODE, failureText, summary.usage, summary.threadId)
+        // Text already streamed beats every failure-shaped sentence: the CLI's exit
+        // facts are diagnostics for the host log, and the answer is what a caller
+        // can use. The fallback keeps those facts reachable when nothing was said.
+        return failed(startedAt, limited ? 'limit' : UNSETTLED_TURN_CODE, partial ?? failureText, {
+          usage: summary.usage,
+          providerSessionId: summary.threadId,
+          partial: partial !== undefined,
+        })
       }
       if (!summary.settled) {
-        return failed(startedAt, UNSETTLED_TURN_CODE, failureText, summary.usage, summary.threadId)
+        return failed(startedAt, UNSETTLED_TURN_CODE, partial ?? failureText, {
+          usage: summary.usage,
+          providerSessionId: summary.threadId,
+          partial: partial !== undefined,
+        })
       }
       return {
         status: 'completed',

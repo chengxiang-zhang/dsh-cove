@@ -108,3 +108,11 @@
     - 为什么这次不会再烂：`scripts/verify-preset-refs.mjs` 加了第 6 条规则——预设文本里任何 `subagent_*` / `external_session_*` 名字必须落在「composition 的 `toolName:` ∪ 实体注册的工具」里，否则 `pnpm preset:check` 判红。`MAINTENANCE.md` 与 `docs/` 被规则显式排除（历史记录允许出现旧名）。
     - 口径：`model` 只有一个来源——profile 的 `externalSession.tools.<provider>.models`；`gpt-6-astra-pro` 在当前账号 400；claude 的 opus 类要求 Claude Code ≥ 2.1.280（2.1.318 实测可用）。换族 = 换工具，两个委派工具都没有 `provider` 参数。
     - 回滚：`git revert` 本次提交（旧 `install.sh` / `acp-probe.mjs` 一并回来），然后 `node scripts/render-preset.mjs`。
+
+18. **派发不再阻塞回合，进度与部分结果可见（2026-11-06）**：一次派发实测 189–1914 秒，而工具是同步阻塞的：整个回合被占住，父回合一旦取消就回 `result: ''`（store 里留下两轮 `aborted` 零产出）。用户反馈两条一起：不监控运行、直接阻塞会话。
+    - 适配器边跑边读：claude 500ms、codex 250ms 轮询 `readFrom(cursor)`，只解析完整行，尾行留到下一次；累积 `assistant`（claude）与 `item.completed/agent_message`（codex）文本，按帧计数并上报 `{frames, toolCards, tool_calls, chars, lastFrameAt, tail}`（tail 取末尾 4000 字符）。
+    - 工具面：`subagent_claude_code` / `subagent_codex` 加 `wait_ms`（默认 15000、上限 600000、`0` 立即返回）。窗口内结算回原结果；否则回 `status: running` 加 `progress`。新增 `external_session_wait(session_id, timeout_ms?)`（默认 60000）；`external_session_list` 每行带 `running`；下拉每行显示状态（运行中 12s · 静默 3s / 失败 / 已关闭 / 部分结果），弹层开着就按 2s（有轮次在跑）或 5s（空闲）刷新。
+    - 部分结果：取消 / 停滞 / 超时的轮次返回已产出文本并标 `partial: true`，`result` 永不为空串；两条期限是静默 600000 毫秒判 `turn-stalled`、墙钟 2400000 毫秒判 `turn-timeout`，都保留已产出文本。
+    - 父回合取消只作用于还在 `wait_ms` 窗口里的那一段；回 `running` 之后子进程继续跑，直到 `external_session_stop` 或期限。
+    - 读数：`engine-progress.test.ts` 8 条、`codex.test.ts` 11 条、全包 137 files / 1935 passed；`claude` 适配器由 Lead 直接改，`codex` 适配器由独立实现者改并以变异测试证明（关掉 partial → 3 红、关掉轮询 → 5 超时、lossy 追加而非重建 → chars 9≠6）。
+    - 回滚：`git revert` 本次提交，然后 `node scripts/render-preset.mjs`。

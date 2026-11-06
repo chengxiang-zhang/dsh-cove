@@ -23,6 +23,19 @@ export const EXTERNAL_SESSION_DEFAULTS = {
   maxSessions: 100,
   /** Grace the `SIGTERM → SIGKILL` ladder gives one cancelled turn. */
   cancelGraceMs: 3_000,
+  /**
+   * Silence after which a turn is judged stalled and cancelled with its partial
+   * answer kept. A claude turn emits its answer in one frame per message, so the
+   * window has to clear a slow single message; ten quiet minutes is a dead child
+   * rather than thinking, and the operator can raise it.
+   */
+  stallMs: 600_000,
+  /** Hard ceiling on one turn, so a chatty-but-endless child cannot run forever. */
+  maxTurnMs: 2_400_000,
+  /** How long a delegation tool waits inline before returning the running turn. */
+  defaultWaitMs: 15_000,
+  /** Longest inline wait a caller may ask for. */
+  maxWaitMs: 600_000,
   /** Binary names resolved through the configured override, then PATH. */
   claudeBin: 'claude',
   codexBin: 'codex',
@@ -52,6 +65,14 @@ export interface ExternalSessionConfig {
   maxSessions?: number
   /** Grace between `SIGTERM` and `SIGKILL` for a cancelled turn. */
   cancelGraceMs?: number
+  /** Silence after which a running turn is cancelled as stalled. */
+  stallMs?: number
+  /** Hard ceiling on one turn's wall time. */
+  maxTurnMs?: number
+  /** Inline wait a delegation tool uses when the caller passes no wait_ms. */
+  defaultWaitMs?: number
+  /** Longest inline wait a caller may request. */
+  maxWaitMs?: number
   /** Claude Code binary: an absolute path or a name resolved on PATH. */
   claudeBin?: string
   /** Codex binary: an absolute path or a name resolved on PATH. */
@@ -67,6 +88,14 @@ export interface ResolvedExternalSessionConfig {
   maxConcurrentTurns: number
   maxSessions: number
   cancelGraceMs: number
+  /** Silence after which a running turn is cancelled as stalled. */
+  stallMs: number
+  /** Hard ceiling on one turn's wall time. */
+  maxTurnMs: number
+  /** Inline wait a delegation tool uses when the caller passes no wait_ms. */
+  defaultWaitMs: number
+  /** Longest inline wait a caller may request. */
+  maxWaitMs: number
   claudeBin: string
   codexBin: string
   storePath: string
@@ -93,6 +122,10 @@ export function resolveExternalSessionConfig(
     maxConcurrentTurns: positiveInteger(config.maxConcurrentTurns, EXTERNAL_SESSION_DEFAULTS.maxConcurrentTurns),
     maxSessions: positiveInteger(config.maxSessions, EXTERNAL_SESSION_DEFAULTS.maxSessions),
     cancelGraceMs: positiveInteger(config.cancelGraceMs, EXTERNAL_SESSION_DEFAULTS.cancelGraceMs),
+    stallMs: positiveInteger(config.stallMs, EXTERNAL_SESSION_DEFAULTS.stallMs),
+    maxTurnMs: positiveInteger(config.maxTurnMs, EXTERNAL_SESSION_DEFAULTS.maxTurnMs),
+    defaultWaitMs: nonNegativeInteger(config.defaultWaitMs, EXTERNAL_SESSION_DEFAULTS.defaultWaitMs),
+    maxWaitMs: positiveInteger(config.maxWaitMs, EXTERNAL_SESSION_DEFAULTS.maxWaitMs),
     claudeBin: nonEmpty(config.claudeBin, EXTERNAL_SESSION_DEFAULTS.claudeBin),
     codexBin: nonEmpty(config.codexBin, EXTERNAL_SESSION_DEFAULTS.codexBin),
     storePath: resolve(config.storePath ?? join(resolveDshHome(dshHome), EXTERNAL_SESSION_STORE_FILE)),
@@ -120,6 +153,11 @@ function delegationOf(config: ExternalDelegationConfig | undefined): { enabled: 
 
 function positiveInteger(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback
+}
+
+/** Like {@link positiveInteger}, but zero is a meaningful value (return at once). */
+function nonNegativeInteger(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : fallback
 }
 
 function nonEmpty(value: string | undefined, fallback: string): string {

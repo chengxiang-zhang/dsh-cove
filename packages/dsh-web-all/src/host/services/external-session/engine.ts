@@ -27,20 +27,23 @@ import {
 } from '../../../core/external-session/gateway.ts'
 import {
   outcomeSessionId, turnOutcomeError,
-  type ExternalAdapter, type TurnOutcome,
+  type ExternalAdapter, type TurnOutcome, type TurnProgress,
 } from '../../../core/external-session/adapters.ts'
 import {
   toSessionList, toSessionOverviewList, usageOrNull,
 } from '../../../core/external-session/views.ts'
 import type {
   ExternalLiveTurn, ExternalProvider, ExternalSessionList, ExternalSessionOverviewList,
-  ExternalSessionRecord, ExternalSessionStatus, ExternalSessionStopResult, ExternalTurnRecord,
-  ExternalTurnResult,
+  ExternalSessionRecord, ExternalSessionStatus, ExternalSessionStopResult, ExternalTurnOutcome,
+  ExternalTurnProgress, ExternalTurnRecord, ExternalTurnResult, ExternalTurnStarted,
 } from '../../../core/external-session/types.ts'
 import type { ResolvedExternalSessionConfig } from './config.ts'
 import { StoreUnavailableError, type ExternalSessionStore } from './store.ts'
 
 export { EXTERNAL_SESSION_SERVICE }
+
+/** Why a deadline cancelled a turn; the reason decides the recorded ending. */
+type DeadlineReason = 'turn-stalled' | 'turn-timeout'
 
 /** A turn that currently holds a session. */
 interface RunningTurn {
@@ -48,6 +51,46 @@ interface RunningTurn {
   live: ExternalLiveTurn
   controller: AbortController
   settled: Promise<void>
+  /** Live facts the adapter publishes while the process runs. */
+  progress: TurnProgress
+  /** Set when a deadline, not the caller, cancelled this turn. */
+  deadline?: DeadlineReason
+  /** The settled result, for a caller that polls after the turn ended. */
+  completion: Promise<ExternalTurnResult | ExternalError>
+  resolveCompletion: (value: ExternalTurnResult | ExternalError) => void
+}
+
+/** Zero progress, stamped so `idle_ms` starts counting from the spawn. */
+function initialProgress(now: number): TurnProgress {
+  return { frames: 0, toolCalls: 0, chars: 0, lastFrameAt: now, tail: '' }
+}
+
+/** Project raw adapter progress into the shape every surface reports. */
+function progressView(progress: TurnProgress, startedAt: string, now: number): ExternalTurnProgress {
+  return {
+    elapsed_ms: Math.max(0, now - Date.parse(startedAt)),
+    idle_ms: Math.max(0, now - progress.lastFrameAt),
+    frames: progress.frames,
+    tool_calls: progress.toolCalls,
+    chars: progress.chars,
+    tail: progress.tail,
+  }
+}
+
+/** Project a settled record as the result shape a caller polls for. */
+function resultOfRecord(record: ExternalSessionRecord): ExternalTurnResult | null {
+  const last = record.turns[record.turns.length - 1]
+  if (last === undefined) return null
+  return {
+    session_id: record.id,
+    turn: last.n,
+    status: last.status,
+    result: last.result,
+    usage: last.usage ?? null,
+    cost_usd: last.costUsd ?? null,
+    can_continue: record.status !== 'closed' && typeof record.providerSessionId === 'string' && record.providerSessionId !== '',
+    ...last.partial === true ? { partial: true } : {},
+  }
 }
 
 /** Where the engine reports conditions it survives rather than reports upward. */
@@ -98,6 +141,8 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
   private readonly probe: (path: string) => Promise<boolean>
   /** Turns in flight across every session, against `maxConcurrentTurns`. */
   private active = 0
+  /** Deadline sweeper, alive only while at least one turn runs. */
+  private watchdog: ReturnType<typeof setInterval> | undefined
 
   constructor(private readonly options: ExternalSessionEngineOptions) {
     this.now = options.now ?? Date.now
@@ -105,10 +150,13 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
     this.probe = options.directoryProbe ?? (async () => true)
   }
 
-  /** The live turn of one session, for the panel projection. */
+  /** The live turn of one session, with its progress, for the panel projection. */
   private liveTurns(): ReadonlyMap<string, ExternalLiveTurn> {
     const live = new Map<string, ExternalLiveTurn>()
-    for (const [sessionId, turn] of this.running) live.set(sessionId, turn.live)
+    const now = this.now()
+    for (const [sessionId, turn] of this.running) {
+      live.set(sessionId, { ...turn.live, progress: progressView(turn.progress, turn.live.startedAt, now) })
+    }
     return live
   }
 
@@ -126,7 +174,7 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
     await this.ensureLoaded()
     const sessions = this.options.store.list()
     const filtered = status === undefined ? sessions : sessions.filter(session => session.status === status)
-    return toSessionOverviewList(filtered)
+    return toSessionOverviewList(filtered, this.liveTurns())
   }
 
   async runTurn(request: ExternalTurnRequest): Promise<ExternalTurnResult | ExternalError> {
@@ -135,7 +183,7 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
     return this.execute(prepared, request)
   }
 
-  async startTurn(request: ExternalTurnRequest): Promise<ExternalError | null> {
+  async startTurn(request: ExternalTurnRequest): Promise<ExternalTurnStarted | ExternalError> {
     const prepared = await this.prepare(request)
     if (isError(prepared)) return prepared
     // "Non-blocking" means the caller does not wait for the turn to finish, not
@@ -147,7 +195,106 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
     let report: (error: ExternalError | null) => void = () => {}
     const started = new Promise<ExternalError | null>(resolve => { report = resolve })
     void this.execute(prepared, request, report).catch(() => undefined)
-    return await started
+    const error = await started
+    if (error !== null) return error
+    // The record is durable before `report(null)` runs, so the running entry is
+    // present; the fallback only covers a database that lost the row mid-flight.
+    const running = this.running.get(prepared.session.id)
+    if (running !== undefined) return this.startedOf(running)
+    return {
+      session_id: prepared.session.id,
+      turn: nextTurnNumber(prepared.session),
+      status: 'running',
+      progress: progressView(initialProgress(this.now()), new Date(this.now()).toISOString(), this.now()),
+    }
+  }
+
+  /**
+   * Wait at most `timeoutMs` for the turn on `sessionId` to settle.
+   *
+   * A delegation tool calls this instead of blocking for the turn's whole
+   * runtime: inside the window the caller gets the answer, outside it the running
+   * turn, so a thirty-minute dispatch no longer holds the conversation open.
+   */
+  async awaitTurn(sessionId: string, timeoutMs: number): Promise<ExternalTurnOutcome | ExternalError> {
+    await this.ensureLoaded()
+    const running = this.running.get(sessionId)
+    if (running !== undefined) {
+      if (timeoutMs <= 0) return this.startedOf(running)
+      const settleOrWait = await Promise.race([
+        running.completion,
+        new Promise<undefined>(resolve => {
+          const timer = setTimeout(() => resolve(undefined), timeoutMs)
+          // The race must not keep the host alive after the caller stopped caring.
+          timer.unref?.()
+        }),
+      ])
+      if (settleOrWait !== undefined) return settleOrWait
+      return this.startedOf(running)
+    }
+    const record = this.options.store.get(sessionId)
+    if (record === undefined) return externalError('session-unknown')
+    return resultOfRecord(record) ?? externalError('session-unknown')
+  }
+
+  /** Live progress of the turn running on `sessionId`, or null when it is quiet. */
+  progressOf(sessionId: string): ExternalTurnProgress | null {
+    const running = this.running.get(sessionId)
+    return running === undefined
+      ? null
+      : progressView(running.progress, running.live.startedAt, this.now())
+  }
+
+  /** Project one running turn as the start shape a caller polls with. */
+  private startedOf(running: RunningTurn): ExternalTurnStarted {
+    return {
+      session_id: running.sessionId,
+      turn: running.live.n,
+      status: 'running',
+      progress: progressView(running.progress, running.live.startedAt, this.now()),
+    }
+  }
+
+  /**
+   * Cancel turns that have gone quiet or overrun their wall-clock ceiling.
+   *
+   * A CLI that stops emitting frames is indistinguishable from one that is
+   * thinking, so the only honest reading of silence is a deadline: five quiet
+   * minutes is a dead child, forty minutes is a runaway. Aborting runs the
+   * documented termination ladder, and the adapter returns the text it had
+   * already accumulated, so the work survives the cancellation.
+   */
+  sweepDeadlines(): void {
+    if (this.running.size === 0) return
+    const { stallMs, maxTurnMs } = this.options.config
+    const now = this.now()
+    for (const turn of this.running.values()) {
+      if (turn.deadline !== undefined) continue
+      const quietForMs = now - turn.progress.lastFrameAt
+      const elapsedMs = now - Date.parse(turn.live.startedAt)
+      const reason: DeadlineReason | undefined = quietForMs > stallMs
+        ? 'turn-stalled'
+        : elapsedMs > maxTurnMs ? 'turn-timeout' : undefined
+      if (reason === undefined) continue
+      turn.deadline = reason
+      this.options.logger?.warn(`external-session ${turn.sessionId}: ${reason} after ${Math.round(elapsedMs / 1000)}s (idle ${Math.round(quietForMs / 1000)}s)`)
+      turn.controller.abort(new Error(reason))
+    }
+  }
+
+  /** Run the deadline sweep on a timer while any turn is alive. */
+  private startWatchdog(): void {
+    if (this.watchdog !== undefined) return
+    const tickMs = Math.max(250, Math.min(5_000, Math.floor(this.options.config.stallMs / 6)))
+    this.watchdog = setInterval(() => { this.sweepDeadlines() }, tickMs)
+    // A monitoring timer must never be the reason a host process stays up.
+    this.watchdog.unref?.()
+  }
+
+  private stopWatchdog(): void {
+    if (this.watchdog === undefined) return
+    clearInterval(this.watchdog)
+    this.watchdog = undefined
   }
 
   async cancel(sessionId: string): Promise<ExternalError | null> {
@@ -287,12 +434,18 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
     const detach = linkSignal(request.signal, controller)
     let settle: () => void = () => {}
     const settled = new Promise<void>(resolve => { settle = resolve })
+    let resolveCompletion: (value: ExternalTurnResult | ExternalError) => void = () => {}
+    const completion = new Promise<ExternalTurnResult | ExternalError>(resolve => { resolveCompletion = resolve })
     const running: RunningTurn = {
       sessionId: session.id,
       live: { n, prompt: request.prompt, startedAt },
       controller,
       settled,
+      progress: initialProgress(this.now()),
+      completion,
+      resolveCompletion,
     }
+    let finalResult: ExternalTurnResult | ExternalError | undefined
 
     let startedReported = false
     const reportStarted = (error: ExternalError | null): void => {
@@ -302,6 +455,7 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
     }
 
     this.running.set(session.id, running)
+    this.startWatchdog()
     try {
       // The record says `running` while the process is alive, so a second
       // request is refused by the state gate rather than run against the same
@@ -309,40 +463,49 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
       // Registering here also makes the turn cancellable before it spawns.
       const unwritable = await this.persist(markRunning(session))
       reportStarted(unwritable)
-      if (unwritable !== null) return unwritable
+      if (unwritable !== null) {
+        finalResult = unwritable
+        return unwritable
+      }
       const outcome = await this.runAdapter(adapter, {
         prompt: request.prompt,
         cwd,
         providerSessionId: isNew ? undefined : session.providerSessionId,
         ...request.model === undefined ? {} : { model: request.model },
         signal: controller.signal,
+        report: progress => { running.progress = progress },
       }, request.provider)
-      return await this.settle(turnRecord(n, request.prompt, startedAt, outcome, request.model), outcome, session.id)
+      finalResult = await this.settle(turnRecord(n, request.prompt, startedAt, outcome, request.model), outcome, session.id)
+      return finalResult
     } catch (error) {
       // An adapter must resolve its failures; reaching here is a bug. Record it
       // as a failed turn so the session is left in a readable state.
       this.options.logger?.warn(`external-session turn failed unexpectedly: ${String(error)}`)
       const failedOutcome: TurnOutcome = {
         status: 'failed',
-        result: '',
+        result: running.progress.tail,
         durationMs: this.now() - Date.parse(startedAt),
+        ...running.progress.tail === '' ? {} : { partial: true },
       }
-      return await this.settle(turnRecord(n, request.prompt, startedAt, failedOutcome, request.model), failedOutcome, session.id)
+      finalResult = await this.settle(turnRecord(n, request.prompt, startedAt, failedOutcome, request.model), failedOutcome, session.id)
+      return finalResult
     } finally {
       // A throw before the first persist would otherwise leave the caller
       // waiting on a promise nothing resolves.
       reportStarted(null)
       detach()
       this.running.delete(session.id)
+      if (this.running.size === 0) this.stopWatchdog()
       this.active -= 1
       settle()
+      resolveCompletion(finalResult ?? externalError('provider-error', { provider: session.provider }))
     }
   }
 
   /** Run one adapter turn, converting a thrown error into a failed outcome. */
   private async runAdapter(
     adapter: ExternalAdapter,
-    request: { prompt: string; cwd: string; providerSessionId?: string; model?: string; signal: AbortSignal },
+    request: { prompt: string; cwd: string; providerSessionId?: string; model?: string; signal: AbortSignal; report?: (progress: TurnProgress) => void },
     provider: ExternalProvider,
   ): Promise<TurnOutcome> {
     try {
@@ -372,7 +535,11 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
     const unwritable = await this.persist(next)
     if (unwritable !== null) return unwritable
     const failure = turnOutcomeError(outcome)
-    if (failure !== null && turn.status === 'failed') return failure
+    const partial = outcome.partial === true && outcome.result !== ''
+    // A turn that did not settle but did produce text is the work, not a refusal:
+    // the caller needs the text and the `partial` marker, otherwise a cancelled
+    // thirty-minute dispatch answers with an empty string.
+    if (failure !== null && turn.status === 'failed' && !partial) return failure
     return {
       session_id: next.id,
       turn: turn.n,
@@ -381,6 +548,7 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
       usage: usageOrNull(outcome.usage),
       cost_usd: outcome.costUsd ?? null,
       can_continue: next.providerSessionId !== undefined && next.status !== 'closed',
+      ...partial ? { partial: true } : {},
     }
   }
 }
@@ -406,6 +574,7 @@ function turnRecord(
   // bill or a regression is attributable only when the record says which it ran on.
   if (model !== undefined) record.model = model
   if (outcome.costUsd !== undefined) record.costUsd = outcome.costUsd
+  if (outcome.partial === true) record.partial = true
   return record
 }
 

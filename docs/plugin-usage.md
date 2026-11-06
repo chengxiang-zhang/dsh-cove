@@ -317,7 +317,7 @@
 | `subagent_codex` | 本机原生 Codex 配置与登录；模型可当场选、默认 `gpt-6-astra`；新轮次带 `--approve-for-me`，续轮沿用该会话记录的策略 |
 | `subagent_cursor` | `/Users/leo/.local/bin/cursor-agent` 存在且 `CURSOR_API_KEY` 有效；`permission: allow` 等于无人值守批准它每个权限请求（含写文件与执行 shell） |
 
-`subagent_claude_code` 与 `subagent_codex` 由本仓 external-session 能力承担，直接起 `claude` / `codex` CLI：因此多一个可选 `session_id` 用于续同一段对话，并额外提供 `external_session_list` 与 `external_session_stop`；模型可以用调用参数 `model` 当场选，候选目录与默认档在实体行的 `config.externalSession.tools` 里配、逐个带说明，不给 `model` 时用默认档。工具由 `web-all` 这个 Loader 条目注册，所以每个预设（含许愿式编程）、每个会话都看得到；进程内的 `subagent` / `subagent_fork` 不受影响。细节与迁移见 [external-session.md](external-session.md)。
+`subagent_claude_code` 与 `subagent_codex` 由本仓 external-session 能力承担，直接起 `claude` / `codex` CLI：多一个可选 `session_id` 用于续同一段对话，`model` 当场选（候选目录与默认档在实体行的 `config.externalSession.tools` 里配、逐个带说明），`wait_ms` 决定这次调用最多等多久（默认 15 秒）。没在窗口内结束的轮次回 `status: "running"` 加进度，用 `external_session_wait` 取回；另有 `external_session_list` 与 `external_session_stop`。工具由 `web-all` 这个 Loader 条目注册，所以每个预设（含许愿式编程）、每个会话都看得到；进程内的 `subagent` / `subagent_fork` 不受影响。细节与迁移见 [external-session.md](external-session.md)。
 
 ### Agent Teams
 

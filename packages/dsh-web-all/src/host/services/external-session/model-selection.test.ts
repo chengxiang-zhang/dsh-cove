@@ -27,9 +27,17 @@ function execContext(): { signal: AbortSignal } {
 function recordingGateway() {
   const requests: Array<Record<string, unknown>> = []
   const gateway = {
-    async runTurn(request: Record<string, unknown>) {
+    async startTurn(request: Record<string, unknown>) {
       requests.push(request)
-      return { session_id: 'ext-1', turn: 1, status: 'completed', result: 'ok', can_continue: false }
+      return {
+        session_id: 'ext-1',
+        turn: 1,
+        status: 'running',
+        progress: { elapsed_ms: 0, idle_ms: 0, frames: 0, tool_calls: 0, chars: 0, tail: '' },
+      }
+    },
+    async awaitTurn() {
+      return { session_id: 'ext-1', turn: 1, status: 'completed', result: 'ok', usage: null, cost_usd: null, can_continue: false }
     },
   }
   return { requests, gateway: gateway as unknown as ExternalSessionGateway }

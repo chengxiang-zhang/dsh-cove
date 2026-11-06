@@ -133,6 +133,7 @@ export const ALWAYS_ON_TOOLS = new Set([
   'subagent_codex',
   'external_session_list',
   'external_session_stop',
+  'external_session_wait',
 ])
 
 /**

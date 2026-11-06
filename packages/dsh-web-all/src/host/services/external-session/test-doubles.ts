@@ -9,7 +9,7 @@
  * @module dsh-web-all/host/services/external-session/test-doubles
  */
 import type {
-  ExternalAdapter, ExternalOutputReader, TurnOutcome, TurnRequest,
+  ExternalAdapter, ExternalOutputReader, TurnOutcome, TurnProgress, TurnRequest,
 } from '../../../core/external-session/adapters.ts'
 import type { ExternalProvider } from '../../../core/external-session/types.ts'
 import type { StoreFileSystem } from './store.ts'
@@ -36,6 +36,11 @@ export class FakeAdapter implements ExternalAdapter {
   autoOutcome: ((request: TurnRequest) => TurnOutcome) | undefined
   /** When set, `runTurn` throws instead of resolving. */
   throws: Error | undefined
+  /**
+   * What a cancelled turn answers. A real CLI keeps the text it had already
+   * written, which is the point of the partial path, so a test can model that.
+   */
+  cancelOutcome: Partial<TurnOutcome> | undefined
   private readonly pending: PendingTurn[] = []
 
   constructor(readonly provider: ExternalProvider = 'claude') {}
@@ -57,7 +62,13 @@ export class FakeAdapter implements ExternalAdapter {
         const at = this.pending.indexOf(entry)
         if (at === -1) return
         this.pending.splice(at, 1)
-        resolve({ status: 'aborted', result: 'cancelled', durationMs: 1, providerSessionId: 'cli-session-1' })
+        resolve({
+          status: 'aborted',
+          result: 'cancelled',
+          durationMs: 1,
+          providerSessionId: 'cli-session-1',
+          ...this.cancelOutcome,
+        } as TurnOutcome)
       }
       if (request.signal?.aborted === true) {
         resolve({ status: 'aborted', result: 'cancelled', durationMs: 1, providerSessionId: 'cli-session-1' })
@@ -76,6 +87,14 @@ export class FakeAdapter implements ExternalAdapter {
   /** The signal handed to the oldest unsettled turn. */
   get lastSignal(): AbortSignal | undefined {
     return this.pending[0]?.request.signal
+  }
+
+  /**
+   * Publish progress for the oldest unsettled turn, the way a real adapter's
+   * read loop does while its child process runs.
+   */
+  reportProgress(progress: TurnProgress): void {
+    this.pending[0]?.request.report?.(progress)
   }
 
   /** Settle the oldest unsettled turn. */

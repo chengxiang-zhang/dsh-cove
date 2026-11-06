@@ -128,6 +128,7 @@ JOURNEY="<预设>/scripts/journey.sh"    # --confirm/--approve/--status/--transi
 - 默认：本地子代理（`subagent` / `subagent_fork`）**没有** `model`/`provider` 参数，天然继承本会话。拿不准就继承。
 - 要换能力：两个外部委派工具按 `model` 选档 —— `subagent_codex` 省略 `model` 即 `gpt-6-astra`；`subagent_claude_code` 取 `kaon/claude-opus-5-5`（最强）/ `kaon/claude-sonnet-5-5`（均衡）/ `kaon/claude-haiku-5-5`（最快最便宜）。取值必须是 profile 为这个工具列出的 id，否则在参数校验层被拒。
 - 换族（DeepSeek ↔ Codex ↔ Claude）等于**换工具**，不是传 `provider`：这两个工具都没有 `provider` 参数。
+- 派发不等答案：`wait_ms`（默认 15 秒）之后回 `status: running`，用 `external_session_wait` 收；把等待当成下一件事在跑，而不是本回合结束。
 - 不要因为目录里还有别的族就随便跳；换族仅当用户点名，或任务明显依赖该族专长，并在回执里写明换了哪个工具、为什么。
 
 | 任务倾向 | 建议 |

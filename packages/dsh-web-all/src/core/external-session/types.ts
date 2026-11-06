@@ -66,8 +66,13 @@ export interface ExternalTurnRecord {
   model?: string
   /** The CLI's own price-table estimate. Never a bill. */
   costUsd?: number
-  /** Final text of the turn; a diagnostic summary when the turn failed. */
+  /**
+   * Text of the turn: the terminal answer, or the text accumulated from the
+   * stream when the turn did not settle (cancelled, stalled, timed out).
+   */
   result: string
+  /** True when `result` is accumulated text rather than a terminal answer. */
+  partial?: boolean
 }
 
 /** One external session as persisted. */
@@ -100,11 +105,27 @@ export const EXTERNAL_STORE_VERSION = 1
 /** Status of a turn as any view shows it: the persisted statuses plus the live one. */
 export type ExternalTurnViewStatus = 'running' | ExternalTurnStatus
 
+/**
+ * Live progress of the turn running now, as every surface outside the process
+ * reports it. `idle_ms` is the fact a stalled turn is recognised by.
+ */
+export interface ExternalTurnProgress {
+  elapsed_ms: number
+  idle_ms: number
+  frames: number
+  tool_calls: number
+  chars: number
+  /** Bounded tail of the answer produced so far. */
+  tail: string
+}
+
 /** A turn that is running right now and therefore not yet a record. */
 export interface ExternalLiveTurn {
   n: number
   prompt: string
   startedAt: string
+  /** Progress of this turn as of the projection; absent before the first report. */
+  progress?: ExternalTurnProgress
 }
 
 /**
@@ -121,6 +142,10 @@ export interface ExternalTurnView {
   usage?: ExternalUsage
   costUsd?: number
   result?: string
+  /** Live progress of a running turn. */
+  progress?: ExternalTurnProgress
+  /** A settled turn whose text was accumulated rather than terminal. */
+  partial?: boolean
 }
 
 /**
@@ -169,6 +194,8 @@ export interface ExternalSessionOverview {
   canContinue: boolean
   turnCount: number
   lastTurn: ExternalTurnDigest | null
+  /** The turn running now, with its progress; null when the session is quiet. */
+  running: (ExternalTurnProgress & { turn: number; started_at: string }) | null
 }
 
 /** The model-facing session list payload. */
@@ -188,7 +215,26 @@ export interface ExternalTurnResult {
   cost_usd: number | null
   /** Whether another turn can be sent on this session. */
   can_continue: boolean
+  /** True when `result` is accumulated text from a turn that did not settle. */
+  partial?: boolean
 }
+
+/**
+ * A turn that started but has not settled inside the caller's wait window.
+ *
+ * Returned instead of blocking, which is what lets a caller keep working and
+ * poll. `progress.idle_ms` is the fact to judge health by, and `tail` already
+ * holds the answer text produced so far.
+ */
+export interface ExternalTurnStarted {
+  session_id: string
+  turn: number
+  status: Extract<ExternalTurnViewStatus, 'running'>
+  progress: ExternalTurnProgress
+}
+
+/** What a wait returns: a settled turn, one still running, or a refusal. */
+export type ExternalTurnOutcome = ExternalTurnResult | ExternalTurnStarted
 
 /** Result of closing a session. */
 export interface ExternalSessionStopResult {

@@ -14,7 +14,8 @@
 import type { ExternalError } from './errors.ts'
 import type {
   ExternalProvider, ExternalSessionList, ExternalSessionOverviewList, ExternalSessionStatus,
-  ExternalSessionStopResult, ExternalTurnResult,
+  ExternalSessionStopResult, ExternalTurnOutcome, ExternalTurnProgress, ExternalTurnResult,
+  ExternalTurnStarted,
 } from './types.ts'
 
 /** One turn as a caller asks for it. */
@@ -61,11 +62,31 @@ export interface ExternalSessionGateway {
    *
    * Preflight — session lookup, state, binary resolution and directory — still
    * happens before this resolves, so a caller can report every actionable error
-   * synchronously. The turn's outcome becomes visible through {@link listViews}.
+   * synchronously. The returned identity is what a caller polls with: a new
+   * session only exists once this resolved, so the id cannot be known earlier.
    * @param request - the turn to start.
-   * @returns null when the turn started, otherwise the reason it did not.
+   * @returns the started turn, or the reason it did not start.
    */
-  startTurn(request: ExternalTurnRequest): Promise<ExternalError | null>
+  startTurn(request: ExternalTurnRequest): Promise<ExternalTurnStarted | ExternalError>
+
+  /**
+   * Wait at most `timeoutMs` for the turn on `sessionId` to settle.
+   *
+   * This is the bounded wait a model-facing call uses instead of blocking for
+   * the turn's whole runtime: inside the window the caller gets the settled
+   * result, outside it the running turn plus its progress, so the answer can be
+   * collected later without having held the conversation open.
+   * @param sessionId - session to wait on.
+   * @param timeoutMs - how long to wait; 0 returns the current state at once.
+   * @returns the settled result, the still-running turn, or a refusal.
+   */
+  awaitTurn(sessionId: string, timeoutMs: number): Promise<ExternalTurnOutcome | ExternalError>
+
+  /**
+   * Live progress of the turn running on `sessionId`, or null when it is quiet.
+   * @param sessionId - session to read.
+   */
+  progressOf(sessionId: string): ExternalTurnProgress | null
 
   /** Cancel the turn running on `sessionId`, if one is. */
   cancel(sessionId: string): Promise<ExternalError | null>

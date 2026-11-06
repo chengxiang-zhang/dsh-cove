@@ -38,7 +38,7 @@ description: Use at the START of any design request (设计/方案/架构/IA/交
 ## 2.5 方案先行（L2 / L3 必做，L1 可跳）
 
 写任何设计件之前，先派一次强模型档（顺序：`subagent_codex` → `subagent_claude_code`，见 `design-dispatch`），
-要它交"候选方案 + 取舍理由 + 被忽略的约束"，本栈负责：
+要它交"候选方案 + 取舍理由 + 被忽略的约束"，（回 `running` 就先做别的，`external_session_wait` 收）本栈负责：
 
 1. 把它落成该档最小件（`brief` / 各层文件 / `adr/`）；
 2. 逐条复现它声称的事实（`file:line` 在那个 sha 上成立，或一条命令跑得通）；

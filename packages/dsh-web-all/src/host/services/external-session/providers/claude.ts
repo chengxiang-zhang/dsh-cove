@@ -32,14 +32,16 @@
  *   transient failure settles on its own success frame instead.
  * @module host/services/external-session/providers/claude
  */
-import type {
-  ExternalAdapter,
-  ExternalAdapterConfig,
-  ExternalAdapterDeps,
-  ExternalProcessHandle,
-  ExternalProcessOutcome,
-  TurnOutcome,
-  TurnRequest,
+import {
+  TURN_TAIL_MAX_CHARS,
+  type ExternalAdapter,
+  type ExternalAdapterConfig,
+  type ExternalAdapterDeps,
+  type ExternalProcessHandle,
+  type ExternalProcessOutcome,
+  type TurnOutcome,
+  type TurnProgress,
+  type TurnRequest,
 } from '../../../../core/external-session/adapters.ts'
 import { externalError } from '../../../../core/external-session/errors.ts'
 import type { ExternalUsage } from '../../../../core/external-session/types.ts'
@@ -53,6 +55,9 @@ export const CLAUDE_CREDENTIAL_KEYS = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOK
  * lossy head still leaves a verdict and a session id.
  */
 const STDOUT_MAX_BYTES = 8 << 20
+
+/** How often the live turn is read while its child process runs. */
+const LIVE_POLL_MS = 500
 const STDERR_MAX_BYTES = 1 << 20
 
 /**
@@ -84,6 +89,83 @@ export interface ClaudeStreamSummary {
   resultFrames: number
   /** Event lines that were not JSON, kept as a damage count rather than a verdict. */
   damagedLines: number
+}
+
+/**
+ * Accumulated facts of a turn that is still running.
+ *
+ * The terminal frame is the only thing the settled parse used to read, so a
+ * cancelled turn answered with an empty string even though the CLI had already
+ * emitted the whole answer. These fields are the answer-so-far.
+ */
+interface ClaudeLiveProgress {
+  frames: number
+  toolCalls: number
+  text: string
+  /** Incomplete trailing line, carried between polls. */
+  remainder: string
+}
+
+/** Keep the END of the text: a tail is only useful when it is the latest part. */
+function clampTail(text: string): string {
+  return text.length <= TURN_TAIL_MAX_CHARS ? text : text.slice(text.length - TURN_TAIL_MAX_CHARS)
+}
+
+/** Text blocks of one assistant frame, joined. */
+function assistantText(frame: Record<string, unknown>): string {
+  const message = record(frame.message)
+  const content = message?.content
+  if (!Array.isArray(content)) return ''
+  const parts: string[] = []
+  for (const item of content) {
+    const block = record(item)
+    if (block === undefined) continue
+    if (block.type === 'tool_use') continue
+    if (block.type === 'text' && typeof block.text === 'string') parts.push(block.text)
+  }
+  return parts.join('')
+}
+
+/** Tool-call blocks of one assistant frame. */
+function toolCallCount(frame: Record<string, unknown>): number {
+  const message = record(frame.message)
+  const content = message?.content
+  if (!Array.isArray(content)) return 0
+  let n = 0
+  for (const item of content) {
+    const block = record(item)
+    if (block?.type === 'tool_use') n += 1
+  }
+  return n
+}
+
+/**
+ * Consume whatever complete lines the poll read, mutating `state`.
+ *
+ * Only whole lines are parsed: the last line of a live stream is usually half
+ * written, so the remainder is carried to the next poll instead of being
+ * dropped. A damaged line counts as damage, exactly like the settled parse.
+ */
+function consumeClaudeLines(state: ClaudeLiveProgress, chunk: string): void {
+  const buffered = state.remainder + chunk
+  const lines = buffered.split('\n')
+  state.remainder = lines.pop() ?? ''
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (line.length === 0) continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const frame = record(parsed)
+    if (frame === undefined) continue
+    state.frames += 1
+    if (text(frame.type) !== 'assistant') continue
+    state.toolCalls += toolCallCount(frame)
+    state.text += assistantText(frame)
+  }
 }
 
 const AUTH_FAILURE_PATTERN = /not logged in|please run \/login|authentication_failed|invalid api key|oauth token (?:has )?expired/i
@@ -314,23 +396,72 @@ export function createClaudeAdapter(deps: ExternalAdapterDeps, config: ExternalA
         return failed(startedAt, UNSETTLED_TURN_CODE, diagnostic(undefined, '', error))
       }
 
+      // Poll the collected stream while the child runs. Without this the only
+      // thing a cancelled turn can report is the terminal frame it never got,
+      // which is how a thirty-minute dispatch answered with an empty string.
+      const live: ClaudeLiveProgress = { frames: 0, toolCalls: 0, text: '', remainder: '' }
+      let cursor = 0
+      const publish = (): void => {
+        if (request.report === undefined) return
+        const progress: TurnProgress = {
+          frames: live.frames + (live.remainder === '' ? 0 : 1),
+          toolCalls: live.toolCalls,
+          chars: live.text.length,
+          lastFrameAt: deps.now(),
+          tail: clampTail(live.text),
+        }
+        try {
+          request.report(progress)
+        } catch {
+          // Progress is bookkeeping: a broken listener must not fail a good turn.
+        }
+      }
+      const pump = (): void => {
+        const reader = handle.collected.stdout
+        if (reader === undefined) return
+        let read = reader.readFrom(cursor)
+        if (read.lossy) {
+          // The retained window slid: resume from the start of what is kept and
+          // rebuild rather than duplicating the part already accumulated.
+          live.text = ''
+          live.remainder = ''
+          cursor = 0
+          read = reader.readFrom(0)
+        }
+        cursor = read.nextOffset
+        if (read.text === '') return
+        consumeClaudeLines(live, read.text)
+        publish()
+      }
+      const poller = setInterval(pump, LIVE_POLL_MS)
+      poller.unref?.()
+
       let exit: ExternalProcessOutcome
       try {
         exit = await handle.done
       } catch (error) {
+        clearInterval(poller)
         return failed(startedAt, UNSETTLED_TURN_CODE, diagnostic(undefined, '', error))
+      } finally {
+        clearInterval(poller)
       }
+      // One last read covers whatever arrived between the last poll and the exit.
+      pump()
 
       const stdoutText = handle.collected.stdout?.readFrom(0).text ?? ''
       const stderrText = handle.collected.stderr?.readFrom(0).text ?? ''
       const summary = summarizeClaudeStream(stdoutText, stderrText)
       const sessionId = summary.providerSessionId === null ? undefined : summary.providerSessionId
+      const tail = clampTail(live.text)
+      const interruptedText = summary.resultText !== '' ? summary.resultText : tail
+      const interruptedPartial = summary.resultText === '' && tail !== ''
 
       if (request.signal?.aborted === true) {
         return {
           status: 'aborted',
-          result: summary.resultText,
+          result: interruptedText,
           durationMs: deps.now() - startedAt,
+          ...interruptedPartial ? { partial: true } : {},
           ...(sessionId === undefined ? {} : { providerSessionId: sessionId }),
           ...(summary.usage === undefined ? {} : { usage: summary.usage }),
           ...(summary.costUsd === undefined ? {} : { costUsd: summary.costUsd }),
@@ -341,6 +472,19 @@ export function createClaudeAdapter(deps: ExternalAdapterDeps, config: ExternalA
         return failed(startedAt, 'session-unresumable', diagnostic(exit, stderrText), summary.usage, summary.costUsd, sessionId)
       }
       if (summary.resultFrames === 0) {
+        // The turn ended without a verdict but did answer in the stream: return
+        // that text marked partial instead of refusing with nothing.
+        if (interruptedPartial) {
+          return {
+            status: 'failed',
+            result: tail,
+            partial: true,
+            durationMs: deps.now() - startedAt,
+            ...(sessionId === undefined ? {} : { providerSessionId: sessionId }),
+            ...(summary.usage === undefined ? {} : { usage: summary.usage }),
+            ...(summary.costUsd === undefined ? {} : { costUsd: summary.costUsd }),
+          }
+        }
         return failed(startedAt, UNSETTLED_TURN_CODE, diagnostic(exit, stderrText), summary.usage, summary.costUsd, sessionId)
       }
       if (summary.isError) {

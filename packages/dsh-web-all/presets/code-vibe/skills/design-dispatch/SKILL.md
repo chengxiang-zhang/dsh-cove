@@ -36,14 +36,19 @@ description: 把复杂设计/排障/独立评审任务派发给外部强 agent�
 | 1 | `subagent_codex` | codex CLI（本机原生登录） | 省略 = profile 默认 `gpt-6-astra`；`gpt-6-astra-pro` 当前账号 400 | **默认档**。架构/选型/新结构/跨模块契约/复杂排障根因未知：结构化审阅与结论型判断 |
 | 2 | `subagent_claude_code` | claude CLI | `kaon/claude-opus-5-5`（最强，也是默认）/ `kaon/claude-sonnet-5-5`（均衡）/ `kaon/claude-haiku-5-5`（最快最便宜） | codex 不可用时的**替补**；需要它自己在仓库多处翻找的探查型任务；窄 I/O 用 haiku |
 
-控制工具（查状态、关会话）：`external_session_list(status?)` / `external_session_stop(session_id)`。
+控制工具（查状态、等一轮、关会话）：`external_session_list(status?)` / `external_session_wait(session_id, timeout_ms?)` / `external_session_stop(session_id)`。
 
-- **默认只跑一路**，按任务形态选：结构化审阅与结论型判断走 `subagent_codex`；需要它自己在仓库里多处翻找的探查型任务走 `subagent_claude_code`（这类它会自己开到多轮，输入侧远大于单轮审阅）。
+**派发不占住回合**：两个派发工具都有 `wait_ms`（默认 15000、上限 600000）。窗口内结束就直接拿结论；没结束的回 `status: running` 加 `progress`（`elapsed_ms` / `idle_ms` / `frames` / `chars` / `tail`）。这时**不要干等**：继续做本轮的其它切片，用 `external_session_wait` 取回，或先看 `external_session_list` 的 `running` 判断它是在跑还是静默。
+
+- **默认只跑一路**，按任务形态选：结构化审阅与结论型判断走 `subagent_codex`；需要它自己在仓库里多处翻找的探查型任务走 `subagent_claude_code`（这类它会自己开到多轮，输入侧远大于单轮审阅）。一轮实测 3 到 32 分钟，所以派发一律先派、后收，不派完干等。
 - **两路并行不是默认值**。只有第二路带**不同的攻击切片**（不同约束集、不同反例方向）时才并行；
   同一份 packet 跑两路，实测边际新发现为 0，成本翻倍。第二路连续 N 次 unique-finding=0 就砍掉。
+- `status: running` 不是失败，也不是结果：按上面的协议收，别把它当没答而重派一遍（同一份 packet 重派是双倍成本）。
+- `partial: true` 表示这是被取消 / 停滞 / 超时那一轮的已产出文本，不是完整答案：可以拿来决定下一步，但不能当结论引用。
 - 降级阶梯（自动执行，但每一次降级都要在回执里写明）：
   1. `subagent_codex` 失败（`400` / `429` / `auth-required`）→ **直接换 `subagent_claude_code`**（`model: kaon/claude-opus-5-5`）；
-  2. 两个都不可用（`provider-missing` / 反复 `auth-required`）→ 停止派发，改本地执行，并在结论里标注质量已降级（这是本 skill 里唯一允许停下的条件）。
+  2. 两个都不可用（`provider-missing` / 反复 `auth-required`）→ 停止派发，改本地执行，并在结论里标注质量已降级（这是本 skill 里唯一允许停下的条件）；
+  3. `turn-stalled` / `turn-timeout` → 按 `partial` 里已有的文本决定下一步：续同一 `session_id` 补完，还是拆小重派。
 - 模型已知边界：`gpt-6-astra-pro` 当前账号不支持（400）；claude 的 opus 类模型要求 Claude Code ≥ 2.1.280（2.1.318 实测返回 `anthropic/claude-opus-5.5`，老版本同一条命令 400）；不在 profile 目录里的 id 会在参数校验层被拒，**不会静默换档**。
 
 ## 2. 没有装机步骤，只有 preflight（每会话首次派发前一次）

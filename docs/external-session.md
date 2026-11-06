@@ -126,8 +126,9 @@
 模型可见四个工具，其中两个沿用原生名字以保持兼容：
 
 ```
-subagent_claude_code(prompt, session_id?, cwd?, title?, model?)
-subagent_codex(prompt, session_id?, cwd?, title?, model?)
+subagent_claude_code(prompt, session_id?, cwd?, title?, model?, wait_ms?)
+subagent_codex(prompt, session_id?, cwd?, title?, model?, wait_ms?)
+external_session_wait(session_id, timeout_ms?)
 external_session_list(status?)
 external_session_stop(session_id)
 ```
@@ -136,7 +137,9 @@ external_session_stop(session_id)
 - 提供 `session_id`：在该会话上跑下一轮，内部使用 CLI 会话号续接。
 - 没有 `provider` 参数：走哪个 CLI 由调用的是哪个工具决定，provider 不由参数选。
 - 返回统一结构：`{ session_id, turn, status, result, usage, cost_usd, can_continue }`。
-- 工具为同步阻塞：本轮结束才返回。这样结果直接进入对话，不依赖任何未公开的消息注入通道。
+- `wait_ms` 决定这次调用等多久：默认等 15000 毫秒，`0` 立刻返回，上限 600000。窗口内结束的轮次直接回结果；没结束的回 `status: "running"` 与 `progress`（`elapsed_ms` / `idle_ms` / `frames` / `tool_calls` / `chars` / `tail`），调用方继续做别的事，再用 `external_session_wait` 取回。一次三十多分钟的派发不再占住整个回合。
+- `external_session_wait` 等一个还在跑的轮次：默认 60000 毫秒、上限 600000。窗口内结束回结果，否则回仍在跑的轮次与它的进度。`idle_ms` 是判断"卡住还是在想"的读数。
+- 结果里出现 `partial: true` 表示 `result` 是被取消 / 停滞 / 超时那一轮的已产出文本，不是完整答案；`result` 永远不是空串。
 
 两个派发工具各自带一个可选的 `model`：目录由实体行的 `config.externalSession.tools` 给，不写在代码里。行上的 `config.models` 是 `[{ id, description }]`，编译成参数 schema 的 `oneOf` 分支，于是每个候选模型在选择处就带着自己的说明；行上不给 `models` 时该参数退化为自由字符串，最终由 CLI 自己的设置决定。两个工具各带各的目录，避免把 Claude 的模型 id 递给 Codex。
 
@@ -144,7 +147,8 @@ external_session_stop(session_id)
 
 每个工具还可以配一个 `default`：调用方省略 `model` 时用它；行上没配 `default` 时，省略 `model` 就是 CLI 自己配置的模型。当前这台机器的口径是 claude 默认 `kaon/claude-opus-5-5`、codex 默认 `gpt-6-astra`，工具的说明文字会把默认档直接写出来，模型不必猜。
 
-- 不做后台模式：一次调用占用当前轮，直到本轮结束。要改成后台派发，给工具加一个 `background` 参数即可，引擎与存储不动。
+- 取消语义：父回合的取消只作用于还在 `wait_ms` 窗口里的那一段；调用已经回 `running` 之后，子进程继续跑，直到 `external_session_stop` 或下面两条期限之一。
+- 期限：一个轮次连续 600000 毫秒没有任何帧就判停滞（`turn-stalled`）并取消；单个轮次墙钟超过 2400000 毫秒判超时（`turn-timeout`）。两者都保留已产出文本，按 `partial` 返回。
 
 这四个工具由本实体自己的 Loader 条目注册，随实体行一起装配：`web-all` 的 `config.externalSession.tools` 决定每个 provider 的开关与模型目录，控制工具只注册一次。工具不放在预设里——预设行由 `agentPresets` 在运行时装配，不属于 Loader 条目，而 HMR 只能替换「所有活着的 importer 都是 Loader 条目」的模块；工具一旦从预设平面 import，本文件的任何改动都要重启宿主才生效。工具注册仍是容忍式的：名字被占时不报错，先注册者拥有，被拒的一方发一条点名讯息。
 
@@ -169,7 +173,7 @@ external_session_stop(session_id)
 
 记录写失败报的是 `store-unavailable`，不是 `session-unknown`：后一条会让调用方以为 id 错了、重试没用，而这里说明的是宿主存不下。
 
-面板用的这组路由不等本轮结束：`/api/external-session/continue` 在轮次一开始就返回 200 与整份会话列表，本轮成败要看列表里该轮的 `status`；`/cancel` 与 `/close` 同样回整份列表。它不等本轮跑完，但会等本轮的记录写进存储再回 200，所以存储不可写时它在返回前就报 `store-unavailable`（503），不会先 200 再静默失败。工具本身是同步阻塞的（见本节开头）。
+面板用的这组路由不等本轮结束：`/api/external-session/continue` 在轮次一开始就返回 200 与整份会话列表，本轮成败要看列表里该轮的 `status`；`/cancel` 与 `/close` 同样回整份列表。它不等本轮跑完，但会等本轮的记录写进存储再回 200，所以存储不可写时它在返回前就报 `store-unavailable`（503），不会先 200 再静默失败。面板与工具读的是同一份进度：工具的 `progress` 就来自这里。
 
 ## 8. 执行适配器
 
@@ -316,7 +320,7 @@ Codex：
 - **成本是估值**：`cost_usd` 是 CLI 内置价表估算，不是网关账单；工具返回与面板都标注为估值。
 - **宿主需要有 `claude`**：解析规则见 §9；解析不到时本轮返回 `provider-missing`。
 - **`claude` 版本决定可选模型**：`--model` 送到 CLI 之后，模型能不能用由 CLI 版本决定。实测 `kaon/claude-opus-5-5` 在 Claude Code 2.1.177 上返回 400（要求 ≥ 2.1.280），升级到 2.1.318 后同一命令返回 `assistant.model = anthropic/claude-opus-5.5`。默认档配到一个当前 CLI 不支持的模型时，每一轮都会是 `provider-error`，而不是静默换模型。
-- **同步阻塞**：工具在本轮结束才返回，长任务的对话卡片只显示运行中，实时进度只在面板可见。
+- **派发不再阻塞整个回合**：工具最多等 `wait_ms`，之后回一个 `status: "running"` 的轮次；调用方用 `external_session_wait` 取回，或用 `external_session_list` 的 `running` 读进度。
 - **互斥门 fail-closed**：原生外部 provider 没关时本能力完全不挂载，`/api/external-session/*` 返回 404（规则见 §12），不会与原生并存，也不会抢工具名。
   - 自查：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3080/api/external-session/list` 回 `404` 说明没挂载（已挂载但调用方不在围栏内是 `403`，正常是 `200`）；宿主日志里 external-session 的装配拒绝消息会点名 `tool-subagent-claude-code` 与 `tool-subagent-codex`；`grep externalSession ~/.dsh/profiles/web/cordis.patch.yml` 为空说明就是还没迁移。
 - **工具名归实体行，不归预设**：预设行在 Loader 之外实例化插件，工具注册只由实体自己的 Loader 条目承担（机制见 §7）。实体行缺席时这两个工具直接不出现，不会被预设层接管，也不会自动回落到原生实现。

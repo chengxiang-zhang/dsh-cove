@@ -12,7 +12,7 @@ import {
   canResumeSession,
   type ExternalLiveTurn, type ExternalSessionOverview, type ExternalSessionOverviewList,
   type ExternalSessionRecord, type ExternalSessionView, type ExternalTurnDigest,
-  type ExternalTurnRecord, type ExternalTurnView, type ExternalUsage,
+  type ExternalTurnProgress, type ExternalTurnRecord, type ExternalTurnView, type ExternalUsage,
 } from './types.ts'
 
 /** Project one settled turn for the timeline. */
@@ -27,12 +27,19 @@ export function toTurnView(turn: ExternalTurnRecord): ExternalTurnView {
   }
   if (turn.usage !== undefined) view.usage = turn.usage
   if (turn.costUsd !== undefined) view.costUsd = turn.costUsd
+  if (turn.partial === true) view.partial = true
   return view
 }
 
 /** Project a turn that is running now; it has no result or duration yet. */
 export function toLiveTurnView(turn: ExternalLiveTurn): ExternalTurnView {
-  return { n: turn.n, prompt: turn.prompt, status: 'running', startedAt: turn.startedAt }
+  return {
+    n: turn.n,
+    prompt: turn.prompt,
+    status: 'running',
+    startedAt: turn.startedAt,
+    ...turn.progress === undefined ? {} : { progress: turn.progress },
+  }
 }
 
 /**
@@ -79,8 +86,19 @@ export function toTurnDigest(turn: ExternalTurnRecord): ExternalTurnDigest {
   }
 }
 
+/**
+ * Project the running turn for the model-facing list.
+ *
+ * A model polling a long delegation needs to tell a working turn from a dead
+ * one, which is exactly the pair `idle_ms` and `frames` answer.
+ */
+function runningOf(live: ExternalLiveTurn | undefined): ExternalSessionOverview['running'] {
+  if (live?.progress === undefined) return null
+  return { turn: live.n, started_at: live.startedAt, ...live.progress }
+}
+
 /** Project one session for the model-facing list tool. */
-export function toSessionOverview(session: ExternalSessionRecord): ExternalSessionOverview {
+export function toSessionOverview(session: ExternalSessionRecord, live?: ExternalLiveTurn): ExternalSessionOverview {
   const last = session.turns[session.turns.length - 1]
   return {
     id: session.id,
@@ -93,12 +111,16 @@ export function toSessionOverview(session: ExternalSessionRecord): ExternalSessi
     canContinue: canResumeSession(session),
     turnCount: session.turns.length,
     lastTurn: last === undefined ? null : toTurnDigest(last),
+    running: runningOf(live),
   }
 }
 
-/** Project the model-facing list. */
-export function toSessionOverviewList(sessions: readonly ExternalSessionRecord[]): ExternalSessionOverviewList {
-  return { sessions: sessions.map(toSessionOverview) }
+/** Project the model-facing list, taking live turns from one lookup. */
+export function toSessionOverviewList(
+  sessions: readonly ExternalSessionRecord[],
+  liveTurns: ReadonlyMap<string, ExternalLiveTurn> = new Map(),
+): ExternalSessionOverviewList {
+  return { sessions: sessions.map(session => toSessionOverview(session, liveTurns.get(session.id))) }
 }
 
 /** Normalize a CLI-reported usage for the tool result, which uses null for absent. */

@@ -37,6 +37,7 @@ export const DELEGATION_TOOL_NAMES: Readonly<Record<ExternalProvider, string>> =
 /** Control tool names. */
 export const EXTERNAL_SESSION_LIST_TOOL = 'external_session_list'
 export const EXTERNAL_SESSION_STOP_TOOL = 'external_session_stop'
+export const EXTERNAL_SESSION_WAIT_TOOL = 'external_session_wait'
 
 /** Resolves the mounted engine; undefined while the host service is absent. */
 export type GatewayLookup = () => ExternalSessionGateway | undefined
@@ -62,6 +63,31 @@ const ERROR_SCHEMA = {
 } as const
 
 const TURN_STATUS_SCHEMA = { type: 'string', enum: ['completed', 'failed', 'aborted'] } as const
+
+/** Live progress of a turn that has not settled inside the call's wait window. */
+const PROGRESS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    elapsed_ms: { type: 'integer', required: true },
+    idle_ms: { type: 'integer', required: true },
+    frames: { type: 'integer', required: true },
+    tool_calls: { type: 'integer', required: true },
+    chars: { type: 'integer', required: true },
+    tail: { type: 'string', required: true },
+  },
+} as const
+
+const TURN_STARTED_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    session_id: { type: 'string', required: true },
+    turn: { type: 'integer', required: true },
+    status: { type: 'string', enum: ['running'], required: true },
+    progress: { ...PROGRESS_SCHEMA, required: true },
+  },
+} as const
 
 const TURN_RESULT_SCHEMA = {
   oneOf: [
@@ -89,8 +115,12 @@ const TURN_RESULT_SCHEMA = {
         },
         cost_usd: { oneOf: [{ type: 'number' }, { type: 'null' }], required: true },
         can_continue: { type: 'boolean', required: true },
+        // Present only when the turn did not settle and `result` is the text it
+        // had produced; the caller must not read it as a finished answer.
+        partial: { type: 'boolean' },
       },
     },
+    TURN_STARTED_SCHEMA,
     ERROR_SCHEMA,
   ],
 } as const
@@ -141,6 +171,27 @@ const OVERVIEW_LIST_SCHEMA = {
                         required: true,
                       },
                       costUsd: { oneOf: [{ type: 'number' }, { type: 'null' }], required: true },
+                    },
+                  },
+                  { type: 'null' },
+                ],
+                required: true,
+              },
+              // The turn running now, so a poll can tell progress from silence.
+              running: {
+                oneOf: [
+                  {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      turn: { type: 'integer', required: true },
+                      started_at: { type: 'string', required: true },
+                      elapsed_ms: { type: 'integer', required: true },
+                      idle_ms: { type: 'integer', required: true },
+                      frames: { type: 'integer', required: true },
+                      tool_calls: { type: 'integer', required: true },
+                      chars: { type: 'integer', required: true },
+                      tail: { type: 'string', required: true },
                     },
                   },
                   { type: 'null' },
@@ -231,12 +282,30 @@ function modelChoiceParameter(models: readonly ExternalModelOption[]): Parameter
  * @param models - operator-configured catalogue of models this tool may select.
  * @returns the tool definition to register.
  */
+/** How long a delegation call waits inline before returning the running turn. */
+export interface TurnWaits {
+  /** Used when the caller passes no `wait_ms`. */
+  defaultMs: number
+  /** Ceiling for any caller-supplied window. */
+  maxMs: number
+}
+
+/** Wait policy for a host that did not configure one. */
+export const DEFAULT_TURN_WAITS: TurnWaits = { defaultMs: 15_000, maxMs: 600_000 }
+
+/** Map a caller's window onto the configured policy; absent or invalid means the default. */
+export function clampWait(requested: number | undefined, waits: TurnWaits): number {
+  if (requested === undefined || !Number.isFinite(requested) || requested < 0) return waits.defaultMs
+  return Math.min(Math.floor(requested), waits.maxMs)
+}
+
 export function makeDelegationTool(
   provider: ExternalProvider,
   lookup: GatewayLookup,
   toolName: string = DELEGATION_TOOL_NAMES[provider],
   models: readonly ExternalModelOption[] = [],
   defaultModel?: string,
+  waits: TurnWaits = DEFAULT_TURN_WAITS,
 ): ToolDefinition {
   const label = provider === 'claude' ? 'Claude Code' : 'Codex'
   const defaultLine = defaultModel === undefined
@@ -260,9 +329,13 @@ export function makeDelegationTool(
       + 'the follow-up runs in the CLI session that already holds the earlier context, so it need not '
       + 'be restated and the prior work is still there. '
       + catalogue
-      + 'The call blocks until the turn finishes. A returned can_continue of false means the CLI did '
-      + 'not report a conversation id, so start a new session for further work. '
-      + 'Failures come back as a code and one sentence, never as raw CLI output.',
+      + 'The call waits at most wait_ms for the answer. A turn that settles inside that window returns '
+      + 'its result. A slower one returns status "running" with progress, and the caller keeps working '
+      + 'and collects it later with external_session_wait on the same session_id \u2014 do not block a '
+      + 'whole turn on one long external run. A result carrying partial: true is the text the turn had '
+      + 'produced when it was cancelled, stalled or timed out; it is incomplete, not an answer. '
+      + 'A returned can_continue of false means the CLI did not report a conversation id, so start a new '
+      + 'session for further work. Failures come back as a code and one sentence, never raw CLI output.',
     parameters: {
       prompt: {
         type: 'string',
@@ -285,6 +358,12 @@ export function makeDelegationTool(
         description: 'Short title for a new session, shown in the panel. Ignored when continuing.',
       },
       model: modelParameter,
+      wait_ms: {
+        type: 'integer',
+        description:
+          'How long to wait for the answer before returning the running turn: 0 returns at once, '
+          + `omit to wait ${waits.defaultMs} ms, max ${waits.maxMs} ms.`,
+      },
     },
     output: {
       schema: TURN_RESULT_SCHEMA,
@@ -307,7 +386,11 @@ export function makeDelegationTool(
       const chosen = typeof rawModel === 'string' ? rawModel.trim() : ''
       if (chosen.length > 0) request.model = chosen
       else if (defaultModel !== undefined) request.model = defaultModel
-      return gateway.runTurn(request)
+      // Start first, then wait a bounded window: a thirty-minute dispatch must not
+      // hold the caller's turn open, and a short answer still lands inline.
+      const started = await gateway.startTurn(request)
+      if ('code' in started) return started
+      return gateway.awaitTurn(started.session_id, clampWait((args as { wait_ms?: number }).wait_ms, waits))
     },
     presentCall(args): GenericCallView {
       return {
@@ -405,6 +488,59 @@ export function makeStopTool(
 }
 
 /**
+ * Build the bounded-wait tool.
+ *
+ * A delegation that came back `running` is collected with this instead of a
+ * hand-written poll loop: it waits up to `timeout_ms` on the same turn and
+ * answers with the result when it settles, or the still-running turn with its
+ * progress when it does not.
+ * @param lookup - resolves the mounted engine.
+ * @param waits - wait policy, for the default window and the ceiling.
+ * @param toolName - model-visible tool name.
+ * @returns the tool definition to register.
+ */
+export function makeWaitTool(
+  lookup: GatewayLookup,
+  waits: TurnWaits = DEFAULT_TURN_WAITS,
+  toolName: string = EXTERNAL_SESSION_WAIT_TOOL,
+): ToolDefinition {
+  return defineTool({
+    name: toolName,
+    description:
+      'Wait for a delegated external turn that is still running, and return its result when it settles. '
+      + `Waits at most timeout_ms (omit for ${waits.defaultMs} ms, max ${waits.maxMs} ms). `
+      + 'A turn that is still going comes back with status "running" and its progress: idle_ms is how '
+      + 'long the CLI has been silent, frames and chars say whether it is doing anything. '
+      + 'Poll with this instead of blocking on the delegation call.',
+    parameters: {
+      session_id: {
+        type: 'string',
+        required: true,
+        description: 'External session id whose turn to wait on.',
+      },
+      timeout_ms: {
+        type: 'integer',
+        description: `How long to wait before returning the running turn; omit for ${waits.defaultMs} ms, max ${waits.maxMs} ms.`,
+      },
+    },
+    output: {
+      schema: TURN_RESULT_SCHEMA,
+      render: (_args, value) => jsonText(value),
+    },
+    async execute(args) {
+      const gateway = lookup()
+      if (gateway === undefined) {
+        return SERVICE_UNMOUNTED
+      }
+      return gateway.awaitTurn(args.session_id, clampWait(args.timeout_ms, waits))
+    },
+    presentCall(args): GenericCallView {
+      return { card: 'generic', title: 'Wait on external turn', kind: 'read', rawInput: args }
+    },
+  })
+}
+
+/**
  * Register one tool, tolerating a registry that is absent or already holds the
  * name. A second preset row for the same capability must not fail the plugin.
  *
@@ -469,6 +605,7 @@ export function registerDelegationTools(
   gateway: ExternalSessionGateway,
   delegation: ResolvedExternalSessionConfig['delegation'],
   warn: (message: string) => void,
+  waits: TurnWaits = DEFAULT_TURN_WAITS,
 ): () => void {
   const lookup: GatewayLookup = () => gateway
   const onSkip = (tool: ToolDefinition, error: unknown): void => {
@@ -480,12 +617,13 @@ export function registerDelegationTools(
     if (!surface.enabled) continue
     disposers.push(registerToolTolerantly(
       ctx,
-      makeDelegationTool(provider, lookup, DELEGATION_TOOL_NAMES[provider], surface.models, surface.default),
+      makeDelegationTool(provider, lookup, DELEGATION_TOOL_NAMES[provider], surface.models, surface.default, waits),
       onSkip,
     ))
   }
   // The control tools describe the store, not one CLI: they are registered once.
   disposers.push(registerToolTolerantly(ctx, makeListTool(lookup), onSkip))
   disposers.push(registerToolTolerantly(ctx, makeStopTool(lookup), onSkip))
+  disposers.push(registerToolTolerantly(ctx, makeWaitTool(lookup, waits), onSkip))
   return () => { for (const dispose of disposers) dispose() }
 }

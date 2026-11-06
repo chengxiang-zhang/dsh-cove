@@ -68,6 +68,11 @@ export function externalSessionStatusFor(code: ExternalErrorCode): number {
       return 501
     case 'provider-error':
       return 502
+    // A cancelled deadline describes a turn that already started, exactly like
+    // `provider-error`; the panel reads it from the turn record.
+    case 'turn-stalled':
+    case 'turn-timeout':
+      return 502
     case 'store-unavailable':
       return 503
     case 'auth-required':
@@ -206,15 +211,15 @@ export function makeExternalSessionRoutes(deps: ExternalSessionRoutesDeps): WebR
           fail(response, 404, 'session-unknown', 'no external session has that id')
           return
         }
-        const refusal = await gateway.startTurn({
+        const started = await gateway.startTurn({
           provider: existing.provider,
           prompt,
           sessionId,
           // A continuation runs where the CLI conversation started.
           cwd: existing.cwd,
         })
-        if (refusal !== null) {
-          refuse(response, refusal)
+        if ('code' in started) {
+          refuse(response, started)
           return
         }
         ok(response, await gateway.listViews())

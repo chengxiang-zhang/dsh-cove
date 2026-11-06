@@ -30,7 +30,7 @@ const SUBAGENT_TREE_LABEL = /子智能体|subagent/i
 export const GROUP_SELECTOR = `[data-dsh-plugin="${EXTERNAL_GROUP_PLUGIN}"][data-dsh-part="${GROUP_PART}"]`
 export const ROW_SELECTOR = `[data-dsh-plugin="${EXTERNAL_GROUP_PLUGIN}"][data-dsh-part="${ROW_PART}"]`
 
-/** 分组里要用的三句话，由调用方从 locale 取好。 */
+/** 分组里要用的文案，由调用方从 locale 取好。 */
 export interface ExternalGroupText {
   /** 分组头：「外援 · 3」。 */
   readonly title: string
@@ -38,6 +38,13 @@ export interface ExternalGroupText {
   readonly tag: string
   /** 行内无障碍名：`openAria(title)`。 */
   readonly openAria: (title: string) => string
+  /**
+   * 行内状态：「运行中 12s · 静默 3s」/「失败」/「已关闭」，空闲行返回空串。
+   *
+   * 一条没有状态的列表，用户只能靠「都长一样」判断它卡住了；轮次进度仍归右侧
+   * 面板，这里只回答「这一行现在有没有在跑」。
+   */
+  readonly stateOf: (session: ExternalSessionView) => string
 }
 
 /** 找会话头部的子智能体下拉树；不是这棵树就返回 undefined。 */
@@ -158,6 +165,10 @@ function createRow(
   label.setAttribute('data-dsh-part', 'row-label')
   label.className = css.groupLabel
   row.appendChild(label)
+  const detail = doc.createElement('span')
+  detail.setAttribute('data-dsh-part', 'row-state')
+  detail.className = css.groupState
+  row.appendChild(detail)
   const tag = doc.createElement('span')
   tag.setAttribute('data-dsh-part', 'row-tag')
   tag.className = css.groupTag
@@ -186,9 +197,14 @@ function updateRow(
   row.dataset.sessionId = session.id
   const label = row.querySelector('[data-dsh-part="row-label"]')
   if (label !== null) setText(label, session.title === '' ? session.id : session.title)
-  row.setAttribute('aria-label', text.openAria(session.title === '' ? session.id : session.title))
+  // 状态进无障碍名，也进行内一行文字：只有标题和同一个标签时，九行看着一模一样，
+  // 用户无法区分「在跑」「失败」「早就结束」。
+  const state = text.stateOf(session)
+  const title = session.title === '' ? session.id : session.title
+  row.setAttribute('aria-label', state === '' ? text.openAria(title) : text.openAria(title) + ' · ' + state)
   row.setAttribute('aria-selected', 'false')
-  // 行不显示执行状态；只有平台与终端标签，正文里也不写 token/耗时。
+  const detail = row.querySelector('[data-dsh-part="row-state"]')
+  if (detail !== null) setText(detail, state)
   if (onOpen !== undefined) row.dataset.openable = ''
 }
 

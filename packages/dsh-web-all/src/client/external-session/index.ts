@@ -29,6 +29,7 @@ import {
   type ExternalSessionTabInfo,
   type ExternalSessionTranslate,
 } from './panel.tsx'
+import type { ExternalSessionView } from './types.ts'
 
 /** 右栏页签的 kind（官方页签注册用的稳定 id）。 */
 export const EXTERNAL_SESSION_TAB_KIND = 'web-ui.external-session'
@@ -44,6 +45,9 @@ const GROUP_SYNC_DEBOUNCE_MS = 60
 
 /** 弹层展开且存在运行中的会话时的刷新间隔（宿主 continue 立刻返回，运行态靠轮询收敛）。 */
 const GROUP_RUNNING_POLL_MS = 2_000
+
+/** 弹层开着但没有会话在跑时的刷新节拍：够看到新派发与刚失败的会话。 */
+const GROUP_IDLE_POLL_MS = 5_000
 
 /** 官方右栏页签定义（本模块只用到这几个字段）。 */
 interface NativeTabDefinition {
@@ -86,11 +90,43 @@ function bindTranslate(ctx: ClientContext): ExternalSessionTranslate {
 }
 
 /** 下拉分组要的三句话（自有计数在这里成形）。 */
+/** 秒级耗时压成 12s / 3m / 2h，行内只放得下这么长。 */
+function shortDuration(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.round(seconds / 60)
+  return minutes < 60 ? `${minutes}m` : `${Math.round(minutes / 60)}h`
+}
+
+/**
+ * 一行现在处于什么状态。
+ *
+ * 空闲行返回空串：一个列表里全是「就绪」等于没说。还在跑、失败、已关闭、或刚
+ * 返回部分结果的行才需要一句话，这也正是用户判断「是不是卡住了」的依据。
+ */
+function stateOf(session: ExternalSessionView, t: ExternalSessionTranslate): string {
+  const live = [...(session.turns ?? [])].reverse().find(turn => turn.status === 'running')
+  if (live !== undefined) {
+    const progress = live.progress
+    const elapsed = progress === undefined ? '0s' : shortDuration(progress.elapsed_ms)
+    if (progress !== undefined && progress.idle_ms >= 5_000) {
+      return t('group.state.runningIdle', { elapsed, idle: shortDuration(progress.idle_ms) })
+    }
+    return t('group.state.running', { elapsed })
+  }
+  const last = session.turns?.[session.turns.length - 1]
+  if (session.status === 'closed') return t('group.state.closed')
+  if (session.status === 'failed') return t('group.state.failed')
+  if (last?.partial === true) return t('group.state.partial')
+  return ''
+}
+
 function groupText(t: ExternalSessionTranslate, count: number): ExternalGroupText {
   return {
     title: t('group.title', { count }),
     tag: t('group.tag'),
     openAria: (title: string) => t('group.openAria', { title }),
+    stateOf: (session: ExternalSessionView) => stateOf(session, t),
   }
 }
 
@@ -138,19 +174,29 @@ function mountDropdownGroup(deps: FaceDeps): () => void {
   if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return () => {}
   let timer: ReturnType<typeof setTimeout> | undefined
   let poll: ReturnType<typeof setInterval> | undefined
+  let pollCadence = 0
   let disposed = false
 
-  /** 弹层在且确实有会话在跑时刷新计数；跑完或弹层关掉就停。 */
+  /**
+   * 弹层在就刷新，弹层关掉就停。
+   *
+   * 只在「有会话在跑」时轮询，会让刚派发完或刚失败的列表停在旧快照上：用户看到
+   * 的永远是打开时那几行。空闲用一个更慢的节拍，仍在跑用快节拍。
+   */
   const keepPolling = (present: boolean, running: boolean): void => {
-    const wanted = present && running
-    if (wanted && poll === undefined) {
-      poll = setInterval(() => { void deps.store.refresh() }, GROUP_RUNNING_POLL_MS)
+    const cadence = running ? GROUP_RUNNING_POLL_MS : GROUP_IDLE_POLL_MS
+    if (!present) {
+      if (poll !== undefined) {
+        clearInterval(poll)
+        poll = undefined
+        pollCadence = 0
+      }
       return
     }
-    if (!wanted && poll !== undefined) {
-      clearInterval(poll)
-      poll = undefined
-    }
+    if (poll !== undefined && pollCadence === cadence) return
+    if (poll !== undefined) clearInterval(poll)
+    pollCadence = cadence
+    poll = setInterval(() => { void deps.store.refresh() }, cadence)
   }
 
   const sync = (): void => {

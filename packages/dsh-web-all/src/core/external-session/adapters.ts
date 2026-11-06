@@ -140,6 +140,31 @@ export interface ExternalAdapterConfig {
   readonly bin: string
 }
 
+/**
+ * Live facts one in-flight turn publishes while its process runs.
+ *
+ * A blocking tool call used to be the only way to learn anything before the end,
+ * which meant a cancelled turn returned nothing at all. These four numbers are
+ * what a caller can act on mid-turn: the frame count and the timestamp of the
+ * last frame distinguish a slow turn from a dead one, and the tail carries the
+ * answer a cancelled turn already produced.
+ */
+export interface TurnProgress {
+  /** Well-formed stream frames seen so far. */
+  frames: number
+  /** Tool-call frames seen so far, 0 for a stream that carries none. */
+  toolCalls: number
+  /** Model-authored characters accumulated so far. */
+  chars: number
+  /** Epoch milliseconds of the most recent frame; the stall watchdog reads this. */
+  lastFrameAt: number
+  /** Bounded tail of model-authored text, so a caller never sees an empty string. */
+  tail: string
+}
+
+/** Characters of model-authored text a progress report keeps. */
+export const TURN_TAIL_MAX_CHARS = 4_000
+
 /** One turn handed to an adapter. */
 export interface TurnRequest {
   /** The prompt as the caller submitted it. */
@@ -154,6 +179,14 @@ export interface TurnRequest {
   model?: string
   /** Aborting cancels this turn. */
   signal?: AbortSignal
+  /**
+   * Publishes live progress while the process runs.
+   *
+   * Called from the adapter's own read loop, so an implementation must stay
+   * cheap and total: it is bookkeeping, and throwing here would turn a healthy
+   * turn into a failed one. Omitted means nobody is watching.
+   */
+  report?: (progress: TurnProgress) => void
 }
 
 /** Fields every settled turn reports. */
@@ -169,6 +202,12 @@ export interface TurnOutcomeBase {
   usage?: ExternalUsage
   /** The CLI's own price-table estimate. Never a bill. */
   costUsd?: number
+  /**
+   * True when `result` is text accumulated from the stream rather than a
+   * terminal frame, which happens when the turn was cancelled, stalled or the
+   * CLI exited without settling. Readers must not treat it as a finished answer.
+   */
+  partial?: boolean
 }
 
 /**

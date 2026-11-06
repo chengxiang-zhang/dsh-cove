@@ -14,6 +14,8 @@ const text = {
   title: '外援 · {count}',
   tag: '外部任务',
   openAria: (title: string) => `打开外援会话「${title}」`,
+  // 行状态由调用方给；这组用例只钉分组与行结构，状态文案另见下方用例。
+  stateOf: (_session: ExternalSessionView) => '',
 }
 
 /** The three strings the group needs, already interpolated per count. */

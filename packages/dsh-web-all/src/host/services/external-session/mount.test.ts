@@ -177,7 +177,7 @@ describe('delegation surface on the host domain', () => {
     const ctx = contextWith({ subagents: 'absent', tools })
     const dispose = register(ctx, { config: { storePath: '/tmp/external-session-mount-test-6.json' } })
     expect([...tools.registered.keys()].sort())
-      .toEqual(['external_session_list', 'external_session_stop', 'subagent_claude_code', 'subagent_codex'])
+      .toEqual(['external_session_list', 'external_session_stop', 'external_session_wait', 'subagent_claude_code', 'subagent_codex'])
     dispose()
   })
 
@@ -188,7 +188,7 @@ describe('delegation surface on the host domain', () => {
       config: { storePath: '/tmp/external-session-mount-test-7.json', tools: { codex: { enabled: false } } },
     })
     expect([...tools.registered.keys()].sort())
-      .toEqual(['external_session_list', 'external_session_stop', 'subagent_claude_code'])
+      .toEqual(['external_session_list', 'external_session_stop', 'external_session_wait', 'subagent_claude_code'])
     dispose()
   })
 
@@ -224,7 +224,7 @@ describe('delegation surface on the host domain', () => {
     const warnings = captureWarnings(ctx)
     const dispose = register(ctx, { config: { storePath: '/tmp/external-session-mount-test-9.json' } })
     expect([...tools.registered.keys()].sort())
-      .toEqual(['external_session_list', 'external_session_stop', 'subagent_codex'])
+      .toEqual(['external_session_list', 'external_session_stop', 'external_session_wait', 'subagent_codex'])
     const shadow = warnings.find(message => message.includes('subagent_claude_code'))
     expect(shadow).toBeDefined()
     expect(shadow).toContain('already registered')

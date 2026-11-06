@@ -297,6 +297,8 @@ describe('external-session routes', () => {
         'auth-required': 409,
         'provider-error': 502,
         'store-unavailable': 503,
+        'turn-stalled': 502,
+        'turn-timeout': 502,
       })
     })
 

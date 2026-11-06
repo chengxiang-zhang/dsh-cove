@@ -72,7 +72,7 @@ T5 重估：每 5 轮 / 每里程碑 / 每次压缩后 / 触发升级条件 → 
 **强模型档内的固定顺序（不许自选）**：`subagent_codex`（codex CLI，`model` 省略即 `gpt-6-astra`）→ `subagent_claude_code`（claude CLI，`model: kaon/claude-opus-5-5`；**codex 不可用时直接换这个**）。两者都没有 `provider` 参数：换族就是换工具。
 
 路由纪律：
-- **派一次就够**，默认单路；第二路只在带**不同攻击切片**时开。
+- **派一次就够**，默认单路；第二路只在带**不同攻击切片**时开。派发不占住回合：回 `status: running` 就继续做别的，用 `external_session_wait` 取回（见 `design-dispatch`）。
 - 派发内容与格式见 `design-dispatch`。
 - 每个强模型派发都记一行 `escalation_reason`（判据不完备 / 委派工具不可用 / 需要外部视角），月底看这个分布：多数失败是"packet 没写清"就改 packet，不是多派。
 

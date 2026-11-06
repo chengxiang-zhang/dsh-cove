@@ -77,6 +77,11 @@ export const zh = {
   'group.tag': '外部任务',
   'group.empty': '还没有外援会话',
   'group.openAria': '打开外援会话「{title}」',
+  'group.state.running': '运行中 {elapsed}',
+  'group.state.runningIdle': '运行中 {elapsed} · 静默 {idle}',
+  'group.state.failed': '失败',
+  'group.state.closed': '已关闭',
+  'group.state.partial': '部分结果',
 } as const
 
 /** 键集。 */
@@ -155,6 +160,11 @@ export const en: Record<ExternalSessionLocaleKey, string> = {
   'group.tag': 'external task',
   'group.empty': 'No external sessions',
   'group.openAria': 'Open external session “{title}”',
+  'group.state.running': 'running {elapsed}',
+  'group.state.runningIdle': 'running {elapsed} · quiet {idle}',
+  'group.state.failed': 'failed',
+  'group.state.closed': 'closed',
+  'group.state.partial': 'partial result',
 }
 
 /** 按 `{name}` 占位符插值；缺失的参数原样留空，不抛错。 */

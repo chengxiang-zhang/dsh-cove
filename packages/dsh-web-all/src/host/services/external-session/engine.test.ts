@@ -266,7 +266,15 @@ describe('external-session engine', () => {
     const snapshot = await engine.listViews()
     expect(snapshot.sessions[0]?.status).toBe('running')
     expect(snapshot.sessions[0]?.turns).toEqual([
-      { n: 1, prompt: 'long one', status: 'running', startedAt: '2026-11-04T12:00:00.000Z' },
+      {
+        n: 1,
+        prompt: 'long one',
+        status: 'running',
+        startedAt: '2026-11-04T12:00:00.000Z',
+        // The live turn carries its progress: frames and idle time are what a
+        // caller judges a slow dispatch by, so the panel and the tool agree.
+        progress: { elapsed_ms: 0, idle_ms: 0, frames: 0, tool_calls: 0, chars: 0, tail: '' },
+      },
     ])
     claude.settle({ status: 'completed' })
     await running
@@ -276,8 +284,9 @@ describe('external-session engine', () => {
   it('startTurn returns before the turn settles and leaves it running', async () => {
     const { engine, claude } = await setup()
     claude.autoOutcome = undefined
-    const refusal = await engine.startTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' })
-    expect(refusal).toBeNull()
+    const started = await engine.startTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' })
+    // The identity is what the caller polls with; the turn itself is still running.
+    expect(started).toMatchObject({ session_id: 'ext-1', turn: 1, status: 'running' })
     await waitFor(() => claude.inFlight === 1, 'the started turn to reach the adapter')
     expect((await engine.listViews()).sessions[0]?.status).toBe('running')
 
@@ -378,7 +387,8 @@ describe('external-session engine', () => {
     it('records the running state before startTurn reports the start', async () => {
       const { engine, claude, store } = await setup()
       claude.autoOutcome = undefined
-      expect(await engine.startTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' })).toBeNull()
+      expect(await engine.startTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' }))
+        .toMatchObject({ status: 'running', session_id: 'ext-1', turn: 1 })
       // Durable before the caller is told: no window where it runs unfindable.
       expect(store.get('ext-1')?.status).toBe('running')
       await waitFor(() => claude.inFlight === 1, 'the turn to reach the adapter')
@@ -387,7 +397,8 @@ describe('external-session engine', () => {
     it('cancels in the same tick after startTurn returns', async () => {
       const { engine, claude } = await setup()
       claude.autoOutcome = undefined
-      expect(await engine.startTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' })).toBeNull()
+      expect(await engine.startTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' }))
+        .toMatchObject({ status: 'running' })
 
       // No tick to spare: the panel's cancel lands the instant continue comes back.
       const cancelling = engine.cancel('ext-1')
@@ -411,7 +422,7 @@ describe('external-session engine', () => {
 
       let outcome = 'pending'
       const starting = engine.startTurn({ provider: 'claude', prompt: 'long', cwd: '/tmp' })
-        .then(result => { outcome = result === null ? 'started' : result.code; return result })
+        .then(result => { outcome = 'code' in result ? result.code : 'started'; return result })
       // Give the preflight and the write attempt every chance to report early.
       await new Promise(resolve => setTimeout(resolve, 5))
       expect(outcome).toBe('pending')
@@ -420,7 +431,7 @@ describe('external-session engine', () => {
       // finds it; the start is reported only once the record is durable.
       const cancelling = engine.cancel('ext-1')
       release()
-      expect(await starting).toBeNull()
+      expect(await starting).toMatchObject({ status: 'running' })
       expect(outcome).toBe('started')
       expect(await cancelling).toBeNull()
       expect(claude.calls[0]?.signal?.aborted).toBe(true)
