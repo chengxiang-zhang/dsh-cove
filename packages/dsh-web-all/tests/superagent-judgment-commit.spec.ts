@@ -312,3 +312,17 @@ describe('judgment commit', () => {
     expect(one(r, `SELECT count(*) AS n FROM sa_intake WHERE disposition = 'decline' AND (reason IS NULL OR alternative IS NULL)`).n).toBe(0)
   })
 })
+
+describe('attributeTurnEnd', () => {
+  it('names the refusing commit and keeps the code under the tool that refused', async () => {
+    const { attributeTurnEnd } = await import('../src/host/services/superagent/judgment/translate.ts')
+    expect(attributeTurnEnd('unknown', [{ tool: 'judge', ok: true }, { tool: 'commit', ok: false, code: 'EXECUTOR_UNKNOWN' }]))
+      .toEqual({ end_reason: 'error', commit: { ok: false, code: 'EXECUTOR_UNKNOWN' } })
+    // A refused look explains the end too, but its code must not be filed as a commit.
+    expect(attributeTurnEnd('unknown', [{ tool: 'look', ok: false, code: 'MISSING' }]))
+      .toEqual({ end_reason: 'error' })
+    // A protocol reason wins over any tool trace.
+    expect(attributeTurnEnd('completed', [{ tool: 'commit', ok: false, code: 'X' }]))
+      .toEqual({ end_reason: 'completed' })
+  })
+})

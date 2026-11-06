@@ -249,5 +249,7 @@ export function attributeTurnEnd(
   if (base !== 'unknown') return { end_reason: base }
   const last = [...trace].reverse().find(t => !t.ok)
   if (!last) return { end_reason: base }
-  return { end_reason: 'error', ...(last.code === undefined ? {} : { commit: { ok: false as const, code: last.code } }) }
+  // The failing tool is not necessarily the commit: a refused `look` explained the
+  // end just as well, but its code does not belong under a `commit` key.
+  return { end_reason: 'error', ...(last.tool === 'commit' && last.code !== undefined ? { commit: { ok: false as const, code: last.code } } : {}) }
 }
