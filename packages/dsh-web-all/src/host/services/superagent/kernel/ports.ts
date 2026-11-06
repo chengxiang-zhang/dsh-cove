@@ -40,6 +40,12 @@ export interface SpeechProposal {
   audience: Audience
   payload: Payload
   text: string
+  /**
+   * Which tool produced the line, when the moment is not the model's to choose.
+   * `pushback` is the only such moment: `02` says it comes from the pushback tool
+   * and never from `say`, so the outlet policy has to see the provenance.
+   */
+  source?: 'pushback'
   idem_key: string
   expects_reply?: boolean
 }

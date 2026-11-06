@@ -143,6 +143,7 @@ export function pushbackTool(deps: JudgmentDeps) {
       commitment_id: target.commitment_id,
       chat_id: chatIdOf(ctx),
       moment: 'pushback',
+      source: 'pushback',
       payload: 'text',
       audience: 'requester',
       text: `${input.concern} 备选：${input.alternative}`,

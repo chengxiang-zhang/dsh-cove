@@ -167,11 +167,17 @@ async function e2Ask() {
   const out = outboxOf(r.eventId)
   const egress = egressFor(r.messageId)
   const forbidden = (traceOf(d)?.tools ?? []).filter(t => t.code === 'MOMENT_FORBIDDEN')
-  const pass = Boolean(intake.disposition === 'ask' && d.end_reason === 'completed' && forbidden.length === 0
-    && out.some(o => o.state === 'sent') && egress.length >= 1)
-  record('E-3', 'R5/R15 + 08 不可逆必须问；14:37 死锁回归', pass, {
+  // An irreversible request has two legitimate answers in the design: ask (one
+  // question with a default) or pushback (one disagreement with grounds and an
+  // alternative). Both are "did not just do it"; the spoken line must carry the
+  // matching moment, and `say` may not claim pushback (that is the tool's).
+  const spoke = out.find(o => o.state === 'sent' && o.moment === intake.disposition && o.words > 0)
+  const pass = Boolean(['ask', 'pushback'].includes(intake.disposition) && d.end_reason === 'completed'
+    && spoke !== undefined && egress.length >= 1)
+  record('E-3', 'R5/R15 + 08 不可逆必须问或顶住；14:37 死锁回归', pass, {
     ingress: `${r.status}/${r.stored}`, disposition: intake.disposition, deliberation: `${d.end_reason} ops=${d.ops}`,
-    moments: out.map(o => `${o.moment}/${o.state}`), forbidden: forbidden.length, egress: egress.length,
+    spoken: spoke === undefined ? 'MISSING' : `${spoke.moment}/${spoke.words}w`, moments: out.map(o => `${o.moment}/${o.state}/${o.words}w`),
+    forbidden: forbidden.length, egress: egress.length,
   })
 }
 

@@ -40,6 +40,8 @@ export interface MomentFacts {
   brokenOrAtRiskOrDispatchFailed: boolean
   /** This is an agenda turn and the host reported a signal. */
   isAgendaTurnWithSignal: boolean
+  /** The line came from the pushback tool, which is the only producer of that moment. */
+  byPushbackTool: boolean
   /** The host itself is the author (fallback acknowledgement, daily brief, timeout line). */
   byHost: boolean
 }
@@ -77,7 +79,9 @@ export function momentAllowed(moment: OutboxMoment, facts: MomentFacts): boolean
     case 'brief':
       return facts.byHost
     case 'pushback':
-      return false
+      // `02`: the moment belongs to the pushback tool. `say` can never claim it,
+      // and the tool's own line carries the provenance the outlet checks here.
+      return facts.byPushbackTool
     default:
       // A value outside the closed union is a protocol violation, not a moment.
       return false

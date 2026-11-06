@@ -53,6 +53,7 @@ function facts(overrides: Partial<MomentFacts> = {}): MomentFacts {
     hasAskedAssumptionOrRoute: true,
     brokenOrAtRiskOrDispatchFailed: true,
     isAgendaTurnWithSignal: true,
+    byPushbackTool: false,
     byHost: true,
     ...overrides,
   }
@@ -223,8 +224,10 @@ describe('timing and wording', () => {
     expect(momentAllowed('ack', facts({ committedInThisTurn: false, byHost: false }))).toBe(false)
     expect(momentAllowed('ack', facts({ committedInThisTurn: true }))).toBe(true)
     expect(momentAllowed('ack', facts({ committedInThisTurn: false, byHost: true }))).toBe(true)
-    // `pushback` is produced by the pushback tool and never by say.
+    // `pushback` is produced by the pushback tool and never by say: the moment is
+    // refused for a model-authored line and allowed for the tool's own line.
     expect(momentAllowed('pushback', facts())).toBe(false)
+    expect(momentAllowed('pushback', facts({ byPushbackTool: true }))).toBe(true)
     expect(momentAllowed('deliver', facts({ commitmentTerminal: false }))).toBe(false)
     // A model-authored `cannot` still has to earn it; the host's own timeout line is
     // the exception (its idem key carries the `cannot:` prefix).

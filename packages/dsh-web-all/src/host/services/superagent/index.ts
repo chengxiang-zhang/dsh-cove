@@ -244,6 +244,7 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
           brokenOrAtRiskOrDispatchFailed: !!c && (c.state === 'broken' || c.state === 'at_risk'
             || read.get(`SELECT 1 FROM ${PHYSICAL.attempt} WHERE commitment_id = ? AND end_reason = 'dispatch_failed'`, c.commitment_id) !== undefined),
           isAgendaTurnWithSignal: !!c && read.get(`SELECT 1 FROM ${PHYSICAL.deliberation} WHERE commitment_id = ? AND trigger_kind = 'agenda'`, c.commitment_id) !== undefined,
+          byPushbackTool: p.source === 'pushback',
           byHost: HOST_KEYS.test(p.idem_key),
         }
       },
