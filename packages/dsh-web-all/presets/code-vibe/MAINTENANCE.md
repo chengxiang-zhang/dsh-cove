@@ -136,3 +136,9 @@
     - 改动：`client/external-session/index.ts` 不再登记 `guide`（同时删掉随之无用的图标 import 与 `TAB_ORDER`），页签本身与下拉条目保留。入口改为会话头部下拉的外援条目——与"外援跟会话绑定"同一口径。
     - 读数：`mount.test.tsx` 增加一条断言（注册了 id/kind、且 `guide` 为空）；客户端 69 条全绿。
     - 回滚：恢复 `guide` 数组即可重新出现在菜单里，无数据或契约变化。
+
+22. **进度改为增量流（2026-11-06）**：旧协议下 claude 一条回答只落一帧（`assistant`），单条超长消息期间只有心跳，看起来与卡死无异。
+    - 取样：`claude -p --output-format stream-json --verbose --include-partial-messages --permission-mode auto` 跑 120 词回答，8 帧 → **74 帧**（其中 60 个 `content_block_delta`/`text_delta`，每个正文块一小段）。
+    - 改动：claude 适配器 argv 加 `--include-partial-messages`；累计器把 `text_delta` 拼进 `text` 并据此推进 `chars`/`tail`/`idle_ms`；后到的 `assistant` 帧整段重复同一文本，用 `sawDeltas` 标记避免重复计数；没有增量的旧流仍按旧路径解析。
+    - 读数：新增 `providers/claude.test.ts` 4 条（增量累计、不重复、旧流兼容、半行跨读）；真机 gated 用例复跑绿，取消那条从 26.6 s 降到 **7.5 s**（增量一进来就满足取消条件）。
+    - 回滚：去掉 argv 里的 `--include-partial-messages` 即可回到一帧一消息，累计器对无增量流本就兼容。

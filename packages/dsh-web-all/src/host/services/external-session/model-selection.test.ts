@@ -75,12 +75,12 @@ describe('claude argv', () => {
 
   it('keeps the CLI default when no model is pinned', () => {
     expect(claudeTurnArgv('hi')).not.toContain('--model')
-    expect(claudeTurnArgv('hi', 'sess-1')).toEqual(['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'auto', '--resume', 'sess-1', 'hi'])
+    expect(claudeTurnArgv('hi', 'sess-1')).toEqual(['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', 'auto', '--resume', 'sess-1', 'hi'])
   })
 
   it('carries the model on a continuation too', () => {
     const argv = claudeTurnArgv('again', 'sess-1', 'kaon/claude-haiku-5-5')
-    expect(argv).toEqual(['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'auto', '--model', 'kaon/claude-haiku-5-5', '--resume', 'sess-1', 'again'])
+    expect(argv).toEqual(['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', 'auto', '--model', 'kaon/claude-haiku-5-5', '--resume', 'sess-1', 'again'])
   })
 })
 

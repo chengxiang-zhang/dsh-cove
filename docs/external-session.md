@@ -143,6 +143,7 @@ external_session_stop(session_id)
 - `wait_ms` 决定这次调用等多久：默认等 15000 毫秒，`0` 立刻返回，上限 600000。窗口内结束的轮次直接回结果；没结束的回 `status: "running"` 与 `progress`（`elapsed_ms` / `idle_ms` / `frames` / `tool_calls` / `chars` / `tail`），调用方继续做别的事，再用 `external_session_wait` 取回。一次三十多分钟的派发不再占住整个回合。
 - `external_session_wait` 等一个还在跑的轮次：默认 60000 毫秒、上限 600000。窗口内结束回结果，否则回仍在跑的轮次与它的进度。`idle_ms` 是判断"卡住还是在想"的读数。
 - 结果里出现 `partial: true` 表示 `result` 是被取消 / 停滞 / 超时那一轮的已产出文本，不是完整答案；`result` 永远不是空串。
+- 进度粒度：claude 侧带 `--include-partial-messages`，一条回答按 `text_delta` 帧推进——实测 120 词的回答由 8 帧变为 74 帧，`chars`/`tail` 在生成过程中持续增长；codex 侧按 `item.completed` 推进（一条消息一帧）。
 
 两个派发工具各自带一个可选的 `model`：目录由实体行的 `config.externalSession.tools` 给，不写在代码里。行上的 `config.models` 是 `[{ id, description }]`，编译成参数 schema 的 `oneOf` 分支，于是每个候选模型在选择处就带着自己的说明；行上不给 `models` 时该参数退化为自由字符串，最终由 CLI 自己的设置决定。两个工具各带各的目录，避免把 Claude 的模型 id 递给 Codex。
 
@@ -222,7 +223,7 @@ Codex：
 2. **右侧面板**：列表与轮次时间线（输入摘要、结果、耗时、用量、运行中/部分结果标记），操作包括追问、取消本轮、关闭。默认只看本会话派出的外援，勾选「全部会话」才显示其它会话与来源未知的历史记录（后者标「其它会话」/「来源未知」）。**它不在右栏的启动菜单里**：右栏那排入口是各页签注册时 `guide` 数组的展开，而外援是按会话产生的从属视图，不是常驻工具；入口是从会话头部的下拉条目点进来（`openTab` 仍按 kind 打开它）。
 3. **对话流**：每次调用是一张普通工具卡片，与其它工具一致。
 
-右栏启动菜单只保留原生工具（工作区文件、终端、Git 管理、Agent 浏览器）。
+右栏启动菜单只保留原生工具（工作区文件、终端、Git 管理）。
 
 数据由服务域通过宿主 routes 提供给客户端，不写会话日志。
 
@@ -326,7 +327,7 @@ Codex：
 - **成本是估值**：`cost_usd` 是 CLI 内置价表估算，不是网关账单；工具返回与面板都标注为估值。
 - **宿主需要有 `claude`**：解析规则见 §9；解析不到时本轮返回 `provider-missing`。
 - **`claude` 版本决定可选模型**：`--model` 送到 CLI 之后，模型能不能用由 CLI 版本决定。实测 `kaon/claude-opus-5-5` 在 Claude Code 2.1.177 上返回 400（要求 ≥ 2.1.280），升级到 2.1.318 后同一命令返回 `assistant.model = anthropic/claude-opus-5.5`。默认档配到一个当前 CLI 不支持的模型时，每一轮都会是 `provider-error`，而不是静默换模型。
-- **派发不再阻塞整个回合**：工具最多等 `wait_ms`，之后回一个 `status: "running"` 的轮次；调用方用 `external_session_wait` 取回，或用 `external_session_list` 的 `running` 读进度。
+- **派发不再阻塞整个回合**：工具最多等 `wait_ms`，之后回一个 `status: "running"` 的轮次；调用方用 `external_session_wait` 取回，或用 `external_session_list` 的 `running` 读进度。claude 的 `idle_ms` 按增量帧推进，因此"还在生成"与"已死"能分辨。
 - **互斥门 fail-closed**：原生外部 provider 没关时本能力完全不挂载，`/api/external-session/*` 返回 404（规则见 §12），不会与原生并存，也不会抢工具名。
   - 自查：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3080/api/external-session/list` 回 `404` 说明没挂载（已挂载但调用方不在围栏内是 `403`，正常是 `200`）；宿主日志里 external-session 的装配拒绝消息会点名 `tool-subagent-claude-code` 与 `tool-subagent-codex`；`grep externalSession ~/.dsh/profiles/web/cordis.patch.yml` 为空说明就是还没迁移。
 - **工具名归实体行，不归预设**：预设行在 Loader 之外实例化插件，工具注册只由实体自己的 Loader 条目承担（机制见 §7）。实体行缺席时这两个工具直接不出现，不会被预设层接管，也不会自动回落到原生实现。

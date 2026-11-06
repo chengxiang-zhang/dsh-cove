@@ -98,12 +98,17 @@ export interface ClaudeStreamSummary {
  * cancelled turn answered with an empty string even though the CLI had already
  * emitted the whole answer. These fields are the answer-so-far.
  */
-interface ClaudeLiveProgress {
+export interface ClaudeLiveProgress {
   frames: number
   toolCalls: number
   text: string
   /** Incomplete trailing line, carried between polls. */
   remainder: string
+  /**
+   * True once `text_delta` frames contributed to `text`. The later `assistant`
+   * frame repeats that text whole, so appending both would double it.
+   */
+  sawDeltas: boolean
 }
 
 /** Keep the END of the text: a tail is only useful when it is the latest part. */
@@ -146,7 +151,7 @@ function toolCallCount(frame: Record<string, unknown>): number {
  * written, so the remainder is carried to the next poll instead of being
  * dropped. A damaged line counts as damage, exactly like the settled parse.
  */
-function consumeClaudeLines(state: ClaudeLiveProgress, chunk: string): void {
+export function consumeClaudeLines(state: ClaudeLiveProgress, chunk: string): void {
   const buffered = state.remainder + chunk
   const lines = buffered.split('\n')
   state.remainder = lines.pop() ?? ''
@@ -162,9 +167,24 @@ function consumeClaudeLines(state: ClaudeLiveProgress, chunk: string): void {
     const frame = record(parsed)
     if (frame === undefined) continue
     state.frames += 1
-    if (text(frame.type) !== 'assistant') continue
+    const type = text(frame.type)
+    if (type === 'stream_event') {
+      const event = record(frame.event)
+      const eventType = text(event?.type)
+      if (eventType === 'content_block_delta') {
+        const delta = record(event?.delta)
+        const chunk = delta === undefined ? undefined : delta.text
+        if (delta !== undefined && text(delta.type) === 'text_delta' && typeof chunk === 'string') {
+          state.text += chunk
+          state.sawDeltas = true
+        }
+      }
+      continue
+    }
+    if (type !== 'assistant') continue
     state.toolCalls += toolCallCount(frame)
-    state.text += assistantText(frame)
+    // With deltas already counted, this frame repeats the same text.
+    if (!state.sawDeltas) state.text += assistantText(frame)
   }
 }
 
@@ -183,7 +203,11 @@ const RESUME_MISSING_PATTERN = /no conversation found with session id|--resume r
  * @returns the argument vector after `argv[0]`.
  */
 export function claudeTurnArgv(prompt: string, providerSessionId?: string, model?: string): string[] {
-  const argv = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'auto']
+  // `--include-partial-messages` turns one answer into one `text_delta` frame per
+  // chunk instead of a single frame at the end: measured on claude 2.1.318, a
+  // 120-word answer is 8 frames without it and 74 with it. That is the only
+  // signal that separates "still generating" from "dead" inside one message.
+  const argv = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', 'auto']
   // A pinned model is a query-level override, so it belongs with the other flags
   // and before the terminator that protects a dash-leading prompt.
   if (model !== undefined && model.length > 0) argv.push('--model', model)
@@ -399,7 +423,7 @@ export function createClaudeAdapter(deps: ExternalAdapterDeps, config: ExternalA
       // Poll the collected stream while the child runs. Without this the only
       // thing a cancelled turn can report is the terminal frame it never got,
       // which is how a thirty-minute dispatch answered with an empty string.
-      const live: ClaudeLiveProgress = { frames: 0, toolCalls: 0, text: '', remainder: '' }
+      const live: ClaudeLiveProgress = { frames: 0, toolCalls: 0, text: '', remainder: '', sawDeltas: false }
       let cursor = 0
       const publish = (): void => {
         if (request.report === undefined) return

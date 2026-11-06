@@ -201,16 +201,16 @@ describe('claude stream reduction', () => {
 describe('claude argv', () => {
   it('uses the pinned unattended flags and appends the resume flag for a continuation', () => {
     expect(claudeTurnArgv('do the thing')).toEqual([
-      '-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'auto', 'do the thing',
+      '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', 'auto', 'do the thing',
     ])
     expect(claudeTurnArgv('next', 'abc')).toEqual([
-      '-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'auto', '--resume', 'abc', 'next',
+      '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', 'auto', '--resume', 'abc', 'next',
     ])
   })
 
   it('keeps a dash-leading prompt a positional value after every flag', () => {
     expect(claudeTurnArgv('-3 items')).toEqual([
-      '-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'auto', '--', '-3 items',
+      '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--permission-mode', 'auto', '--', '-3 items',
     ])
   })
 })
