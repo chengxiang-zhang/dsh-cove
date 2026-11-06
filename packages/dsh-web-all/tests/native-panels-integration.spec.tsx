@@ -16,6 +16,7 @@ vi.mock('../src/client/conversation/subagent-model.ts', () => ({
 }))
 
 import {
+  MEMORY_PANEL_ID,
   SSH_PANEL_ID,
   registerNativePanels,
 } from '../src/client/sidebar/native-panels.tsx'
@@ -37,7 +38,7 @@ function makeSlots() {
 }
 
 describe('sidebar position module', () => {
-  it('registers SSH as a panellist row plus main panel', () => {
+  it('registers SSH and memory as panellist rows plus main panels', () => {
     const { seats, slots } = makeSlots()
     const selectPanel = vi.fn<(id: string | null) => void>()
     const listeners = new Set<() => void>()
@@ -68,9 +69,9 @@ describe('sidebar position module', () => {
 
     const rows = seats.filter(seat => seat.name === 'sidebar.panellist')
     const mains = seats.filter(seat => seat.name === 'main')
-    expect(rows.map(row => row.options['id'])).toEqual([SSH_PANEL_ID])
-    expect(rows.map(row => row.options['order'])).toEqual([30])
-    expect(mains.map(main => main.options['key'])).toEqual([SSH_PANEL_ID])
+    expect(rows.map(row => row.options['id'])).toEqual([SSH_PANEL_ID, MEMORY_PANEL_ID])
+    expect(rows.map(row => row.options['order'])).toEqual([30, 31])
+    expect(mains.map(main => main.options['key'])).toEqual([SSH_PANEL_ID, MEMORY_PANEL_ID])
     // No worktree page: the sidebar is not a worktree surface anymore.
     expect(seats.some(seat => String(seat.options['id'] ?? seat.options['key'] ?? '').includes('worktree'))).toBe(false)
     dispose()

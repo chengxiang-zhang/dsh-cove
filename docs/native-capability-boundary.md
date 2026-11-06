@@ -90,7 +90,7 @@
 | 飞书 bot 入站收件箱与 peek/pop/ack 工具 | `host/services/superagent/channels/feishu` | 992 行 | 无 IM 入站 seam |
 | 浏览器渲染的 web_fetch provider | `host/services/web-render` | 529 行 | 原生只有 `dsh-web-fetch-http`，无 JS 渲染 |
 | 只回 citation 的 search provider | `host/services/web-search-anthropic` | 637 行 | `dsh-web-search-deepseek` 在缺 `web_search_tool_result` 时直接报错，属判据 4 的暂存 workaround |
-| 项目持久记忆面板与记录工具 | `host/services/memoir` | 834 行 | `dsh-agent-instructions` 只读 AGENTS.md 链，无写入口 |
+| OpenViking 记忆的只读查看面板（全局 / 工作区） | `host/services/memory-view`、`client/sidebar/panels/memory` | 2,596 行（宿主 961 + 浏览器 1,635） | 记忆本体与 MCP 工具归 OpenViking 插件，它没有浏览器面；原生无记忆 UI，`dsh-agent-instructions` 只读 AGENTS.md 链 |
 | 宿主访问围栏与远端鉴权墙 | `host/services/access-trust`、`remote-access`、`remote-web-ui`、`no-browser-auth` | 4,830 行 | 原生围栏只覆盖 `/api` 与 WS upgrade，账号体系不存在 |
 | code-vibe 预设（persona、分档流程、技能清单） | `presets/code-vibe.patch.yml` | 488 行 | 机制全为原生插件行，内容是唯一第一方价值 |
 

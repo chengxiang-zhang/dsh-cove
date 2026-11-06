@@ -57,6 +57,7 @@ const PRIVILEGED_FENCE_TOKEN = new Map([
   ['access-trust', null],
   ['external-session', 'accessTrustOf'],
   ['git-graph', 'accessTrustOf'],
+  ['memory-view', 'accessTrustOf'],
   ['superagent', 'accessTrustOf'],
   ['notify', 'accessTrustOf'],
   ['playwright-sessions', 'accessTrustOf'],

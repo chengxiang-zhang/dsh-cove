@@ -7,10 +7,12 @@
       "web-all-git-branch-chip"
     ],
     "sidebar.panellist": [
-      "web-all-ssh"
+      "web-all-ssh",
+      "web-all-memory"
     ],
     "main": [
-      "web-all-ssh"
+      "web-all-ssh",
+      "web-all-memory"
     ],
     "sidebar.right.pane.tab": [
       "web-ui.git"
@@ -24,6 +26,7 @@
     "ssh",
     "right-pane",
     "git-workbench",
+    "memory",
     "native-panels",
     "page-shell"
   ],
@@ -43,6 +46,7 @@
     "family-namespaces",
     "feishu",
     "git-graph",
+    "memory-view",
     "superagent",
     "lifecycle",
     "no-browser-auth",
@@ -62,7 +66,8 @@
     "/lark-inbox/wizard",
     "/workspace-model",
     "/worktree",
-    "/api/dsh-notify"
+    "/api/dsh-notify",
+    "/api/dsh-memory"
   ],
   "toolNames": [
     "lark_inbox_ack",
@@ -108,7 +113,10 @@
       "lane-chip",
       "lane-menu",
       "field",
-      "feed-path"
+      "feed-path",
+      "tab",
+      "crumb",
+      "preview"
     ],
     "data-dsh-plugin": [
       "web-all",
@@ -116,7 +124,8 @@
       "worktree",
       "git-graph",
       "lark-inbox",
-      "notify"
+      "notify",
+      "memory"
     ]
   },
   "runtimeExports": {

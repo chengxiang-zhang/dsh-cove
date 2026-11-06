@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import * as accessTrust from './access-trust/index.ts'
 import * as remoteAccess from './remote-access/index.ts'
+import * as memoryView from './memory-view/index.ts'
 import * as ssh from './ssh/index.ts'
 import * as worktree from './worktree/index.ts'
 import * as gitGraph from './git-graph/index.ts'
@@ -69,6 +70,8 @@ export function assembleServices(ctx: Context, deps: ServiceAssemblyDeps = {}): 
   // Host ownership + plain-HTTP boot shims for the reverse-proxied entry.
   // Mounted right after the fence it consults, before any route family.
   mount('remote-access', () => remoteAccess.register(ctx))
+  // Read-only OpenViking memory proxy for the sidebar panel; it keeps no store of its own.
+  mount('memory-view', () => memoryView.register(ctx))
   mount('ssh', () => ssh.register(ctx))
   mount('worktree', () => worktree.register(ctx, deps.worktree))
   mount('git-graph', () => gitGraph.register(ctx))
