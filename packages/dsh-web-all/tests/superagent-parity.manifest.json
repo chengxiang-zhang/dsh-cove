@@ -842,8 +842,8 @@
       "class": "responder",
       "responder": true,
       "status": "migrated",
-      "reading": "migrated: MAX_SESSION_FAILURES (3) bounds session-creation retries; at the cap the person gets one explanatory cannot line, the batch is kept and marked pending_close, and the queue backs off one agenda window instead of looping",
-      "target": "tests/superagent-timeout-closure.spec.ts::4. three failed session creates explain once, keep the batch, and stop looping",
+      "reading": "migrated: MAX_SESSION_FAILURES (3) bounds session-creation retries; at the cap the person gets one explanatory cannot line, and MAX_EVENT_FAILURES (3, counted from the ledger) closes the event terminally so the queue does not relaunch it",
+      "target": "tests/superagent-timeout-closure.spec.ts::4. three failed session creates explain once, close the event, and stop looping",
       "module": "desk"
     },
     {

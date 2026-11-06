@@ -7,8 +7,11 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createPresence, deskSessionId, type DeskConfig } from '../src/host/services/superagent/desk/presence.ts'
-import type { DeskTool, ToolFace } from '../src/host/services/superagent/desk/toolface.ts'
+import { createPresence, deskSessionId, MAX_EVENT_FAILURES, type DeskConfig } from '../src/host/services/superagent/desk/presence.ts'
+import { Context } from '@deepseek-ai/cordis'
+import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import { DESK_REFUSAL, deskGuard, type DeskTool, type ToolFace } from '../src/host/services/superagent/desk/toolface.ts'
+import { createDegrades } from '../src/host/services/superagent/recovery/degrade.ts'
 import { createLease } from '../src/host/services/superagent/kernel/lease.ts'
 import { createOutlet } from '../src/host/services/superagent/kernel/outlet.ts'
 import type { OutletPolicy, TurnRequest } from '../src/host/services/superagent/kernel/ports.ts'
@@ -33,13 +36,17 @@ interface Rig {
   mode: { value: 'responder' | 'shadow' | 'superagent' }
 }
 
-function rig(): Rig {
+function rig(opts: { applyThrows?: Error; noRecover?: boolean } = {}): Rig {
   const t = openTestLedger()
+  const degrades = createDegrades(t.ledger)
   const controller = createFakeController()
   const tools = new Map<string, DeskTool[]>()
   let visible: string[] | undefined
   const toolface: ToolFace = {
-    async apply(sid, list) { tools.set(sid, [...list]); return () => { tools.delete(sid) } },
+    async apply(sid, list) {
+      if (opts.applyThrows) throw opts.applyThrows
+      tools.set(sid, [...list]); return () => { tools.delete(sid) }
+    },
     async visible(sid) { return visible ?? (tools.get(sid) ?? []).map(x => x.name) },
   }
   const lease = createLease(t.ledger)
@@ -58,8 +65,9 @@ function rig(): Rig {
     ledger: t.ledger, controller: () => controller, clock: t.clock, log: { info: () => undefined, warn: () => undefined, error: () => undefined },
     memory, docs: { read: () => ({ text: 'doc', truncated: false }) }, outlet, outletPolicy: policy, mode: () => mode.value,
     handlers: {}, toolface, config: () => cfg,
-    degrade: e => t.ledger.open(tx => tx.run(`INSERT INTO sa_degrade_event (degrade_id, reason, scope, started_at, created_at) VALUES (?, ?, ?, ?, ?)`,
-      `dg-${e.now}-${e.scope}`, e.reason, e.scope, e.now, e.now), { module: 'recovery' }),
+    // The production registry: one open row per reason and scope, closed by recover.
+    degrade: e => { degrades.degrade(e.reason, e.scope) },
+    recover: e => { if (!opts.noRecover) degrades.recover(e.reason, e.scope) },
   })
   return { t, controller, presence, tools, setVisible: v => { visible = v }, cfg, mode }
 }
@@ -237,11 +245,13 @@ describe('desk presence', () => {
     await closeWindow(r)
     expect(prompts(r)).toHaveLength(0)
     expect(rows(r, 'SELECT reason, scope FROM sa_degrade_event')).toEqual([{ reason: 'desk_toolface', scope: 'p2p:oc_1' }])
-    expect(rows(r, `SELECT moment, body FROM sa_outbox`)).toEqual([{ moment: 'alert', body: '我这边工具面不对，已停' }])
-    // Exactly the desk tools (plus the known agent-plane tool) passes.
+    // B14: an internal fault is never put to the owner; no outbound line.
+    expect(rows(r, `SELECT moment, body FROM sa_outbox`)).toEqual([])
+    // The desk tools plus agent-plane tools pass once the retry window is over.
     r.setVisible([...DESK_TOOL_NAMES, 'subagent'])
     deliver(r)
-    await closeWindow(r)
+    r.t.clock.advance(60_000)
+    await r.presence.tick(r.t.clock.now())
     expect(prompts(r)).toHaveLength(1)
     // A non-desk tool that actually ran (no refusal in its result) breaks the face for the next turn.
     r.presence.onSessionEvent(SID, { type: 'tool/call', seq: ++seq, data: { callId: 'x1', name: 'bash', arguments: '{}' } })
@@ -332,5 +342,160 @@ describe('desk presence', () => {
     expect(d[0].audience_class).toBe(d[1].audience_class)
     expect(d[0].window_id).toBe(d[1].window_id)
     expect(d[0].dossier_hash).toBe(d[1].dossier_hash)
+  })
+
+  // Live defect 2026-11-06 11:04: the host refused every desk tool registration, and one
+  // message produced three error turns a minute, forever. Permanent failure, 3 minutes.
+  const REGISTER_REFUSAL = new TypeError('tool "judge" must declare output { schema, render, presentationMeta? }')
+  async function runMinutes(r: Rig, minutes: number): Promise<number[]> {
+    const counts: number[] = []
+    for (let s = 0; s < minutes * 60; s += 1) {
+      r.t.clock.advance(1000)
+      await r.presence.tick(r.t.clock.now())
+      await r.presence.drain()
+      if (s % 60 === 59) counts.push(Number(rows(r, 'SELECT count(*) AS n FROM sa_deliberation')[0].n))
+    }
+    return counts
+  }
+
+  it('15. a registration that always throws costs at most 3 turns per event; the intake closes terminally, one degradation stays open', async () => {
+    const r = rig({ applyThrows: REGISTER_REFUSAL })
+    r.mode.value = 'shadow'
+    const e = deliver(r)
+    const perMinute = await runMinutes(r, 3)
+    expect(perMinute).toEqual([MAX_EVENT_FAILURES, MAX_EVENT_FAILURES, MAX_EVENT_FAILURES])
+    expect(rows(r, `SELECT DISTINCT end_reason FROM sa_deliberation`)).toEqual([{ end_reason: 'error' }])
+    const intake = rows(r, 'SELECT state, disposition, reason, shadow FROM sa_intake')
+    expect(intake).toHaveLength(1)
+    expect(intake[0]).toMatchObject({ state: 'disposed', disposition: 'acknowledge', shadow: 1 })
+    expect(String(intake[0].reason)).toContain('[TypeError]')
+    expect(String(intake[0].reason)).toContain('must declare output')
+    expect(String(rows(r, 'SELECT rule_trace FROM sa_deliberation ORDER BY rowid DESC LIMIT 1')[0].rule_trace)).toContain(`"events":["${e.event_id}"]`)
+    expect(rows(r, 'SELECT count(*) AS n FROM sa_degrade_event WHERE ended_at IS NULL')[0].n).toBeGreaterThanOrEqual(1)
+    expect(rows(r, 'SELECT count(*) AS n FROM sa_degrade_event WHERE ended_at IS NOT NULL')).toEqual([{ n: 0 }])
+    expect(rows(r, 'SELECT count(*) AS n FROM sa_outbox')).toEqual([{ n: 0 }])
+  })
+
+  it('16. a prompt that always fails stops at 3 turns too', async () => {
+    const r = rig()
+    r.controller.failPrompt(new Error('host refused prompt'))
+    deliver(r)
+    const perMinute = await runMinutes(r, 3)
+    expect(perMinute.at(-1)).toBeLessThanOrEqual(MAX_EVENT_FAILURES)
+    expect(perMinute.at(-1)).toBe(perMinute.at(-2))
+    expect(rows(r, 'SELECT state, disposition FROM sa_intake')).toEqual([{ state: 'disposed', disposition: 'acknowledge' }])
+    expect(String(rows(r, 'SELECT reason FROM sa_intake')[0].reason)).toContain('[Error] host refused prompt')
+  })
+
+  it('17. the count lives in the ledger: error rows from before a restart (old request-id rows, no events list) count', async () => {
+    const r = rig({ applyThrows: REGISTER_REFUSAL })
+    const e = inboundEvent({ received_at: r.t.clock.now() })
+    // What the 2026-11-06 storm left behind: error rows keyed only by request id.
+    for (let n = 1; n <= MAX_EVENT_FAILURES; n += 1) {
+      r.t.db.prepare(`INSERT INTO sa_deliberation (deliberation_id, request_id, desk_id, trigger_kind, state, shadow, rule_trace, end_reason, created_at, updated_at)
+        VALUES (?, ?, 'p2p:oc_1', 'intake', 'done', 0, '{"reason":"x","session_failures":1,"pending_close":false}', 'error', 1, 1)`).run(`old-${n}`, `in:${e.event_id}:${n}`)
+    }
+    deliver(r, e)
+    await runMinutes(r, 2)
+    expect(rows(r, 'SELECT count(*) AS n FROM sa_deliberation')).toEqual([{ n: MAX_EVENT_FAILURES + 1 }])
+    expect(rows(r, 'SELECT state FROM sa_intake')).toEqual([{ state: 'disposed' }])
+  })
+
+  // Live turn 2026-11-06 11:35:09: the nine desk tools all visible, zero violations, and the
+  // Agent Team set (agent-plane, beyond restrict) visible too. The old reading blocked it.
+  const AGENT_TEAM = ['interrupt_agent', 'list_agents', 'send_message', 'spawn_teammate',
+    'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update', 'wait_agent']
+
+  it('18. agent-plane extras are recorded, not failed; a host-privileged tool still fails closed, apart from extras', async () => {
+    const r = rig()
+    r.setVisible([...DESK_TOOL_NAMES, ...AGENT_TEAM])
+    deliver(r)
+    await closeWindow(r)
+    expect(prompts(r)).toHaveLength(1)
+    await endTurn(r, SID)
+    const trace = JSON.parse(String(rows(r, 'SELECT rule_trace FROM sa_deliberation')[0].rule_trace)) as { selfcheck: Record<string, unknown> }
+    expect(trace.selfcheck).toEqual({ extra: AGENT_TEAM, extra_count: 9, denied_visible: [], violations: 0 })
+
+    r.setVisible([...DESK_TOOL_NAMES, ...AGENT_TEAM, 'ssh_exec', 'bash'])
+    deliver(r)
+    await closeWindow(r)
+    expect(prompts(r)).toHaveLength(1)
+    const blocked = rows(r, `SELECT end_reason, rule_trace FROM sa_deliberation WHERE end_reason = 'blocked'`)
+    expect(blocked).toHaveLength(1)
+    const check = (JSON.parse(String(blocked[0].rule_trace)) as { selfcheck: Record<string, unknown> }).selfcheck
+    expect(check).toMatchObject({ ok: false, missing: [], extra: AGENT_TEAM, extra_count: 9, denied_visible: ['bash', 'ssh_exec'], violations: 0 })
+  })
+
+  it('19. Agent Team tools are refused at execution on the desk (R8), and a refusal is not a violation', async () => {
+    const ctx = new Context()
+    ctx.provide('systemPrompt', new Proxy({}, { get: () => () => () => undefined }))
+    const rt = new ToolRuntime(ctx, {} as never)
+    const ran: string[] = []
+    const ok = { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => [{ type: 'text', text: String(v) }] }
+    for (const name of ['spawn_teammate', 'send_message', 'team_task_create']) {
+      rt.register({ name, description: name, parameters: { type: 'object', properties: {} }, output: ok, execute: async () => { ran.push(name); return 'done' } } as never)
+    }
+    rt.guard(deskGuard as never)
+    const r = rig()
+    r.setVisible([...DESK_TOOL_NAMES, ...AGENT_TEAM])
+    deliver(r)
+    await closeWindow(r)
+    for (const [i, name] of ['spawn_teammate', 'send_message', 'team_task_create'].entries()) {
+      const result = await rt.execute({ callId: `t${i}` as never, name, arguments: {}, signal: new AbortController().signal })
+      expect(result.isError, name).toBe(true)
+      const text = result.content.map(b => ('text' in b ? b.text : '')).join('')
+      expect(text, name).toContain(DESK_REFUSAL)
+      r.presence.onSessionEvent(SID, { type: 'tool/call', seq: ++seq, data: { callId: `t${i}`, name, arguments: '{}' } })
+      r.presence.onSessionEvent(SID, { type: 'tool/result', seq: ++seq, data: { message: { toolCallId: `t${i}`, content: result.content } } })
+    }
+    expect(ran).toEqual([])
+    await endTurn(r, SID)
+    deliver(r)
+    await closeWindow(r)
+    expect(prompts(r)).toHaveLength(2)
+    await endTurn(r, SID)
+    const last = JSON.parse(String(rows(r, 'SELECT rule_trace FROM sa_deliberation ORDER BY rowid DESC LIMIT 1')[0].rule_trace)) as { selfcheck: { violations: number } }
+    expect(last.selfcheck.violations).toBe(0)
+  })
+
+  it('20. a self-check that keeps failing retries with backoff, at most 3 turns, then closes quietly with the detail', async () => {
+    const r = rig()
+    r.setVisible(DESK_TOOL_NAMES.filter(n => n !== 'judge'))
+    deliver(r)
+    // One turn per backoff window: 3 turns land inside 3 minutes, the 4th minute adds none.
+    const perMinute = await runMinutes(r, 4)
+    expect(perMinute).toEqual([1, 2, MAX_EVENT_FAILURES, MAX_EVENT_FAILURES])
+    const ends = rows(r, 'SELECT started_at, end_reason FROM sa_deliberation ORDER BY rowid')
+    expect(ends.every(d => d.end_reason === 'blocked')).toBe(true)
+    expect(Number(ends[1].started_at) - Number(ends[0].started_at)).toBeGreaterThanOrEqual(60_000)
+    const intake = rows(r, 'SELECT state, disposition, reason FROM sa_intake')[0]
+    expect(intake).toMatchObject({ state: 'disposed', disposition: 'acknowledge' })
+    expect(String(intake.reason)).toContain('[selfcheck]')
+    expect(String(intake.reason)).toContain('"missing":["judge"]')
+    expect(rows(r, 'SELECT count(*) AS n FROM sa_outbox')).toEqual([{ n: 0 }])
+    expect(prompts(r)).toHaveLength(0)
+  })
+
+  it('21. desk_toolface and desk_unavailable close themselves once the desk is healthy again', async () => {
+    const r = rig()
+    r.setVisible(DESK_TOOL_NAMES.filter(n => n !== 'say'))
+    deliver(r)
+    await closeWindow(r)
+    expect(rows(r, 'SELECT reason, ended_at IS NULL AS open FROM sa_degrade_event')).toEqual([{ reason: 'desk_toolface', open: 1 }])
+    r.setVisible(undefined)
+    r.t.clock.advance(60_000)
+    await r.presence.tick(r.t.clock.now())
+    expect(prompts(r)).toHaveLength(1)
+    expect(rows(r, 'SELECT reason, ended_at IS NULL AS open FROM sa_degrade_event')).toEqual([{ reason: 'desk_toolface', open: 0 }])
+    await endTurn(r, SID)
+
+    const u = rig()
+    u.controller.failCreateTimes(1, new Error('host down'))
+    deliver(u)
+    await closeWindow(u)
+    expect(rows(u, 'SELECT reason, ended_at IS NULL AS open FROM sa_degrade_event')).toEqual([{ reason: 'desk_unavailable', open: 1 }])
+    await u.presence.tick(u.t.clock.now())
+    expect(prompts(u)).toHaveLength(1)
+    expect(rows(u, 'SELECT reason, ended_at IS NULL AS open FROM sa_degrade_event')).toEqual([{ reason: 'desk_unavailable', open: 0 }])
   })
 })

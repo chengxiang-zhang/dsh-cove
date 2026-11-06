@@ -286,7 +286,7 @@ describe('T31 timeout closure and bounded retries', () => {
     expect(r.controller.calls.filter(entry => entry.method === 'cancel')).toHaveLength(1)
   })
 
-  it('4. three failed session creates explain once, keep the batch, and stop looping', async () => {
+  it('4. three failed session creates explain once, close the event, and stop looping', async () => {
     const r = deskRig()
     r.controller.failCreate(new Error('host down'))
     deliver(r)
@@ -310,12 +310,14 @@ describe('T31 timeout closure and bounded retries', () => {
     // Degradation recorded on the first failure and at the cap, not once per retry.
     expect(rows(r, 'SELECT count(*) AS n FROM sa_degrade_event')).toEqual([{ n: 2 }])
 
-    // The batch is kept but backs off: no relaunch inside the window, one after it.
+    // MAX_EVENT_FAILURES cumulative failures close the event (live defect 2026-11-06:
+    // the kept batch relaunched every window, three turns a minute forever).
     await r.presence.tick(r.t.clock.now())
     expect(creates(r)).toHaveLength(MAX_SESSION_FAILURES)
     r.t.clock.advance(PENDING_CLOSE_RETRY_MS + 1)
     await r.presence.tick(r.t.clock.now())
-    expect(creates(r)).toHaveLength(MAX_SESSION_FAILURES + 1)
+    expect(creates(r)).toHaveLength(MAX_SESSION_FAILURES)
     expect(rows(r, 'SELECT count(*) AS n FROM sa_intake')).toEqual([{ n: 1 }])
+    expect(rows(r, 'SELECT state, disposition FROM sa_intake')).toEqual([{ state: 'disposed', disposition: 'acknowledge' }])
   })
 })

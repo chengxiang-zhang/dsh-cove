@@ -17,9 +17,10 @@ import type { OutletPolicy, SpeechProposal } from '../kernel/ports.ts'
 import type { MemoryLog } from '../memory/log.ts'
 import { MEMORY_TYPES, type MemoryTrigger } from '../memory/types/index.ts'
 import { PHYSICAL } from '../protocol/db.ts'
-import type { AttemptRow, CommitmentRow, Disposition } from '../protocol/objects.ts'
-import { DESK_TOOL_NAMES, type DeskToolName, type JudgeInput, type LookInput, type RememberInput, type SayInput, type ToolErrorCode } from '../protocol/tools.ts'
-import type { DeskTool } from './toolface.ts'
+import type { ParameterSchemaSpec, ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
+import { CHECK_KINDS, COMMITMENT_KINDS, COMMITMENT_STATES, DISPOSITIONS, MEMORY_KINDS, OUTBOX_MOMENTS, TIERS, type AttemptRow, type CommitmentRow, type Disposition } from '../protocol/objects.ts'
+import { DESK_TOOL_NAMES, MAX_ASSUMPTIONS, MAX_PROPOSE_ITEMS, type DeskToolName, type JudgeInput, type LookInput, type RememberInput, type SayInput, type ToolErrorCode } from '../protocol/tools.ts'
+import { renderJson, type DeskTool, type ToolOutputSpec } from './toolface.ts'
 import type { TurnContext } from './turn.ts'
 
 export type DeskToolResult = { ok: true; [key: string]: unknown } | { ok: false; code: ToolErrorCode | 'NOT_IMPLEMENTED' | 'NO_TURN'; message: string }
@@ -58,6 +59,128 @@ export function idemKeyOf(deliberationId: string, n: number): string {
 function visibleTo(c: CommitmentRow, ctx: TurnContext): boolean {
   // The owner's private desk sees every commitment; any other desk only its own.
   return ctx.audience.cls === 'owner_p2p' || c.desk_id === ctx.deskId
+}
+
+// Host-facing contracts (02 desk tools). Required marks follow the protocol input
+// types; everything a handler answers is declared, nothing more.
+const str = (description: string) => ({ type: 'string', description }) as const
+const req = <T extends object>(spec: T) => ({ ...spec, required: true }) as T & { required: true }
+const oneOfEnum = (values: readonly string[], description: string) => ({ type: 'string', enum: values, description }) as const
+
+const FAILURE: ValueSchemaSpec = {
+  type: 'object', additionalProperties: false,
+  properties: { ok: req({ type: 'boolean', const: false }), code: req(str('closed error code')), message: req(str('why')) },
+}
+function outputOf(success: ParameterSchemaSpec): ToolOutputSpec {
+  return {
+    schema: { oneOf: [{ type: 'object', additionalProperties: false, properties: { ok: req({ type: 'boolean', const: true }), ...success } }, FAILURE] },
+    render: renderJson,
+  }
+}
+const ROW = { type: 'json', description: 'a ledger row' } as const
+
+interface DeskToolContract { description: string; parameters: ParameterSchemaSpec; success: ParameterSchemaSpec }
+
+export const DESK_TOOL_CONTRACTS: Record<DeskToolName, DeskToolContract> = {
+  judge: {
+    description: 'Dispose one event of this batch: what it is, what it is about, how sure you are and why. Every event in the batch must be judged exactly once.',
+    parameters: {
+      event_id: req(str('event id from this batch')),
+      disposition: req(oneOfEnum(DISPOSITIONS, 'what this event is')),
+      about: str('commitment id (C-n) this event is about, if any'),
+      class: req(str('class id from the class table')),
+      confidence: req({ type: 'number', description: '0..1' }),
+      reason: req(str('one sentence, the grounds')),
+      corrects: str('event id this event corrects'),
+      new_thread: { type: 'boolean', description: 'start a new thread despite a live one (needs a reason)' },
+    },
+    success: {},
+  },
+  commit: {
+    description: 'Take on work for an event of this batch: what, the result wanted, how it will be checked, who does it and by when.',
+    parameters: {
+      event_id: req(str('event id from this batch')),
+      kind: req(oneOfEnum(COMMITMENT_KINDS, 'commitment kind')),
+      what: req(str('the action, one line')),
+      intent: req(str('the result wanted, not the action')),
+      check_kind: req(oneOfEnum(CHECK_KINDS, 'how completion is checked')),
+      done_when: req(str('the check; a command criterion names the command in backticks and its exit code')),
+      boundary_extra: str('extra boundary beyond the defaults'),
+      assumptions: {
+        type: 'array', description: `open questions taken on an assumption, at most ${MAX_ASSUMPTIONS}`,
+        items: { type: 'object', additionalProperties: false, properties: {
+          question: req(str('the open question')), taken: req(str('the assumption taken')), reversible: req({ type: 'boolean' }) } },
+      },
+      executor: req(str('executor profile id')),
+      executor_reason: req(str('why this executor')),
+      eta_minutes: req({ type: 'number', description: 'minutes until done' }),
+      target: str('where the work lands: local/..., netbird/..., external/...'),
+      budget_scale: { type: 'number', description: 'budget multiplier' },
+    },
+    success: {
+      commitment_id: req(str('C-n')), state: req(oneOfEnum(COMMITMENT_STATES, 'state after commit')),
+      eta_at: req({ type: 'number', description: 'epoch ms' }), mandate: req(str('mandate applied')),
+      asked_ordinal: { type: 'integer', description: 'ordinal of the question asked' },
+    },
+  },
+  amend: {
+    description: 'Add to or correct a live commitment.',
+    parameters: {
+      commitment_id: req(str('C-n')), text: req(str('the amendment')),
+      overturns: { type: 'array', items: { type: 'integer' }, description: 'journal seqs this amendment overturns' },
+    },
+    success: { seq: req({ type: 'integer' }), delivery: req(oneOfEnum(['queued', 'next-attempt'], 'when the executor sees it')) },
+  },
+  release: {
+    description: 'Release a commitment its creditor or the owner no longer wants.',
+    parameters: { commitment_id: req(str('C-n')), reason: req(str('why it is released')) },
+    success: { state: req(oneOfEnum(COMMITMENT_STATES, 'state after release')), worktree: req(oneOfEnum(['kept', 'removed'], 'worktree fate')), changes: req(str('what the work left')) },
+  },
+  pushback: {
+    description: 'Push back on a request with grounds and an alternative.',
+    parameters: {
+      event_id: req(str('event id from this batch')), commitment_id: str('C-n the pushback is about'),
+      concern: req(str('the concern')), grounds: req({ type: 'array', items: { type: 'string' }, description: 'facts behind the concern' }),
+      alternative: req(str('what to do instead')),
+    },
+    success: { outbox_id: req(str('outbox row id; empty in shadow')) },
+  },
+  look: {
+    description: 'Read the ledger: commitments, memory, attempts or a document.',
+    parameters: {
+      what: req(oneOfEnum(['commitment', 'memory', 'attempt', 'doc'], 'what to read')),
+      id: str('id to read; omit to list'), q: str('memory search text'), limit: { type: 'integer', description: 'list size' },
+    },
+    success: {
+      items: { type: 'array', items: ROW, description: 'listed rows' }, item: ROW,
+      text: str('document text'), truncated: { type: 'boolean', description: 'document was cut' },
+    },
+  },
+  remember: {
+    description: 'Write a memory; a quote must come from the triggering message.',
+    parameters: {
+      kind: req(oneOfEnum(MEMORY_KINDS, 'memory kind')), topic: req(str('topic')), body: req(str('the memory')),
+      quote: str('verbatim quote from the triggering message'), about: str('who or what it is about'), supersedes: str('memory id it replaces'),
+    },
+    success: { memory_id: req(str('M-n; shadow in shadow mode')), authority: req(str('owner-said or inferred')) },
+  },
+  propose: {
+    description: `Propose up to ${MAX_PROPOSE_ITEMS} steps under a goal commitment.`,
+    parameters: {
+      goal_id: req(str('goal commitment C-n')),
+      items: req({ type: 'array', description: `at most ${MAX_PROPOSE_ITEMS}`, items: { type: 'object', additionalProperties: false, properties: {
+        what: req(str('the step')), intent: req(str('result wanted')), done_when: req(str('the check')) } } }),
+    },
+    success: { commitment_ids: req({ type: 'array', items: { type: 'string' } }) },
+  },
+  say: {
+    description: 'Say one thing to the requester at a moment the protocol allows; the host picks the tier.',
+    parameters: {
+      event_id: str('event this answers'), commitment_id: str('commitment this is about'),
+      moment: req(oneOfEnum(OUTBOX_MOMENTS, 'the speech moment')), text: req(str('what to say')),
+    },
+    success: { outbox_id: req(str('outbox row id; shadow in shadow mode')), tier: req(oneOfEnum(TIERS, 'tier the host chose')), words: req({ type: 'integer' }) },
+  },
 }
 
 export function createDeskTools(deps: DeskToolDeps): DeskTool[] {
@@ -159,8 +282,9 @@ export function createDeskTools(deps: DeskToolDeps): DeskTool[] {
 
   return DESK_TOOL_NAMES.map((name): DeskTool => ({
     name,
-    description: `desk tool ${name}`,
-    parameters: { type: 'object' },
+    description: DESK_TOOL_CONTRACTS[name].description,
+    parameters: DESK_TOOL_CONTRACTS[name].parameters,
+    output: outputOf(DESK_TOOL_CONTRACTS[name].success),
     async execute(input, context) {
       const ctx = deps.turnOf(context.sessionId)
       if (!ctx) return fail('NO_TURN', 'no open turn on this session')

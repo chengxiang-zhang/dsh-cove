@@ -31,7 +31,7 @@ import { InboxStore } from './channels/feishu/inbox-store.ts'
 import type { AdmitResult } from './channels/feishu/channel.ts'
 import { parseSuperagentConfig, type SuperagentConfig, type SuperagentMode } from './config.ts'
 import { createPresence, type Presence } from './desk/presence.ts'
-import { createToolFace, type AgentScopeLike, type ToolFacePort } from './desk/toolface.ts'
+import { createToolFace, hostToolOf, type AgentScopeLike, type ToolFacePort } from './desk/toolface.ts'
 import { idemKeyOf } from './desk/tools.ts'
 import { createExecutors } from './executors/attempts.ts'
 import { createClosure } from './executors/closure.ts'
@@ -306,6 +306,7 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
           idleEvictMs: 1_800_000, rotateEvents: 4000, collectWindowMs: 3000, dossierTokens: 6000, owner: owner(), ...(deps.tz ? { tz: deps.tz } : {}) }
       },
       degrade: e => { recovery?.degrade(e.reason, e.scope) },
+      recover: e => { recovery?.recover(e.reason, e.scope) },
     })
     recovery = createRecovery({ ledger, lease, holder: deps.holder, clock: deps.clock, log, controller: deps.controller,
       executors, closure, escalation, presence, outlet })
@@ -501,8 +502,7 @@ function agentScopePort(ctx: Context, own: (dispose: () => void) => void): ToolF
       const call = (name: string, ...args: unknown[]): unknown => (s.tools[name] as (...a: unknown[]) => unknown).call(s.tools, ...args)
       return {
         restrict: o => call('restrict', o) as () => void,
-        register: tool => call('register', { name: tool.name, description: tool.description, parameters: tool.parameters,
-          execute: (args: unknown) => tool.execute(args, { sessionId }) }) as () => void,
+        register: tool => call('register', hostToolOf(tool, sessionId)) as () => void,
         guard: fn => call('guard', (exec: { name: string; agent?: unknown }) => fn({ name: exec.name, agent: exec.agent ?? sessionId })) as () => void,
         visible: () => {
           try { return ((call('schemas', s.agent) as { name: string }[] | undefined) ?? []).map(x => x.name) } catch { return [] }
@@ -574,8 +574,7 @@ export function register(ctx: Context): () => Promise<void> {
     const tool = assembly.reportTool()
     const tools = payload.agent?.ctx?.tools
     if (typeof id === 'string' && id.startsWith('sa-x-') && tool && typeof tools?.register === 'function') {
-      tools.register({ name: tool.name, description: tool.description, parameters: tool.parameters,
-        execute: (args: unknown) => tool.execute(args, { sessionId: id }) })
+      tools.register(hostToolOf(tool, id))
     }
     return undefined
   }) as never) as () => void)

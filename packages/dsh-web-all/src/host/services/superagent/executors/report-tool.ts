@@ -7,6 +7,7 @@
  * The tool records the report; it never closes the commitment.
  */
 
+import type { ParameterSchemaSpec, ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
 import { REPORT_STATES } from '../protocol/objects.ts'
 import type { ReportInput, ToolResult } from '../protocol/tools.ts'
 
@@ -15,10 +16,12 @@ export const READING_MAX = 500
 const REPORT_KEYS: ReadonlySet<string> = new Set(['state', 'summary', 'evidence', 'question'])
 const EVIDENCE_KEYS: ReadonlySet<string> = new Set(['command', 'exit', 'reading'])
 
+/** Structurally a desk HostToolSpec; the composition root compiles it with \`hostToolOf\`. */
 export interface ToolDefinitionLike {
   name: 'report'
   description: string
-  parameters: Record<string, unknown>
+  parameters: ParameterSchemaSpec
+  output: { schema: ValueSchemaSpec; render(args: unknown, value: unknown): { type: 'text'; text: string }[] }
   execute(input: unknown, context: { sessionId: string }): ToolResult<{ seq: number }>
 }
 
@@ -53,17 +56,25 @@ export function createReportTool(accept: (sessionId: string, report: ReportInput
   return {
     name: 'report',
     description: 'Report the state of the delegated work: ready, progress, blocked (with one question), failed or dropped. Attach evidence as the commands you ran and their exit codes.',
+    // Host property table. Lengths are enforced by parseReport (the host subset has no maxLength).
     parameters: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['state', 'summary'],
-      properties: {
-        state: { type: 'string', enum: [...REPORT_STATES] },
-        summary: { type: 'string', maxLength: SUMMARY_MAX },
-        evidence: { type: 'array', items: { type: 'object', required: ['command', 'exit', 'reading'],
-          properties: { command: { type: 'string' }, exit: { type: 'number' }, reading: { type: 'string', maxLength: READING_MAX } } } },
-        question: { type: 'string' },
-      },
+      state: { type: 'string', enum: REPORT_STATES, description: 'ready, progress, blocked, failed or dropped', required: true },
+      summary: { type: 'string', description: `what happened, at most ${SUMMARY_MAX} characters`, required: true },
+      evidence: { type: 'array', description: 'commands you ran and what they printed',
+        items: { type: 'object', additionalProperties: false, properties: {
+          command: { type: 'string', description: 'the command line', required: true },
+          exit: { type: 'number', description: 'its exit code', required: true },
+          reading: { type: 'string', description: `what it printed, at most ${READING_MAX} characters`, required: true } } } },
+      question: { type: 'string', description: 'the one question that unblocks a blocked report' },
+    },
+    output: {
+      schema: { oneOf: [
+        { type: 'object', additionalProperties: false, properties: {
+          ok: { type: 'boolean', const: true, required: true }, seq: { type: 'integer', description: 'journal seq of the report', required: true } } },
+        { type: 'object', additionalProperties: false, properties: {
+          ok: { type: 'boolean', const: false, required: true }, code: { type: 'string', required: true }, message: { type: 'string', required: true } } },
+      ] },
+      render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }],
     },
     execute(input, context) {
       const parsed = parseReport(input)

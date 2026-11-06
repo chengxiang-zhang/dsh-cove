@@ -16,6 +16,7 @@
  * host route may call execute directly.
  */
 
+import { defineTool, type ParameterSchemaSpec, type ToolDefinition, type ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
 import { DESK_TOOL_NAMES } from '../protocol/tools.ts'
 
 export const DESK_REFUSAL = 'desk-has-no-such-tool'
@@ -23,11 +24,46 @@ export const DESK_REFUSAL = 'desk-has-no-such-tool'
 /** Agent-plane tools a desk may still see after restrict (S1: fixed, known set). */
 export const AGENT_FACE_TOOLS: readonly string[] = Object.freeze(['subagent'])
 
-export interface DeskTool {
+/** What the model sees of a value the tool returns: the host validates it against `schema`, then renders it. */
+export interface ToolOutputSpec {
+  schema: ValueSchemaSpec
+  render(args: unknown, value: unknown): { type: 'text'; text: string }[]
+}
+
+/**
+ * A host tool before compilation. `parameters` is the host's property table
+ * (`{ field: { type, description, required? } }`), not a JSON Schema object;
+ * `hostToolOf` compiles it with `defineTool`, which also validates arguments.
+ */
+export interface HostToolSpec {
   name: string
   description: string
-  parameters: Record<string, unknown>
+  parameters: ParameterSchemaSpec
+  output: ToolOutputSpec
   execute(input: unknown, context: { sessionId: string }): Promise<unknown> | unknown
+}
+
+export type DeskTool = HostToolSpec
+
+/** Every value renders as its JSON text: the model reads exactly what the tool returned. */
+export const renderJson = (_args: unknown, value: unknown): { type: 'text'; text: string }[] => [{ type: 'text', text: JSON.stringify(value) }]
+
+/**
+ * The definition `ctx.tools.register` accepts (dsh-tools: output { schema, render }
+ * is mandatory, and the parameter table becomes the model-facing JSON Schema).
+ */
+export function hostToolOf(tool: HostToolSpec, sessionId: string): ToolDefinition {
+  // The spec is data, not a literal, so the inferred arg/value types widen; the host
+  // validates both at run time against the compiled schemas.
+  const options = {
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    output: { schema: tool.output.schema, render: (args: unknown, value: unknown) => tool.output.render(args, value) },
+    execute: async (args: unknown) => tool.execute(args, { sessionId }),
+  }
+  const compile = defineTool as unknown as (o: typeof options) => ToolDefinition
+  return compile(options)
 }
 
 export interface ToolExecutionLike { name: string; agent?: unknown }

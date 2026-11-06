@@ -22,7 +22,7 @@ import type { CommitmentRow, DeskRow } from '../protocol/objects.ts'
 import { DESK_TOOL_NAMES } from '../protocol/tools.ts'
 import { compileDossier, splitBySender } from './dossier.ts'
 import { compileNow } from './now.ts'
-import { selfCheck, TOOLFACE_ALERT, TOOLFACE_ALERT_EVERY_MS } from './self-check.ts'
+import { selfCheck, type SelfCheckResult } from './self-check.ts'
 import { DESK_REFUSAL, type ToolFace } from './toolface.ts'
 import { createDeskTools, type DeskHandlers, type DocArea } from './tools.ts'
 import { audienceOf, buildView, dossierFingerprint, newTurnContext, windowOf, type TurnContext } from './turn.ts'
@@ -55,6 +55,8 @@ export interface DeskDeps {
   config: () => DeskConfig
   /** degrade_event belongs to recovery; the desk reports, the composition root writes. */
   degrade: (entry: { reason: string; scope: string; now: number }) => void
+  /** Closes the open degradation once the condition is healthy again (desk_toolface, desk_unavailable). */
+  recover?: (entry: { reason: string; scope: string }) => void
 }
 
 export interface TurnOutcome { deliberationId: string; ops: number; endReason: string }
@@ -86,6 +88,22 @@ export const MAX_SESSION_FAILURES = 3
 /** After the failure cap the batch waits one agenda window instead of looping. */
 export const PENDING_CLOSE_RETRY_MS = AGENDA_DEFER_MS
 export const sessionFailureMessage = (reason: string): string => `这个对话我起不来（原因：${reason}），稍后再试`
+/**
+ * Cumulative failed turns per event before its intake is closed terminally. The
+ * count is read from the ledger (error deliberations whose rule_trace lists the
+ * event, or whose request id names it), so neither a desk-level reset nor a
+ * restart starts it again: a permanent host failure costs at most this many turns.
+ */
+export const MAX_EVENT_FAILURES = 3
+export const eventFailureReason = (n: number, code: string, message: string): string =>
+  `host fallback: desk failed ${n} turns on this event [${code}] ${message}`.slice(0, 500)
+
+/** The host's error code: an explicit \`code\`, else the error class name. */
+export function hostCodeOf(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code
+  if (typeof code === 'string' && code !== '') return code
+  return error instanceof Error ? error.name : 'Error'
+}
 export const ACK_REACT_MS = 20_000
 export const ACK_TEMPLATE_MS = 60_000
 export const ACK_TEMPLATE = '收到，正在判断'
@@ -116,7 +134,6 @@ export function createPresence(deps: DeskDeps): Presence {
   const callNames = new Map<string, Map<string, string>>()
   const disposers = new Map<string, () => void>()
   const disabled = new Set<string>()
-  const lastAlert = new Map<string, number>()
   const deferrals = new Map<string, number>()
   /** Consecutive session-creation failures per desk (T31). */
   const sessionFailures = new Map<string, number>()
@@ -153,13 +170,19 @@ export function createPresence(deps: DeskDeps): Presence {
 
   function chatOf(deskId: string): string { return deskId.slice(deskId.indexOf(':') + 1) }
 
-  function alertToolface(deskId: string, now: number, detail: unknown): void {
+  /**
+   * A failed self-check is an internal fault (B14): it self-heals or degrades, it is
+   * never put to the owner. Degradation plus log only; no outbound line (R5).
+   */
+  function alertToolface(deskId: string, now: number, detail: SelfCheckResult): void {
     deps.degrade({ reason: 'desk_toolface', scope: deskId, now })
     log.warn(`desk ${deskId}: tool face self-check failed ${JSON.stringify(detail)}`)
-    if ((lastAlert.get(deskId) ?? -Infinity) + TOOLFACE_ALERT_EVERY_MS > now) return
-    lastAlert.set(deskId, now)
-    deps.outlet.submit({ chat_id: chatOf(deskId), moment: 'alert', audience: 'requester', payload: 'text', text: TOOLFACE_ALERT,
-      idem_key: `sa:toolface:${deskId.replace(/:/g, '')}:${windowOf(now)}`.slice(0, 50) }, deps.outletPolicy, deps.mode())
+  }
+
+  /** The self-check failure as a host error, so the per-event cap reads one shape. */
+  function selfCheckError(check: SelfCheckResult): Error {
+    const detail = { missing: check.missing, denied_visible: check.denied_visible, violations: check.violations }
+    return Object.assign(new Error(`selfcheck ${JSON.stringify(detail)}`), { code: 'selfcheck' })
   }
 
   const humanBusy = (deskId: string): boolean =>
@@ -190,6 +213,41 @@ export function createPresence(deps: DeskDeps): Presence {
       }
     }
     if (retry.length) queued.set(ctx.deskId, [retry, ...(queued.get(ctx.deskId) ?? [])])
+  }
+
+  /** Failed turns recorded against one event so far (this turn's row included once finished). */
+  function failuresOf(eventId: string): number {
+    // error: the host refused (T31 storm); blocked: the self-check refused. Both are host-side, both count.
+    return ledger.read.get<{ n: number }>(`SELECT count(*) AS n FROM ${PHYSICAL.deliberation} d WHERE d.end_reason IN ('error', 'blocked')
+      AND ((json_valid(d.rule_trace) AND EXISTS (SELECT 1 FROM json_each(d.rule_trace, '$.events') j WHERE j.value = ?))
+        OR d.request_id LIKE 'in:' || ? || ':%')`, eventId, eventId)?.n ?? 0
+  }
+
+  /**
+   * After a failed human turn: events under the cap go back to the queue; an event
+   * at the cap is disposed terminally (acknowledge, the reason names the host error)
+   * and is never retried. The caller keeps the desk's degradation open until a turn
+   * gets a session again (recover; the registry keeps one open row per scope).
+   */
+  function settleFailed(deskId: string, batch: readonly InboundEvent[], error: unknown): { retry: InboundEvent[]; closed: number } {
+    const code = hostCodeOf(error)
+    const message = error instanceof Error ? error.message : String(error)
+    const retry: InboundEvent[] = []
+    let closed = 0
+    for (const event of batch) {
+      const rows = ledger.read.all<{ shadow: number }>(`SELECT shadow FROM ${PHYSICAL.intake} WHERE event_id = ? AND state != 'disposed'`, event.event_id)
+      if (!rows.length) continue
+      const n = failuresOf(event.event_id)
+      if (n < MAX_EVENT_FAILURES) { retry.push(event); continue }
+      for (const row of rows) {
+        const shadow: 0 | 1 = row.shadow === 1 ? 1 : 0
+        ledger.open(tx => tx.disposeIntake(event.event_id, shadow, { disposition: 'acknowledge', reason: eventFailureReason(n, code, message) }),
+          { module: 'desk', shadow: shadow === 1 })
+      }
+      closed += 1
+      log.warn(`desk ${deskId}: event ${event.event_id} closed after ${n} failed turns [${code}]`)
+    }
+    return { retry, closed }
   }
 
   /**
@@ -257,26 +315,28 @@ export function createPresence(deps: DeskDeps): Presence {
     try {
       sessionId = await ensureSession(deskId, now)
       sessionFailures.delete(deskId)
+      deps.recover?.({ reason: 'desk_unavailable', scope: deskId })
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       const failures = (sessionFailures.get(deskId) ?? 0) + 1
       sessionFailures.set(deskId, failures)
       const capped = failures >= MAX_SESSION_FAILURES
-      // One error row per turn: the degradation is recorded on the first failure and
-      // again at the cap, never once per retry.
-      if (failures === 1 || capped) deps.degrade({ reason: 'desk_unavailable', scope: deskId, now })
       log.warn(`desk ${deskId}: session create failed ${failures}/${MAX_SESSION_FAILURES}: ${reason}`)
       finish(trigger.deliberation_id, {
         ops: 0, tool_errors: 0, tokens: 0, end_reason: 'error',
-        rule_trace: { reason, session_failures: failures, pending_close: capped },
+        rule_trace: { reason, code: hostCodeOf(error), events: batch.map(e => e.event_id), session_failures: failures, pending_close: capped },
       })
       closeDesk()
       if (capped) sessionFailures.delete(deskId)
-      if (human) queued.set(deskId, [batch.slice(), ...(queued.get(deskId) ?? [])])
+      const { retry, closed } = human ? settleFailed(deskId, batch, error) : { retry: [], closed: 0 }
+      // One error row per turn: the degradation is recorded on the first failure, at
+      // the cap and when an event is closed, never once per retry.
+      if (failures === 1 || capped || closed) deps.degrade({ reason: 'desk_unavailable', scope: deskId, now })
+      if (retry.length) queued.set(deskId, [retry, ...(queued.get(deskId) ?? [])])
       if (!capped) return out('error')
       // Cap reached: stop looping, tell the person once, and let the agenda retry the
       // kept batch after a window. `pending_close` is the marker the tick honours.
-      if (human) pendingClose.set(deskId, ledger.nowMs() + PENDING_CLOSE_RETRY_MS)
+      if (retry.length) pendingClose.set(deskId, ledger.nowMs() + PENDING_CLOSE_RETRY_MS)
       if (human && deps.mode() !== 'shadow') {
         deps.outlet.submit({
           ...(batch[0] ? { event_id: batch[0].event_id, reply_to: batch[0].message_id } : {}),
@@ -292,10 +352,19 @@ export function createPresence(deps: DeskDeps): Presence {
     const check = selfCheck(await deps.toolface.visible(sessionId), violations.get(sessionId) ?? 0)
     if (!check.ok) {
       alertToolface(deskId, now, check)
-      finish(trigger.deliberation_id, { ops: 0, tool_errors: 0, tokens: 0, end_reason: 'blocked', rule_trace: { selfcheck: check } })
+      finish(trigger.deliberation_id, { ops: 0, tool_errors: 0, tokens: 0, end_reason: 'blocked',
+        rule_trace: { selfcheck: check, code: 'selfcheck', events: batch.map(e => e.event_id) } })
       closeDesk()
+      // Self-healing failure: the batch retries after a window under the same per-event
+      // cap as host errors; at the cap the intake closes with the self-check detail.
+      const { retry } = human ? settleFailed(deskId, batch, selfCheckError(check)) : { retry: [] }
+      if (retry.length) {
+        queued.set(deskId, [retry, ...(queued.get(deskId) ?? [])])
+        pendingClose.set(deskId, ledger.nowMs() + PENDING_CLOSE_RETRY_MS)
+      }
       return out('toolface')
     }
+    deps.recover?.({ reason: 'desk_toolface', scope: deskId })
 
     const current = deskRow(deskId) as DeskRow
     const owner = cfg().owner
@@ -318,9 +387,11 @@ export function createPresence(deps: DeskDeps): Presence {
       waiters.delete(sessionId)
       turns.delete(sessionId)
       deps.degrade({ reason: 'desk_unavailable', scope: deskId, now })
-      finish(trigger.deliberation_id, { ops: 0, tool_errors: 0, tokens: 0, end_reason: 'error', rule_trace: { reason: String(error) } })
+      finish(trigger.deliberation_id, { ops: 0, tool_errors: 0, tokens: 0, end_reason: 'error',
+        rule_trace: { reason: String(error), code: hostCodeOf(error), events: batch.map(e => e.event_id) } })
       closeDesk()
-      if (human) queued.set(deskId, [batch.slice(), ...(queued.get(deskId) ?? [])])
+      const { retry } = human ? settleFailed(deskId, batch, error) : { retry: [] }
+      if (retry.length) queued.set(deskId, [retry, ...(queued.get(deskId) ?? [])])
       return out('error')
     }
     startedSignal.get(trigger.deliberation_id)?.()
@@ -333,6 +404,7 @@ export function createPresence(deps: DeskDeps): Presence {
     finish(trigger.deliberation_id, {
       ops: ctx.ops, tool_errors: ctx.toolErrors, tokens: 0, end_reason: endKind,
       rule_trace: { tools: ctx.trace, ...(ctx.shadow ? { shadow_ops: ctx.shadowOps } : {}),
+        selfcheck: { extra: check.extra, extra_count: check.extra_count, denied_visible: check.denied_visible, violations: check.violations },
         ...(endKind === 'timeout' ? { closed: 'timeout' } : {}), truncated: dossier.truncated, alarms: dossier.alarms },
       pub_hash: projection.pubHash, dossier_hash: dossierFingerprint(projection.pubHash, projection.audienceClass),
       audience_class: projection.audienceClass, dossier_tokens: dossier.tokens, window_id: windowOf(finishedAt),
