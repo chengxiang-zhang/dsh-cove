@@ -60,6 +60,7 @@ export function toSessionView(session: ExternalSessionRecord, liveTurn?: Externa
     createdAt: session.createdAt,
     lastTurnAt: session.lastTurnAt,
     canContinue: canResumeSession(session),
+    ...session.originSessionId === undefined ? {} : { originSessionId: session.originSessionId },
     turns,
   }
 }

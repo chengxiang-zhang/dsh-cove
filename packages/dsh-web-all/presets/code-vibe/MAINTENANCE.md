@@ -116,3 +116,11 @@
     - 父回合取消只作用于还在 `wait_ms` 窗口里的那一段；回 `running` 之后子进程继续跑，直到 `external_session_stop` 或期限。
     - 读数：`engine-progress.test.ts` 8 条、`codex.test.ts` 11 条、全包 137 files / 1935 passed；`claude` 适配器由 Lead 直接改，`codex` 适配器由独立实现者改并以变异测试证明（关掉 partial → 3 红、关掉轮询 → 5 超时、lossy 追加而非重建 → chars 9≠6）。
     - 回滚：`git revert` 本次提交，然后 `node scripts/render-preset.mjs`。
+
+19. **外援按会话绑定，不再全局混列（2026-11-06）**：用户反馈「所有对话都显示外援的内容」，实际是把宿主级的一个池子挂到了每个会话的下拉上。
+    - 根因：记录里没有任何字段说明是谁派出去的，下拉又是在 `document.body` 上做增强（与当前会话无关），于是每个会话都看到同一份全局清单。
+    - 改法：`ExternalTurnRequest.originSessionId` 由工具从 `exec.agent.session.header.id` 取；引擎在**首轮创建**时写进记录，续轮不改（换会话续跑，归属仍在发起者）。视图与列表带出该字段。
+    - 客户端：下拉只列 `originSessionId === 当前会话` 的条目，无则整组不渲染；右侧面板默认同样只看本会话，勾选「全部会话」才显示其它会话与来源未知的历史记录，并标「其它会话」/「来源未知」。
+    - 兼容：老记录没有该字段 → 不进任何会话的下拉，只在「全部会话」里出现。store 版本不变（纯追加字段）。
+    - 读数：`engine-progress` 3 条绑定用例、`model-selection` 1 条来源透传、客户端 69 条；全量 1952 passed。
+    - 回滚：`git revert` 本次提交；client 与 host 两侧要一起回，否则下拉会因缺字段而恒空。

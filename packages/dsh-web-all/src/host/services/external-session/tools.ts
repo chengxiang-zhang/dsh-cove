@@ -44,13 +44,22 @@ export type GatewayLookup = () => ExternalSessionGateway | undefined
 
 /** Structural slice of the tool execution context the cwd default needs. */
 interface SessionContext {
-  agent?: { session?: { header?: { cwd?: string } } }
+  agent?: { session?: { header?: { cwd?: string; id?: string } } }
 }
 
 /** The working directory a call runs in: the session's, then the host process's. */
 function callCwd(exec: unknown): string {
   const cwd = (exec as SessionContext).agent?.session?.header?.cwd
   return typeof cwd === 'string' && cwd !== '' ? cwd : process.cwd()
+}
+
+/**
+ * The conversation this call belongs to, so the session it creates can be
+ * listed only in that conversation instead of in every dropdown on the host.
+ */
+function callOrigin(exec: unknown): string | undefined {
+  const id = (exec as SessionContext).agent?.session?.header?.id
+  return typeof id === 'string' && id !== '' ? id : undefined
 }
 
 const ERROR_SCHEMA = {
@@ -380,6 +389,8 @@ export function makeDelegationTool(
         cwd: args.cwd ?? callCwd(exec),
         signal: exec.signal,
       }
+      const origin = callOrigin(exec)
+      if (origin !== undefined) request.originSessionId = origin
       if (args.session_id !== undefined) request.sessionId = args.session_id
       if (args.title !== undefined) request.title = args.title
       const rawModel = (args as { model?: unknown }).model

@@ -47,12 +47,17 @@ function harness() {
   }
   const openTab = vi.fn()
   const right = { openTab }
+  /** The conversation on screen; the dropdown scopes its rows to it. */
+  const conversation = { key: 's1' }
+  const uiSession = { adapter: { current: { getSnapshot: () => conversation } } }
   const ctx = {
     slots,
     locale: { register: vi.fn(() => vi.fn()), bind: () => (key: ExternalSessionLocaleKey) => zh[key] },
     get: (name: string) => name === 'sidebarRightTabs'
       ? { register: (definition: { id: string; kind: string; guide?: unknown }) => { tabs.push(definition); return () => {} } }
-      : name === 'sidebarRight' ? right : undefined,
+      : name === 'sidebarRight' ? right
+        : name === 'uiSession' ? uiSession
+          : undefined,
     inject: (_services: string[], setup: (scope: unknown) => void) => { setup(ctx); return () => {} },
   }
   const dispose = mountExternalSession(ctx as never)
@@ -109,6 +114,7 @@ describe('external-session position mount', () => {
       createdAt: '2026-11-04T09:00:00Z',
       lastTurnAt: '2026-11-04T09:01:00Z',
       canContinue: true,
+      originSessionId: 's1',
       turns: [],
     }
     globalThis.fetch = vi.fn(async () => new Response(
@@ -136,11 +142,15 @@ describe('external-session position mount', () => {
       locale: { register: () => () => {}, bind: () => (key: ExternalSessionLocaleKey) => zh[key] },
       get: (name: string) => name === 'sidebarRightTabs'
         ? { register: () => () => {} }
-        : name === 'sidebarRight' ? { openTab: () => { throw new Error('sidebarRight: no session surface is mounted') } } : undefined,
+        : name === 'sidebarRight' ? { openTab: () => { throw new Error('sidebarRight: no session surface is mounted') } }
+          // The conversation surface still answers here: dropping it would hide
+          // every row and make this a test of nothing.
+          : name === 'uiSession' ? { adapter: { current: { getSnapshot: () => ({ key: 's1' }) } } }
+            : undefined,
       inject: (_services: string[], setup: (scope: unknown) => void) => { setup(ctxHidden); return () => {} },
     }
     globalThis.fetch = vi.fn(async () => new Response(
-      JSON.stringify({ ok: true, value: { sessions: [{ id: 'ext-1', provider: 'claude', title: 't', status: 'idle', cwd: '/tmp', createdAt: '2026-11-04T09:00:00Z', lastTurnAt: '2026-11-04T09:01:00Z', canContinue: true, turns: [] }] } }),
+      JSON.stringify({ ok: true, value: { sessions: [{ id: 'ext-1', provider: 'claude', title: 't', status: 'idle', cwd: '/tmp', createdAt: '2026-11-04T09:00:00Z', lastTurnAt: '2026-11-04T09:01:00Z', canContinue: true, originSessionId: 's1', turns: [] }] } }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     )) as never
     mounted.push(mountExternalSession(ctxHidden as never))
@@ -206,6 +216,7 @@ function settledSession(overrides: Record<string, unknown> = {}): Record<string,
     createdAt: '2026-11-04T11:59:00Z',
     lastTurnAt: '2026-11-04T12:05:30Z',
     canContinue: true,
+    originSessionId: 's1',
     turns: [
       {
         n: 1,

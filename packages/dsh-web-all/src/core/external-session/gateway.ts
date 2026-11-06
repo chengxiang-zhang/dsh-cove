@@ -38,6 +38,11 @@ export interface ExternalTurnRequest {
   model?: string
   /** Cancels this turn. A panel cancellation aborts the same way. */
   signal?: AbortSignal
+  /**
+   * Conversation dispatching this turn, recorded on a session's first turn so
+   * every surface can scope the list to the conversation that owns it.
+   */
+  originSessionId?: string
 }
 
 /**

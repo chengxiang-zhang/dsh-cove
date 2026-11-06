@@ -15,6 +15,7 @@ export type {
   ExternalSessionList,
   ExternalSessionStatus,
   ExternalSessionView,
+  ExternalTurnProgress,
   ExternalTurnStatus,
   ExternalTurnView,
   ExternalTurnViewStatus,
@@ -35,6 +36,7 @@ import {
   isExternalSessionStatus,
   isExternalTurnStatus,
   type ExternalSessionView,
+  type ExternalTurnProgress,
   type ExternalTurnView,
   type ExternalTurnViewStatus,
   type ExternalUsage,
@@ -62,6 +64,26 @@ function readUsage(value: unknown): ExternalUsage | undefined {
   return { input, output }
 }
 
+/** 运行中那一轮的进度；缺一个数就整体不认，避免半截读数误导。 */
+export function readTurnProgress(value: unknown): ExternalTurnProgress | undefined {
+  if (!isRecord(value)) return undefined
+  const elapsed = asNumber(value.elapsed_ms)
+  const idle = asNumber(value.idle_ms)
+  const frames = asNumber(value.frames)
+  const toolCalls = asNumber(value.tool_calls)
+  const chars = asNumber(value.chars)
+  if (elapsed === undefined || idle === undefined || frames === undefined
+    || toolCalls === undefined || chars === undefined) return undefined
+  return {
+    elapsed_ms: elapsed,
+    idle_ms: idle,
+    frames,
+    tool_calls: toolCalls,
+    chars,
+    tail: typeof value.tail === 'string' ? value.tail : '',
+  }
+}
+
 /**
  * 一轮记录。运行中的那一轮没有结果与耗时（宿主给的就是这样），因此这两个字段
  * 一律可缺省；只有 `n` 与已知状态是硬要求。
@@ -87,6 +109,9 @@ export function readTurnView(value: unknown): ExternalTurnView | undefined {
   if (usage !== undefined) turn.usage = usage
   if (costUsd !== undefined) turn.costUsd = costUsd
   if (result !== undefined) turn.result = result
+  const progress = readTurnProgress(value.progress)
+  if (progress !== undefined) turn.progress = progress
+  if (value.partial === true) turn.partial = true
   return turn
 }
 
@@ -111,6 +136,9 @@ export function readSessionView(value: unknown): ExternalSessionView | undefined
     lastTurnAt: asText(value.lastTurnAt) ?? '',
     // 宿主一定给 canContinue；万一缺了，按「未关闭即可续」兜底。
     canContinue: typeof value.canContinue === 'boolean' ? value.canContinue : value.status !== 'closed',
+    ...typeof value.originSessionId === 'string' && value.originSessionId !== ''
+      ? { originSessionId: value.originSessionId }
+      : {},
     turns,
   }
 }

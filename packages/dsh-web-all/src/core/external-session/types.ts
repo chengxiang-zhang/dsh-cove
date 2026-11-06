@@ -90,6 +90,15 @@ export interface ExternalSessionRecord {
   createdAt: string
   /** ISO-8601 instant of the last turn that settled. */
   lastTurnAt: string
+  /**
+   * Conversation that dispatched this session's first turn.
+   *
+   * Absent on records written before the field existed: those cannot be
+   * attributed, so they are shown only in the panel's full list and never in a
+   * conversation's dropdown. Without it every conversation listed every
+   * external session of the host, which read as one shared pool.
+   */
+  originSessionId?: string
   turns: ExternalTurnRecord[]
 }
 
@@ -162,6 +171,8 @@ export interface ExternalSessionView {
   lastTurnAt: string
   /** Whether `external_session_continue` may be used on this session. */
   canContinue: boolean
+  /** Conversation that dispatched it; absent for records older than the field. */
+  originSessionId?: string
   turns: ExternalTurnView[]
 }
 

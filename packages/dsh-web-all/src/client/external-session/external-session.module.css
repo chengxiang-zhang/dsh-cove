@@ -380,3 +380,23 @@
   color: var(--dsw-alias-label-secondary, inherit);
   background: var(--dsw-alias-bg-layer-2, rgb(0 0 0 / 6%));
 }
+/* 会话范围开关：默认只看本会话，勾选后才显示全部会话。 */
+.scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary, inherit);
+  user-select: none;
+}
+
+/* 「其它会话 / 来源未知」标记：只在全部会话视图里出现。 */
+.rowScope {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--dsw-alias-label-secondary, inherit);
+  border: 1px solid var(--dsw-alias-border-secondary, rgb(0 0 0 / 12%));
+}

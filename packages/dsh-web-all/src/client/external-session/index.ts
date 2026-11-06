@@ -31,6 +31,51 @@ import {
 } from './panel.tsx'
 import type { ExternalSessionView } from './types.ts'
 
+/**
+ * Snapshot sources the shell exposes for "which conversation is on screen".
+ *
+ * The same three faces the subagent-model badge reads: the public adapter
+ * binding first, then the inner session store, then the workspace selection.
+ * Any of them may be absent on a given build, so every read is optional.
+ */
+interface ConversationFaces {
+  uiSession?: {
+    adapter?: { current?: { getSnapshot?: () => { key?: string } | undefined } }
+    current?: { getSnapshot?: () => { key?: string } | undefined }
+  }
+  uiWorkspace?: { selection?: { getSnapshot?: () => { sessionId?: string } | undefined } }
+}
+
+/** Read a face without letting a proxied or hostile one throw. */
+function readFace<T>(reader: () => T): T | undefined {
+  try { return reader() } catch { return undefined }
+}
+
+/** The conversation currently on screen, or undefined when no shell face answers. */
+function currentConversation(ctx: ClientContext): string | undefined {
+  const faces = (() => {
+    try { return (ctx.get as unknown as (id: string, strict?: boolean) => unknown)('uiSession', false) } catch { return undefined }
+  })() as ConversationFaces['uiSession'] | undefined
+  const workspace = (() => {
+    try { return (ctx.get as unknown as (id: string, strict?: boolean) => unknown)('uiWorkspace', false) } catch { return undefined }
+  })() as ConversationFaces['uiWorkspace'] | undefined
+  const candidates = [
+    readFace(() => faces?.adapter?.current?.getSnapshot?.()?.key),
+    readFace(() => faces?.current?.getSnapshot?.()?.key),
+    readFace(() => workspace?.selection?.getSnapshot?.()?.sessionId),
+  ]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate !== '') return candidate
+  }
+  return undefined
+}
+
+/** Only the sessions this conversation dispatched; legacy rows have no origin. */
+function scopedToConversation(sessions: readonly ExternalSessionView[], conversationId: string | undefined): readonly ExternalSessionView[] {
+  if (conversationId === undefined) return []
+  return sessions.filter(session => session.originSessionId === conversationId)
+}
+
 /** 右栏页签的 kind（官方页签注册用的稳定 id）。 */
 export const EXTERNAL_SESSION_TAB_KIND = 'web-ui.external-session'
 
@@ -157,6 +202,7 @@ function registerTab(scope: ClientContext, tabs: TabRegistry, deps: FaceDeps): (
   const disposeSlot = scope.slots.inject('sidebar.right.pane.tab' as never, () => scope.slots.register(
     { name: 'sidebar.right.pane.tab', key: TAB_KEY, locale: NS, inject: (sessionId: string) => ({ sessionId }) } as never,
     ((props: { useTabInfo?: () => ExternalSessionTabInfo; sessionId?: string }) => createElement(ExternalSessionTab, {
+      conversationId: props.sessionId,
       api: deps.api,
       store: deps.store,
       t: deps.t,
@@ -170,7 +216,7 @@ function registerTab(scope: ClientContext, tabs: TabRegistry, deps: FaceDeps): (
 }
 
 /** 下拉分组的 DOM 增强；官方弹层出现时才动，消失时什么都不留。 */
-function mountDropdownGroup(deps: FaceDeps): () => void {
+function mountDropdownGroup(deps: FaceDeps, conversationOf: () => string | undefined): () => void {
   if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return () => {}
   let timer: ReturnType<typeof setTimeout> | undefined
   let poll: ReturnType<typeof setInterval> | undefined
@@ -208,7 +254,10 @@ function mountDropdownGroup(deps: FaceDeps): () => void {
       if (tree === undefined) return
       // 弹层是「用到才出现」的：第一次看见它就先补一次数据，避免显示上一次的旧计数。
       if (snapshot.state === 'idle') void deps.store.refresh()
-      syncExternalGroup(document.body, snapshot.sessions, groupText(deps.t, snapshot.sessions.length), deps.openSession)
+      // 下拉属于当前会话：别的会话派出去的外援不出现在这里，否则每个会话看起来
+      // 都挂着同一份全局清单。
+      const scoped = scopedToConversation(snapshot.sessions, conversationOf())
+      syncExternalGroup(document.body, scoped, groupText(deps.t, scoped.length), deps.openSession)
     } catch {
       // 下拉分组是渐进增强：任何异常都不许影响官方下拉本身。
     }
@@ -297,7 +346,7 @@ function assemble(ctx: ClientContext): () => void {
     }
   }
   disposers.push(() => { disposeTab() })
-  disposers.push(mountDropdownGroup(deps))
+  disposers.push(mountDropdownGroup(deps, () => currentConversation(ctx)))
 
   return () => {
     for (const dispose of disposers.reverse()) {

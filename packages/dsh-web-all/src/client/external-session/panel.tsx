@@ -54,6 +54,11 @@ export interface ExternalSessionPanelProps {
   t: ExternalSessionTranslate
   /** 下拉条目点名要打开哪个会话（导航参数）。 */
   initialSessionId?: string
+  /**
+   * 当前会话的 id。给了就只显示本会话派出去的外援；未标注来源的历史记录
+   * 只在「全部会话」里出现。
+   */
+  conversationId?: string
   /** 页签可见性：不可见时不取数。 */
   visible?: boolean
   /** 页签级中止信号（官方框架在切换页签时给出）。 */
@@ -149,20 +154,29 @@ export function ExternalSessionPanel({
   store,
   t,
   initialSessionId,
+  conversationId,
   visible = true,
   signal,
 }: ExternalSessionPanelProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot)
+  const [showAll, setShowAll] = useState(false)
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
+
+  // 会话绑定：默认只看本会话派出去的外援。没有来源标注的历史记录不参与默认
+  // 列表——它们无法归属，只能进「全部会话」。
+  const scoped = useMemo(() => {
+    if (showAll || conversationId === undefined) return snapshot.sessions
+    return snapshot.sessions.filter(session => session.originSessionId === conversationId)
+  }, [snapshot.sessions, conversationId, showAll])
   const [pending, setPending] = useState<'continue' | 'cancel' | 'close' | undefined>(undefined)
   const [actionError, setActionError] = useState<string | undefined>(undefined)
   const [draft, setDraft] = useState('')
 
   const selected = useMemo(
-    () => pickSession(snapshot.sessions, selectedId ?? initialSessionId),
-    [snapshot.sessions, selectedId, initialSessionId],
+    () => pickSession(scoped, selectedId ?? initialSessionId),
+    [scoped, selectedId, initialSessionId],
   )
-  const running = snapshot.sessions.some(session => session.status === 'running')
+  const running = scoped.some(session => session.status === 'running')
 
   // 下拉条目点名要看某个会话时，导航参数一变就切过去（用户仍可随后手动改选）。
   useEffect(() => {
@@ -210,7 +224,7 @@ export function ExternalSessionPanel({
   const error = snapshot.error
   const showLoading = snapshot.state === 'loading' && snapshot.sessions.length === 0
   const showFailure = error !== undefined && snapshot.sessions.length === 0
-  const showEmpty = snapshot.state !== 'loading' && snapshot.sessions.length === 0 && error === undefined
+  const showEmpty = snapshot.state !== 'loading' && scoped.length === 0 && error === undefined
   const blocked = blockedReason(selected)
 
   return (
@@ -218,8 +232,17 @@ export function ExternalSessionPanel({
       <header className={css.head} data-dsh-part="panel-head">
         <div className={css.headText}>
           <h2 className={css.title} data-dsh-part="panel-title">{t('panel.title')}</h2>
-          <p className={css.intro} data-dsh-part="panel-count">{t('panel.count', { count: snapshot.sessions.length })}</p>
+          <p className={css.intro} data-dsh-part="panel-count">{t('panel.count', { count: scoped.length })}</p>
         </div>
+        <label className={css.scope} data-dsh-part="scope-toggle">
+          <input
+            type="checkbox"
+            checked={showAll || conversationId === undefined}
+            disabled={conversationId === undefined}
+            onChange={event => { setShowAll(event.target.checked) }}
+          />
+          {t('scoped.all')}
+        </label>
         <button
           type="button"
           className={css.secondary}
@@ -242,9 +265,9 @@ export function ExternalSessionPanel({
       ) : null}
       {showEmpty ? <PageNotice kind="empty">{t('list.empty')}</PageNotice> : null}
 
-      {snapshot.sessions.length === 0 ? null : (
+      {scoped.length === 0 ? null : (
         <ul className={css.list} data-dsh-part="list" aria-label={t('list.title')}>
-          {snapshot.sessions.map(session => (
+          {scoped.map(session => (
             <li key={session.id}>
               <button
                 type="button"
@@ -265,6 +288,11 @@ export function ExternalSessionPanel({
                   <span className={css.pill} data-state={session.status}>{statusLabel(session.status, t)}</span>
                   <span className={css.rowProvider} data-dsh-part="session-provider">{session.provider}</span>
                   <span className={css.rowTime} data-dsh-part="session-time">{lastActivityText(session, t)}</span>
+                  {conversationId === undefined || session.originSessionId === conversationId ? null : (
+                    <span className={css.rowScope} data-dsh-part="session-scope">
+                      {session.originSessionId === undefined ? t('scoped.unknown') : t('scoped.other')}
+                    </span>
+                  )}
                 </span>
               </button>
             </li>
@@ -347,13 +375,15 @@ export interface ExternalSessionTabProps {
   readonly store: ExternalSessionStore
   readonly t: ExternalSessionTranslate
   readonly useTabInfo?: () => ExternalSessionTabInfo
+  /** 页签所在会话：默认只显示这个会话派出去的外援。 */
+  readonly conversationId?: string
 }
 
 /**
  * 右栏页签的薄封装：把导航参数里的 `sessionId`（下拉条目点名要看的会话）变成
  * 面板的初始选中，其余交给 {@link ExternalSessionPanel}。
  */
-export function ExternalSessionTab({ api, store, t, useTabInfo }: ExternalSessionTabProps) {
+export function ExternalSessionTab({ api, store, t, useTabInfo, conversationId }: ExternalSessionTabProps) {
   const info = useTabInfo?.()
   const params = info?.tab.navigation.params ?? {}
   const requested = params.sessionId
@@ -364,6 +394,7 @@ export function ExternalSessionTab({ api, store, t, useTabInfo }: ExternalSessio
       store={store}
       t={t}
       {...(initialSessionId === undefined ? {} : { initialSessionId })}
+      {...(conversationId === undefined ? {} : { conversationId })}
       visible={info?.tab.visible ?? true}
     />
   )

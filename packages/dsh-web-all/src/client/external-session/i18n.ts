@@ -82,6 +82,9 @@ export const zh = {
   'group.state.failed': '失败',
   'group.state.closed': '已关闭',
   'group.state.partial': '部分结果',
+  'scoped.all': '全部会话',
+  'scoped.other': '其它会话',
+  'scoped.unknown': '来源未知',
 } as const
 
 /** 键集。 */
@@ -165,6 +168,9 @@ export const en: Record<ExternalSessionLocaleKey, string> = {
   'group.state.failed': 'failed',
   'group.state.closed': 'closed',
   'group.state.partial': 'partial result',
+  'scoped.all': 'all conversations',
+  'scoped.other': 'other conversation',
+  'scoped.unknown': 'origin unknown',
 }
 
 /** 按 `{name}` 占位符插值；缺失的参数原样留空，不抛错。 */

@@ -120,6 +120,28 @@ describe('deadlines', () => {
   })
 })
 
+describe('conversation binding', () => {
+  it('records the conversation that dispatched the first turn', async () => {
+    const { engine } = setup()
+    await engine.runTurn({ provider: 'claude', prompt: 'one', cwd: '/tmp', originSessionId: 'conv-a' })
+    expect((await engine.listViews()).sessions[0]?.originSessionId).toBe('conv-a')
+  })
+
+  it('keeps the original conversation when another one continues the session', async () => {
+    const { engine } = setup()
+    await engine.runTurn({ provider: 'claude', prompt: 'one', cwd: '/tmp', originSessionId: 'conv-a' })
+    await engine.runTurn({ provider: 'claude', prompt: 'two', sessionId: 'ext-1', cwd: '/tmp', originSessionId: 'conv-b' })
+    // The list scoping must stay where the work started, not follow the last caller.
+    expect((await engine.listViews()).sessions[0]?.originSessionId).toBe('conv-a')
+  })
+
+  it('leaves the field absent when the caller names no conversation', async () => {
+    const { engine } = setup()
+    await engine.runTurn({ provider: 'claude', prompt: 'one', cwd: '/tmp' })
+    expect((await engine.listViews()).sessions[0]?.originSessionId).toBeUndefined()
+  })
+})
+
 describe('model-facing list', () => {
   it('carries the running turn and its progress', async () => {
     const { engine, claude, advance } = setup()

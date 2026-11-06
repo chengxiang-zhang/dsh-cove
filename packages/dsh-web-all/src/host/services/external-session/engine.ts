@@ -461,7 +461,13 @@ export class ExternalSessionEngine implements ExternalSessionGateway {
       // request is refused by the state gate rather than run against the same
       // CLI conversation — including on a session created by this very turn.
       // Registering here also makes the turn cancellable before it spawns.
-      const unwritable = await this.persist(markRunning(session))
+      // The dispatching conversation is recorded once, on the session's first
+      // turn: a continuation may come from another conversation, and the list
+      // scoping must stay where the work was started.
+      const preparedSession: ExternalSessionRecord = isNew && request.originSessionId !== undefined
+        ? { ...session, originSessionId: request.originSessionId }
+        : session
+      const unwritable = await this.persist(markRunning(preparedSession))
       reportStarted(unwritable)
       if (unwritable !== null) {
         finalResult = unwritable

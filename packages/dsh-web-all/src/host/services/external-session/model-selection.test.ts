@@ -133,6 +133,16 @@ describe('delegation tool model parameter', () => {
     expect('model' in (requests[1] ?? {})).toBe(false)
   })
 
+  it('carries the dispatching conversation so the session can be scoped to it', async () => {
+    const { gateway, requests } = recordingGateway()
+    const tool = makeDelegationTool('claude', () => gateway, 'subagent_claude_code', CATALOGUE)
+    await tool.execute({ prompt: 'hi' }, {
+      signal: new AbortController().signal,
+      agent: { session: { header: { id: 'conv-9', cwd: '/repo' } } },
+    } as never)
+    expect(requests[0]?.['originSessionId']).toBe('conv-9')
+  })
+
   it('falls back to the configured default model when the caller omits one', async () => {
     const { gateway, requests } = recordingGateway()
     const tool = makeDelegationTool('claude', () => gateway, 'subagent_claude_code', CATALOGUE, 'kaon/claude-opus-5-5')
