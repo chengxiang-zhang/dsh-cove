@@ -63,6 +63,10 @@ jobs:
       - name: Runtime dependency check
         run: pnpm runtime-deps:check
 
+      # A declared must-gate for a publish (`docs/publish-prep.md`); no other workflow ran it.
+      - name: Shared copies in sync
+        run: pnpm sync-shared:check
+
       - name: No emoji rule
         run: |
           python3 - <<'PY'

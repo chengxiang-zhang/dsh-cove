@@ -64,6 +64,13 @@ jobs:
         run: pnpm test:scripts
       - name: Runtime dependency guard
         run: pnpm runtime-deps:check
+      # Both of these are declared must-gates for a publish but were only ever run by
+      # `ci.yml`, so a release could be tagged from a commit where they were red. They are
+      # cheap and they fail closed, so the publish path runs them itself.
+      - name: Shared copies in sync
+        run: pnpm sync-shared:check
+      - name: Documentation gates
+        run: pnpm docs:check
       - name: Generate release notes
         run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
       - name: Install dsh CLI (runtime host floor)
