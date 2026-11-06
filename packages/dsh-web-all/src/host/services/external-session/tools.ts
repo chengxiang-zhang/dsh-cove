@@ -430,27 +430,42 @@ export function makeListTool(
   return defineTool({
     name: toolName,
     description:
-      'List the external CLI sessions this host keeps, newest activity last, with each session\u2019s '
-      + 'status and its last turn. Use it to find the session_id to continue, or to check whether '
-      + 'an earlier delegation is still running, failed, or was closed.',
+      'List the external CLI sessions, newest activity last, with each session\u2019s status, its last '
+      + 'turn and any turn running now. By default it lists only the sessions this conversation '
+      + 'dispatched, which is what a follow-up needs; pass scope "all" to see every session on the '
+      + 'host, including ones started by other conversations and older records with no recorded '
+      + 'origin. Use it to find the session_id to continue, or to check whether an earlier '
+      + 'delegation is still running, failed, or was closed.',
     parameters: {
       status: {
         type: 'string',
         enum: EXTERNAL_SESSION_STATUSES,
         description: 'Only list sessions in this state.',
       },
+      scope: {
+        type: 'string',
+        enum: ['conversation', 'all'],
+        description: 'Which sessions to list: this conversation (default) or every session on the host.',
+      },
     },
     output: {
       schema: OVERVIEW_LIST_SCHEMA,
       render: (_args, value) => jsonText(value),
     },
-    async execute(args) {
+    async execute(args, exec) {
       const gateway = lookup()
       if (gateway === undefined) {
         return SERVICE_UNMOUNTED
       }
       const filter = args.status as ExternalSessionStatus | undefined
-      return gateway.listOverviews(filter)
+      const listed = await gateway.listOverviews(filter)
+      // A delegation belongs to the conversation that started it; listing every
+      // session by default would put another conversation's work in this one's
+      // context. "all" is the explicit opt-in for an operator view.
+      if ((args as { scope?: string }).scope === 'all') return listed
+      const origin = callOrigin(exec)
+      if (origin === undefined) return { sessions: [] }
+      return { sessions: listed.sessions.filter(session => session.originSessionId === origin) }
     },
     presentCall(args): GenericCallView {
       return { card: 'generic', title: 'External sessions', kind: 'read', rawInput: args }

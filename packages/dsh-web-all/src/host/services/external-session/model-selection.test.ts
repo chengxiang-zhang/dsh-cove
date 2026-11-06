@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { claudeTurnArgv, spawnArgv as claudeSpawnArgv } from './providers/claude.ts'
 import { codexTurnArgv, spawnArgv as codexSpawnArgv } from './providers/codex.ts'
-import { makeDelegationTool } from './tools.ts'
+import { makeDelegationTool, makeListTool } from './tools.ts'
 import type { ExternalSessionGateway } from '../../../core/external-session/gateway.ts'
 import type { ExternalModelOption } from '../../../core/external-session/types.ts'
 
@@ -42,6 +42,26 @@ function recordingGateway() {
   }
   return { requests, gateway: gateway as unknown as ExternalSessionGateway }
 }
+
+describe('list scope', () => {
+  const execFor = (id: string) => ({ signal: new AbortController().signal, agent: { session: { header: { id } } } })
+
+  it('lists only the calling conversation by default and everything on request', async () => {
+    const listed = {
+      sessions: [
+        { id: 'ext-a', provider: 'claude', title: 'a', status: 'idle', cwd: '/tmp', createdAt: '', lastTurnAt: '', canContinue: true, turnCount: 1, lastTurn: null, running: null, originSessionId: 'conv-1' },
+        { id: 'ext-b', provider: 'claude', title: 'b', status: 'idle', cwd: '/tmp', createdAt: '', lastTurnAt: '', canContinue: true, turnCount: 1, lastTurn: null, running: null, originSessionId: 'conv-2' },
+        { id: 'ext-old', provider: 'claude', title: 'old', status: 'idle', cwd: '/tmp', createdAt: '', lastTurnAt: '', canContinue: true, turnCount: 1, lastTurn: null, running: null },
+      ],
+    }
+    const gateway = { listOverviews: async () => listed } as unknown as ExternalSessionGateway
+    const tool = makeListTool(() => gateway)
+    const mine = await tool.execute({}, execFor('conv-1') as never) as { sessions: Array<{ id: string }> }
+    expect(mine.sessions.map(session => session.id)).toEqual(['ext-a'])
+    const all = await tool.execute({ scope: 'all' }, execFor('conv-1') as never) as { sessions: Array<{ id: string }> }
+    expect(all.sessions.map(session => session.id)).toEqual(['ext-a', 'ext-b', 'ext-old'])
+  })
+})
 
 describe('claude argv', () => {
   it('passes the pinned model as a flag before the prompt terminator', () => {

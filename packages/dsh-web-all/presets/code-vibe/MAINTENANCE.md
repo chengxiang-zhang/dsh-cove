@@ -122,5 +122,6 @@
     - 改法：`ExternalTurnRequest.originSessionId` 由工具从 `exec.agent.session.header.id` 取；引擎在**首轮创建**时写进记录，续轮不改（换会话续跑，归属仍在发起者）。视图与列表带出该字段。
     - 客户端：下拉只列 `originSessionId === 当前会话` 的条目，无则整组不渲染；右侧面板默认同样只看本会话，勾选「全部会话」才显示其它会话与来源未知的历史记录，并标「其它会话」/「来源未知」。
     - 兼容：老记录没有该字段 → 不进任何会话的下拉，只在「全部会话」里出现。store 版本不变（纯追加字段）。
-    - 读数：`engine-progress` 3 条绑定用例、`model-selection` 1 条来源透传、客户端 69 条；全量 1952 passed。
+    - 模型侧同口径：`external_session_list` 默认只列本会话（`originSessionId` 比对），`scope: "all"` 才是全host 视图；不这么做，别条会话的外援会进本会话上下文。
+    - 读数：`engine-progress` 3 条绑定用例、`model-selection` 2 条（来源透传 + 列表范围）、客户端 69 条；external-session 两套 193 passed。
     - 回滚：`git revert` 本次提交；client 与 host 两侧要一起回，否则下拉会因缺字段而恒空。

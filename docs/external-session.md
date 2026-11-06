@@ -131,10 +131,11 @@
 subagent_claude_code(prompt, session_id?, cwd?, title?, model?, wait_ms?)
 subagent_codex(prompt, session_id?, cwd?, title?, model?, wait_ms?)
 external_session_wait(session_id, timeout_ms?)
-external_session_list(status?)
+external_session_list(status?, scope?)
 external_session_stop(session_id)
 ```
 
+- `external_session_list` 默认只列**本会话**派出去的外援（记录上的 `originSessionId` 等于当前会话）；`scope: "all"` 才列宿主机全部会话，包含其它会话发起的与来源未知的历史记录。同一条规则也约束下拉与面板：外援跟着发起它的会话走。
 - 省略 `session_id`：新建外部会话并跑第一轮，等价原有一次性的使用方式。
 - 提供 `session_id`：在该会话上跑下一轮，内部使用 CLI 会话号续接。
 - 没有 `provider` 参数：走哪个 CLI 由调用的是哪个工具决定，provider 不由参数选。

@@ -113,6 +113,7 @@ export function toSessionOverview(session: ExternalSessionRecord, live?: Externa
     turnCount: session.turns.length,
     lastTurn: last === undefined ? null : toTurnDigest(last),
     running: runningOf(live),
+    ...session.originSessionId === undefined ? {} : { originSessionId: session.originSessionId },
   }
 }
 

@@ -207,6 +207,8 @@ export interface ExternalSessionOverview {
   lastTurn: ExternalTurnDigest | null
   /** The turn running now, with its progress; null when the session is quiet. */
   running: (ExternalTurnProgress & { turn: number; started_at: string }) | null
+  /** Conversation that dispatched it; absent for records older than the field. */
+  originSessionId?: string
 }
 
 /** The model-facing session list payload. */
