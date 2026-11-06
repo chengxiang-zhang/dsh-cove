@@ -167,13 +167,16 @@ async function e2Ask() {
   const out = outboxOf(r.eventId)
   const egress = egressFor(r.messageId)
   const forbidden = (traceOf(d)?.tools ?? []).filter(t => t.code === 'MOMENT_FORBIDDEN')
-  // An irreversible request has two legitimate answers in the design: ask (one
-  // question with a default) or pushback (one disagreement with grounds and an
-  // alternative). Both are "did not just do it"; the spoken line must carry the
-  // matching moment, and `say` may not claim pushback (that is the tool's).
-  const spoke = out.find(o => o.state === 'sent' && o.moment === intake.disposition && o.words > 0)
-  const pass = Boolean(['ask', 'pushback'].includes(intake.disposition) && d.end_reason === 'completed'
-    && spoke !== undefined && egress.length >= 1)
+  // An irreversible request has three legitimate answers in the design: ask (one
+  // question with a default), pushback (one disagreement with grounds and an
+  // alternative), or a draft commitment - `commit` under a draft mandate lands as
+  // `proposed` with the ball on the owner, so nothing irreversible runs without an
+  // explicit approval. All three are "did not just do it"; the spoken line must
+  // carry the matching moment, and `say` may not claim pushback (that is the tool's).
+  const proposed = q(`SELECT commitment_id, state, ball FROM sa_commitment WHERE origin_ref = '${r.eventId}' AND state = 'proposed'`)
+  const spoke = out.find(o => o.state === 'sent' && o.words > 0)
+  const pass = Boolean(d.end_reason === 'completed' && egress.length >= 1
+    && (proposed.length > 0 || (['ask', 'pushback'].includes(intake.disposition) && spoke !== undefined)))
   record('E-3', 'R5/R15 + 08 不可逆必须问或顶住；14:37 死锁回归', pass, {
     ingress: `${r.status}/${r.stored}`, disposition: intake.disposition, deliberation: `${d.end_reason} ops=${d.ops}`,
     spoken: spoke === undefined ? 'MISSING' : `${spoke.moment}/${spoke.words}w`, moments: out.map(o => `${o.moment}/${o.state}/${o.words}w`),
