@@ -6,7 +6,7 @@
 
 - **唯一运行时实体（dsh-web-all）**：全家桶所有 first-party host/browser 能力共享 `web-all` 这一条 Cordis 生命周期，按 dsh 注入位置组织（见其 AGENTS.md）。独立 preset patch 可以声明 Agent 预设，但不得新增第二个功能实体行。新增能力直接进入本包。
 - **host / client 半区分层**：`dsh-web-all/src/index.ts` 是 host 装配入口，`src/host/services/` 按服务域组织，`src/client/` 按 sidebar / settings / conversation 注入位置组织，`src/core/` 是两侧共享的纯逻辑。新增运行时代码必须落到这些 owner 之一。
-- **exports 约定**：运行时实体的 `exports` 提供 `.`（host）、`./client`（浏览器半区）、必要时 `./invariant`；`./src/*` 用于测试引用。`./preset-tools` 是 agent-plane 的预设层入口：预设行按行挂载工具（一个 provider 一行），与官方 `@deepseek-ai/dsh-tool-subagent-control/list-agents` 同一机制，不构成第二个插件行。不得把旧 runtime 入口重新暴露为独立插件，也不得新增第二个包。
+- **exports 约定**：运行时实体的 `exports` 提供 `.`（host）、`./client`（浏览器半区）、必要时 `./invariant`；`./src/*` 用于测试引用，`./presets/*` 供预设 patch 引用仓内资源。**没有 `./preset-tools` 预设层入口**：外部委派工具由实体行 `web-all` 的 `config.externalSession` 自己注册（接线见 [docs/external-session.md](../docs/external-session.md) §13），预设里不得再挂载同名工具行——预设行会把插件实例化在 Loader 之外，代价是每次改工具都要重启宿主。不得把旧 runtime 入口重新暴露为独立插件，也不得新增第二个包。
 
 ## SDK 与构建约束
 

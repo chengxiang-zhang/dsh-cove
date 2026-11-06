@@ -7,8 +7,8 @@
  * because a tool result is the only channel that reaches the conversation
  * without a message-injection API the plugin does not have.
  *
- * Registration is not done here: the preset decides which tools a session sees,
- * so `src/preset-tools.ts` owns the row and this module only builds definitions.
+ * Registration is not done here: the entity's own Loader row (`web-all` ->
+ * `config.externalSession`, `src/host/services/index.ts:103`) owns the tools; this module builds them.
  * @module dsh-web-all/host/services/external-session/tools
  */
 import type { Context } from '@deepseek-ai/cordis'

@@ -2,9 +2,10 @@
  * Mount the external-session service domain.
  *
  * The engine is provided unconditionally, because the panel reads it whether or
- * not a session may delegate; the model-facing tools are not registered here at
- * all. They belong to the preset-level entry (`preset-tools`), which is what
- * keeps a preset's two provider switches meaningful. See `docs/external-session.md`.
+ * not a session may delegate. The model-facing tools belong to this Loader
+ * entry as well (`register` below wires them): the entity row owns the whole
+ * capability, and a preset row would instantiate the plugin outside the Loader,
+ * freezing its tools until the next host restart. See `docs/external-session.md`.
  * @module dsh-web-all/host/services/external-session
  */
 import type { Context } from '@deepseek-ai/cordis'

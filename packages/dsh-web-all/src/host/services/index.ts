@@ -97,9 +97,9 @@ export function assembleServices(ctx: Context, deps: ServiceAssemblyDeps = {}): 
   // MISSING/UNAVAILABLE selection rules.
   mount('web-search-anthropic', () => webSearchAnthropic.register(ctx))
   mount('schedule-mode', () => scheduleMode.register(ctx))
-  // External CLI sessions: the store, engine and panel data plane. The
-  // model-facing tools are NOT mounted here — a preset declares them through
-  // the `preset-tools` entry, which is what keeps its provider switches honest.
+  // External CLI sessions: the store, engine, panel data plane and the
+  // model-facing delegation tools. This entity row registers the tools itself;
+  // no preset-plane entry exists, so the module stays replaceable by the Loader.
   mount('external-session', () => externalSession.register(ctx, {
     config: deps.externalSession,
     dshHome: deps.dshHome,
