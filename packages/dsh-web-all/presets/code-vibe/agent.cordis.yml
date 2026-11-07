@@ -322,6 +322,23 @@
         subagentProvider: spawn
         maxRounds: 64
 
+# ── launch/close turn contract ───────────────────────────────────────────────
+
+# One runtime rule, narrowly scoped: when the user's OWN message is a
+# launch-readiness or close-out question and the turn has not executed
+# release_check.py, the turn is steered once with the exact command, so the answer
+# becomes a gate table instead of a prose debt list (observed live 2026-11-08:
+# 「具备全量上线的条件了吗」 answered with 生产还在跑旧代码 / 没有回滚演练).
+#
+# It never denies a tool, never claims a checkout, never writes into a user
+# repository and never asks the user a question — the four reasons the old
+# wish-gate plugin was removed (2026-11-02), all of them out of scope here.
+# Module code is ESM-cached per process: this row and the module become live only
+# after the profile is reassembled (restart). Kill switch: TURN_CONTRACT_STEER=0.
+- id: turn-contract
+  name: '@dsh-cove/dsh-web-all/presets/code-vibe/plugins/turn-contract.js'
+  config: {}
+
 # ── remaining model-facing rows ─────────────────────────────────────────────
 
 - id: tool-ask-user

@@ -154,3 +154,11 @@
     - 探针（规则 #1）：`pnpm -C packages/dsh-web-all exec vitest run tests/preset-release-gate.spec.ts tests/preset-release-flow.spec.ts`——`release_check` 正例 9/9，四个负例（缺授权 / `/health` 冒充冒烟 / 缺 E2E / 无 `--run`）逐条红；flow 用例证明「没有发布方案不能授权」「有方案+授权才 `--assert deploy` ok」「UI 愿望缺 e2e 时 `check_spec --close` exit 1、补齐后 exit 0」「release commit 未 push 时 `change-set` FAIL」；`verify.sh --kind ui` 的手工双向探针：e2e 齐备 exit 0，抽掉 `e2e/` exit 1 并点名 `steps.md`。
     - 已知边界：这是纪律 + 机械门，不是运行时强制；`release_check.py` 只认 `.sdd/release/<id>.env` 的十个键，拼错键按缺失处理；`--run` 执行 agent 自己声明的只读命令，脚本不做沙箱；授权「本回合」语义靠 `.deploy-authorized` 的 ts 与执行记录，脚本不能证明同一回合。
     - 回滚：`git revert` 本次提交，然后 `node scripts/render-preset.mjs` 与 `bash skills/wish-programming/scripts/gate-lock.sh`。
+
+24. **上线/收尾回合的运行时契约（2026-11-08，用户质问「agent 根本不遵守」）**：先摆结论——11-02 删除 `wish-gate` 后本预设只剩散文，`git log` 里 15 个 `fix(preset)` 提交都在加规则，遵守率没有因此变好。这次不加散文，改回运行时：新增 `plugins/turn-contract.js`，只用三个事件——`agent/inbox/claimed`（只认 `source.kind === 'user'` 的原话）、`tools/result`（记录本轮是否执行过 `release_check.py`）、`agent/turn-stopping`（未执行就 `agent.steer` 一次，文案给出确切命令）。
+    - **不复活 wish-gate 被删的四条机制**：不拦任何工具调用、不做工作树占用、不写用户仓 `.git`、不弹人闸问题。错过只会多一条 steer，不会卡住会话。
+    - 挂载：`agent.cordis.yml` 一行 `@dsh-cove/dsh-web-all/presets/code-vibe/plugins/turn-contract.js`；真机 temp profile 实测组成 29 行、`turn-contract` fiberState=2、无失败行。
+    - 判据：`packages/dsh-web-all/tests/turn-contract.spec.ts` 8 条（上线问句矩阵、否定句不触发、只认 release_check 执行、一轮最多一次、已跑不 trigger、普通回合不触发、子代理不触发、`TURN_CONTRACT_STEER=0` 关断）。测试命令 `pnpm -C packages/dsh-web-all exec vitest run tests/turn-contract.spec.ts`。
+    - 生效边界：`plugins/*.js` 走进程 ESM 缓存，**加行或改模块都必须重启 DSH（profile 重组）**；persona/skill 散文仍是新会话生效。真机行为（steer 是否真的发出）本轮未验证——验收动作：重启后新开许愿会话问「能上线了吗」，看是否被 steer 去跑 `release_check.py`。
+    - 已知限制：单向软门，不是阻断；文案里的 `<preset>` / `<workspace>` 是模板，模型要按 skill 解析；它不替代 `release_check.py` 的九项机械判据，只负责把回合拉回门前。
+    - 回滚：删 `plugins/turn-contract.js` 与组成里那一行，`node scripts/render-preset.mjs`，重启；或 `git revert` 本次提交后重启。
