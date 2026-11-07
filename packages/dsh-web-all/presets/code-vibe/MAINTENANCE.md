@@ -170,3 +170,11 @@
     - 已知边界：`skills/wish-programming/scripts/check_spec.py` 没有 evidence kind 机检（全包 grep 0 命中），这条目前是散文，执行点是评审与仓 `AGENTS.md` 的同款规则（预设无关，`cordis` 会话也读得到）。
     - 待办：把预设挂进 `~/.dsh/profiles/web` 需要一次 profile 重组（不重启、可回滚）；挂上后新开会话才带许愿编程规则。
     - 回滚：`git revert` 本条提交；规则条文本身不涉及运行时行为，回滚只影响下一次会话组合。
+
+25. **减法：常驻 persona 21,576 → 4,107 字符（2026-11-08，用户选 A「先做减法再发版」）**：来源是机队会话读数——7 天窗口 27 条顶层 code-vibe 会话 / 480 轮 / 8664 次工具调用 / **56 条辱骂** / 16 次 ask；最差会话 223 轮、单回合 5.6 小时；2 天窗口 13 条辱骂，且 `0.9.0` 一台机器都没装到修复。结论：问题不是缺规则，是常驻文本已经长到规则不绑定，且同一套六阶段被套在工单/评审/运维/问答上。
+    - 删掉（约 17.5k 字符）：SIX INVARIANTS 长文、OPERATING DISCIPLINE (a)–(f)、EXECUTION DISCIPLINE (a)–(g)、APPROVAL DISCIPLINE、PRODUCT FIRST/METRICS SECOND、DELIVERABLE LOCK/DETAIL/BATCH、MODEL ROUTING 长表、BUILD ROUTING、PM RULES 长文、RELEASE GATE 长文；`task-router` 的分档细节、`agent-operation` 的模型路由/委托判据、`design-dispatch` 的冷通道探针各自保留在 skill 里。
+    - 留下六条 + 三道机械门：原话最高 / 证据分档 / 三道机械门（release_check、e2e 三件套、turn-contract）/ 问答优先 / 只问用户价值（可逆默认、不阻塞目标）/ 关条靠自己门（四数与磁盘状态）。
+    - 默认路径改为 T2-wish 短路径；六阶段只给 T3-wish（`wish-programming` 顶部）。`task-router` D4=2 改为「只为用户价值取舍问一次（≤2 个问题）」；`wish-programming` 的「先问再画」改为只在无法自查询问。
+    - 判据（新增 `packages/dsh-web-all/tests/preset-persona-budget.spec.ts`）：persona ≤6000 字符、六条与三门 marker 必须存在、八段被删长文不许回来、turn-contract 行必须挂载、corpus 里的真实辱骂问句必须被 `isLaunchQuestion` 命中；连同 `turn-contract.spec.ts` 13 条全绿。
+    - 回归口径：27 条会话是基线（rage/asks/long-loop 已在 `.harvest/wish-preset-review/2026-11-07T01-30-57-610Z/REPORT.md` 与 2 天增量报告里）；发版 rollout 后按同一 7 天窗口复跑 `pnpm wish-review` 对比——判据 rage/session→0、asks≤1、maxTurn≤1800s、无「宣称完成后收回」。
+    - 回滚：`git revert` 本提交恢复 21.5k persona（不推荐：它就是这次减法的对象）；预算测试会拦住无意回涨。

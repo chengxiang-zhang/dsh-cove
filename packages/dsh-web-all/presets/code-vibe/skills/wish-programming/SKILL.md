@@ -5,7 +5,7 @@ description: Use when a user gives a high-level software product wish and expect
 
 # Wish Programming
 
-> **Entry tier: T2-wish / T3-wish only.** T0/T1 use `fix-loop`; T2 backend/data use `change-spec`; T3 program uses `large-backlog-program` + `agent-team-project-loop`. Do not run this five-stage path for small changes.
+> **默认路径是 T2-wish 短路径**（原话 → 一页需求/设计 → 实现 → 机械门 → 用户看一次）；下面的六阶段只给 T3-wish（>4 页面族 / 多天）。T0/T1 用 `fix-loop`，T2 后端/数据用 `change-spec`，大清单用 `large-backlog-program` + `agent-team-project-loop`。不要把六阶段套在小改上。
 
 ## 产品理解门（仅 T2-wish / T3-wish）
 
@@ -123,7 +123,7 @@ RELEASE="<预设>/scripts/release_check.py"  # <ws> <id> --run：发布轨机械
 
 ## 产品判断软约束
 
-1. 先问再画：答不全「谁用、干什么、何时用、现在怎么解决」先问 1~3 个澄清。
+1. 先问再画只用于用户价值取舍或原话无法推断的事实：答不全「谁用、干什么、何时用、现在怎么解决」且无法自查时问 ≤2 个；技术选型、文件位置、实现方式自己定。
 2. 用户视角是必选维度：persona × 任务旅程组织发现。
 3. 决策点只允许「用户价值取舍」；权限/技术决策内部收敛。
 4. 自助耗尽再升级：凭证/账号/环境先耗尽 .env*/种子/历史会话/memoir/artifacts；技术验证（lint/浏览器/登录）是 agent 职责，永远不是暂停点。

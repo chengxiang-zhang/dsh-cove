@@ -24,7 +24,7 @@
 
 // Topic + ask marker, not a phrase list: users phrase this every way ("具备全量
 // 上线的条件了吗", "发布前检查有什么问题", "上生产还差什么", "能收尾吗").
-const TOPIC_RE = /(上线|发布|发版|上生产|发了|发出去|rollout|收尾|关版)/iu
+const TOPIC_RE = /(上线|发布|发版|上生产|发了|发出去|rollout|收尾|关版|说搞定|搞定了|没搞定|没有搞定|完成了吗|验收|交付)/iu
 const ASK_RE = /(吗|呢|？|\?|条件|还差|准备|能否|可以|是否|够不|问题|检查|没做完|验收)/iu
 const NEGATED_RE = /(不用|不要|别|先不|暂不|不需要)\s*[^。；\n]{0,12}(上线|发布|发版|收尾)/iu
 const GATE_COMMAND_RE = /release_check\.py/iu
@@ -52,10 +52,10 @@ export function shouldSteer(state) {
 /** The steering text: one command, one format rule, one anti-excuse rule. */
 export function steerText() {
   return [
-    '【turn-contract】这一轮用户问的是上线 / 收尾判定，而本轮还没有执行发布门。先用 release-gate 的命令拿读数，再回答：',
-    'python3 <preset>/skills/wish-programming/scripts/release_check.py <workspace> <id> --run',
-    '把它的 PASS/FAIL 表整段贴出来；表就是答案。发布方案 .sdd/release/<id>.env 不存在时，先写 P2 发布方案 + P3 验证方案再跑。',
-    '禁止用散文结论代替表；「代码没 push / 没构建 / 没部署 / 没有 E2E / 没有回滚点」是我们自己的欠账，不是外部阻断。',
+    '【turn-contract】这一轮用户问的是上线 / 验收判定，而本轮还没有执行机械门。先拿读数，再回答：',
+    '上线/发布：python3 <preset>/skills/wish-programming/scripts/release_check.py <workspace> <id> --run；发布方案 .sdd/release/<id>.env 不存在时先写 P2 发布方案 + P3 验证方案。',
+    '验收/「搞定了吗」：verify.sh --cwd <workspace> --spec <id> 与 check_spec.py <workspace> <id> --phase close（UI 必须有 e2e/{steps.md,run.log,截图}）。',
+    '把 PASS/FAIL 表整段贴出来；表就是答案。禁止用散文结论代替表；「代码没 push / 没构建 / 没部署 / 没有 E2E / 没有回滚点」是我们自己的欠账，不是外部阻断。',
   ].join('\n')
 }
 
