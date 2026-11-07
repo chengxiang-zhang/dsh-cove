@@ -406,16 +406,20 @@ describe('conversation binding', () => {
   })
 
   it('renders no group at all when every row lacks an origin', async () => {
-    globalThis.fetch = vi.fn(async () => new Response(
+    const fetchMock = vi.fn(async () => new Response(
       JSON.stringify({ ok: true, value: { sessions: [{ id: 'ext-9', provider: 'claude', title: 'legacy', status: 'idle', cwd: '/tmp', createdAt: '2026-11-04T09:00:00Z', lastTurnAt: '2026-11-04T09:01:00Z', canContinue: true, turns: [] }] } }),
       { status: 200, headers: { 'content-type': 'application/json' } },
-    )) as never
+    ))
+    globalThis.fetch = fetchMock as never
     harness()
     const tree = document.createElement('div')
     tree.setAttribute('role', 'tree')
     tree.setAttribute('aria-label', '子智能体会话')
     document.body.appendChild(tree)
-    await act(async () => { await Promise.resolve() })
+    // 必须等到快照真的到了、防抖同步也跑过之后再看：在同步之前断言「没有分组」
+    // 会空过——那条用例在把兜底改回去的变异下同样是绿的，等于什么都没证明。
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 120)) })
     expect(tree.querySelector('[data-dsh-part="group"]')).toBeNull()
     expect(tree.textContent).toBe('')
   })
