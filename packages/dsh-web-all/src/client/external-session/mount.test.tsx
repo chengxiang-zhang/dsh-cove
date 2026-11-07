@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
 import { EXTERNAL_SESSION_TAB_KIND, mountExternalSession } from './index.ts'
 import { en, zh, type ExternalSessionLocaleKey } from './i18n.ts'
@@ -382,8 +382,45 @@ describe('external-session panel data state', () => {
   })
 })
 
-describe('version skew with an older host', () => {
-  it('shows rows unscoped when no row carries an origin, instead of an empty list', async () => {
+describe('conversation binding', () => {
+  it('lists only the rows this conversation dispatched, never the host-wide pool', async () => {
+    const sessions = [
+      { id: 'ext-a', provider: 'claude', title: 'this conversation', status: 'idle', cwd: '/tmp', createdAt: '2026-11-04T09:00:00Z', lastTurnAt: '2026-11-04T09:01:00Z', canContinue: true, originSessionId: 's1', turns: [] },
+      { id: 'ext-b', provider: 'claude', title: 'another conversation', status: 'idle', cwd: '/tmp', createdAt: '2026-11-04T09:00:00Z', lastTurnAt: '2026-11-04T09:01:00Z', canContinue: true, originSessionId: 's2', turns: [] },
+      { id: 'ext-c', provider: 'codex', title: 'origin unknown', status: 'idle', cwd: '/tmp', createdAt: '2026-11-04T09:00:00Z', lastTurnAt: '2026-11-04T09:01:00Z', canContinue: true, turns: [] },
+    ]
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, value: { sessions } }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )) as never
+    harness()
+    const tree = document.createElement('div')
+    tree.setAttribute('role', 'tree')
+    tree.setAttribute('aria-label', '子智能体会话')
+    document.body.appendChild(tree)
+    await waitFor(() => expect(tree.querySelector('[data-dsh-part="row"]')).toBeTruthy())
+    expect(tree.textContent).toContain('外援 · 1')
+    expect(tree.textContent).toContain('this conversation')
+    expect(tree.textContent).not.toContain('another conversation')
+    expect(tree.textContent).not.toContain('origin unknown')
+  })
+
+  it('renders no group at all when every row lacks an origin', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, value: { sessions: [{ id: 'ext-9', provider: 'claude', title: 'legacy', status: 'idle', cwd: '/tmp', createdAt: '2026-11-04T09:00:00Z', lastTurnAt: '2026-11-04T09:01:00Z', canContinue: true, turns: [] }] } }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )) as never
+    harness()
+    const tree = document.createElement('div')
+    tree.setAttribute('role', 'tree')
+    tree.setAttribute('aria-label', '子智能体会话')
+    document.body.appendChild(tree)
+    await act(async () => { await Promise.resolve() })
+    expect(tree.querySelector('[data-dsh-part="group"]')).toBeNull()
+    expect(tree.textContent).toBe('')
+  })
+
+  it('keeps unattributable rows out of the panel list until all conversations is asked for', async () => {
     globalThis.fetch = vi.fn(async () => new Response(
       JSON.stringify({ ok: true, value: { sessions: [{ id: 'ext-9', provider: 'claude', title: 'legacy', status: 'idle', cwd: '/tmp', createdAt: '2026-11-04T09:00:00Z', lastTurnAt: '2026-11-04T09:01:00Z', canContinue: true, turns: [] }] } }),
       { status: 200, headers: { 'content-type': 'application/json' } },
@@ -391,6 +428,9 @@ describe('version skew with an older host', () => {
     const { bodies } = harness()
     const body = bodies[0]!
     const { container } = render(createElement(body.Body, { ...body.spec.inject?.('s1'), useTabInfo: TAB_INFO }))
+    await waitFor(() => expect(container.textContent).toContain(zh['list.empty']))
+    expect(container.textContent).not.toContain('legacy')
+    fireEvent.click(container.querySelector('[data-dsh-part="scope-toggle"] input') as HTMLInputElement)
     await waitFor(() => expect(container.textContent).toContain('legacy'))
   })
 })

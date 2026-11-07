@@ -163,13 +163,9 @@ export function ExternalSessionPanel({
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
 
   // 会话绑定：默认只看本会话派出去的外援。没有来源标注的历史记录不参与默认
-  // 列表——它们无法归属，只能进「全部会话」。
+  // 列表——它们无法归属任何会话，只能进「全部会话」这个显式请求。
   const scoped = useMemo(() => {
     if (showAll || conversationId === undefined) return snapshot.sessions
-    // A host older than the origin field cannot attribute anything; showing the
-    // list unscoped is the pre-field behaviour, and an empty panel would hide
-    // live work for no reason.
-    if (snapshot.sessions.length > 0 && snapshot.sessions.every(session => session.originSessionId === undefined)) return snapshot.sessions
     return snapshot.sessions.filter(session => session.originSessionId === conversationId)
   }, [snapshot.sessions, conversationId, showAll])
   const [pending, setPending] = useState<'continue' | 'cancel' | 'close' | undefined>(undefined)

@@ -72,16 +72,17 @@ function currentConversation(ctx: ClientContext): string | undefined {
 /**
  * Only the sessions this conversation dispatched.
  *
- * Two degrade cases, both real:
- * - no conversation face (a shell that cannot say which conversation is open)
- *   means there is nothing to scope by, so nothing is listed;
- * - a host older than the `originSessionId` field returns rows without it. That
- *   is a version skew, not an unattributable session, so the list is shown
- *   unscoped (the behaviour before the field existed) instead of going empty.
+ * Attribution is the only rule. A row without `originSessionId` cannot be
+ * attributed to any conversation, so it never enters a conversation's dropdown:
+ * a row in every conversation is exactly the global pool this scoping exists to
+ * remove. Unattributable history stays reachable from the panel's "all
+ * conversations" view, which is an explicit request rather than a default.
+ *
+ * A shell that cannot name the open conversation scopes by nothing, so nothing
+ * is listed either.
  */
 function scopedToConversation(sessions: readonly ExternalSessionView[], conversationId: string | undefined): readonly ExternalSessionView[] {
   if (conversationId === undefined) return []
-  if (sessions.length > 0 && sessions.every(session => session.originSessionId === undefined)) return sessions
   return sessions.filter(session => session.originSessionId === conversationId)
 }
 
