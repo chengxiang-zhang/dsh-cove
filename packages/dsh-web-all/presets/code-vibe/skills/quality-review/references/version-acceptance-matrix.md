@@ -23,7 +23,7 @@
 |---|---|---|
 | Build Validation | 本 Spec 实现 + 单测/行为 | Spec `tests.md` / Build `run.md` |
 | Version Acceptance（本页） | 产品结果在真实角色×场景下成立 | 产品包矩阵/剧本 + 执行记录 |
-| Production（P6） | 目标环境关键路径 | deploy + verification-loop |
+| Production（P6） | 目标环境关键路径 | `release-gate` + `release_check.py --run` 9/9 |
 | 产品回归（可选） | 长期主旅程不回退 | [`product-regression`](./product-regression.md) |
 
 **硬门：** Build Pass / vitest 绿 / 管理面点击通 **≠** Version Acceptance Pass。

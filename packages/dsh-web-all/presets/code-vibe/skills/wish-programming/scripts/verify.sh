@@ -7,11 +7,12 @@
 # Checks:
 #   1. .sdd/acceptance/<id>/coverage.tsv 存在 且 coverage_check.py 通过（存量功能落点完整）
 #   2. .sdd/acceptance/<id>/shots/ 下存在 ≥1 张截图（多视口真实渲染 = 用户可见验收）
+#   3. .sdd/acceptance/<id>/e2e/ 三件套：steps.md（≥2 编号步骤）+ run.log + ≥1 截图（端到端走查）
 #   3. live 重跑（保留）：旧格式测试证据 TSV 若存在，unit/integration/health 命令自己重跑
 #
 # Gate integrity: if scripts/MANIFEST.sha256 exists next to this script, verify.sh,
-# replay.sh, journey.sh, check_spec.py and coverage_check.py must match their locked
-# hashes or the gate refuses (evidence untrustworthy). Regenerate with gate-lock.sh.
+# replay.sh, journey.sh, check_spec.py, coverage_check.py and release_check.py must match
+# their locked hashes or the gate refuses (evidence untrustworthy). Regenerate with gate-lock.sh.
 set -euo pipefail
 
 CWD="."
@@ -60,7 +61,7 @@ ROOT="$(find_root "$CWD")"
 GATES_DIR="$(cd "$(dirname "$0")" && pwd)"
 MANIFEST="$GATES_DIR/MANIFEST.sha256"
 if [[ -f "$MANIFEST" ]]; then
-  for f in verify.sh replay.sh journey.sh check_spec.py coverage_check.py; do
+  for f in verify.sh replay.sh journey.sh check_spec.py coverage_check.py release_check.py; do
     [[ -f "$GATES_DIR/$f" ]] || continue
     want="$(grep -E "  $f\$" "$MANIFEST" | head -1 | awk '{print $1}')" || want=""
     if [[ -n "$want" ]]; then
@@ -102,6 +103,15 @@ SHOTS="$ROOT/.sdd/acceptance/$SPEC/shots"
 [[ -d "$SHOTS" ]] || { echo "verify FAIL: no screenshots dir at $SHOTS (阶段 4 多视口截图)" >&2; exit 1; }
 nshots="$(find "$SHOTS" -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' -o -iname '*.gif' \) 2>/dev/null | wc -l | tr -d ' ')"
 [[ "$nshots" -ge 1 ]] || { echo "verify FAIL: no screenshot file in $SHOTS (浏览器证据才算用户可见验收)" >&2; exit 1; }
+
+# ---- 端到端浏览器走查（E2E，不是截图） --------------------------------------
+E2E="$ROOT/.sdd/acceptance/$SPEC/e2e"
+[[ -f "$E2E/steps.md" ]] || { echo "verify FAIL: no $E2E/steps.md (端到端走查 ≥2 条编号步骤；多视口截图不等于真点过一遍)" >&2; exit 1; }
+nsteps="$(grep -cE '^[[:space:]]*[0-9]+[.)][[:space:]]+[^[:space:]]' "$E2E/steps.md" 2>/dev/null || echo 0)"
+[[ "${nsteps:-0}" -ge 2 ]] || { echo "verify FAIL: $E2E/steps.md needs >=2 numbered steps" >&2; exit 1; }
+[[ -s "$E2E/run.log" ]] || { echo "verify FAIL: $E2E/run.log missing or empty (真实浏览器通道输出，不是手写摘要)" >&2; exit 1; }
+n_e2e_shots="$(find "$ROOT/.sdd/acceptance/$SPEC" -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) 2>/dev/null | wc -l | tr -d ' ')"
+[[ "${n_e2e_shots:-0}" -ge 1 ]] || { echo "verify FAIL: no browser screenshot under .sdd/acceptance/$SPEC (至少一张)" >&2; exit 1; }
 
 # ---- live 重跑（保留）：旧格式测试证据 TSV 若存在，可重跑类命令自己重跑 -------
 OLD_EVID="$ROOT/.sdd/acceptance/$SPEC.tsv"

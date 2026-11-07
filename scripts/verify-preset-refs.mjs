@@ -116,6 +116,27 @@ export function scriptResolves({ reference, skill, root = repoRoot }) {
   return false
 }
 
+/**
+ * A plain YAML scalar cannot carry `: ` or ` #`: the first starts a nested
+ * mapping and the second a comment, so the loader drops the whole skill with a
+ * single log line and the catalog silently loses it. Both `preset-self-review`
+ * and `release-gate` shipped that way before this rule existed — `pnpm
+ * preset:check` stayed green because nothing parsed the frontmatter.
+ */
+export function frontmatterScalarProblem(text) {
+  const block = /^---\n([\s\S]*?)\n---/u.exec(text)
+  if (!block) return 'missing frontmatter block'
+  for (const line of block[1].split('\n')) {
+    const match = /^(name|description):[ \t]+(.*)$/u.exec(line)
+    if (!match) continue
+    const value = match[2].trim()
+    if (/^['"]/u.test(value)) continue
+    if (value.includes(': ')) return `${match[1]} contains ": " — quote it or use an em dash`
+    if (value.includes(' #')) return `${match[1]} contains " #" — quote it or drop the comment`
+  }
+  return null
+}
+
 /** Reads the declared `name:` from a SKILL.md frontmatter block. */
 export function declaredSkillName(text) {
   const match = /^---\n([\s\S]*?)\n---/u.exec(text)
@@ -259,12 +280,17 @@ export function verifyPreset({ root = repoRoot } = {}) {
       violations.push({ path: join(PRESET_DIR, 'skills', name), message: 'missing SKILL.md' })
       continue
     }
-    const declared = declaredSkillName(readFileSync(file, 'utf8'))
+    const text = readFileSync(file, 'utf8')
+    const declared = declaredSkillName(text)
     if (declared && declared !== name) {
       violations.push({
         path: join(PRESET_DIR, 'skills', name, 'SKILL.md'),
         message: `frontmatter name \`${declared}\` differs from directory \`${name}\``,
       })
+    }
+    const scalarProblem = frontmatterScalarProblem(text)
+    if (scalarProblem) {
+      violations.push({ path: join(PRESET_DIR, 'skills', name, 'SKILL.md'), message: `frontmatter ${scalarProblem}` })
     }
   }
 

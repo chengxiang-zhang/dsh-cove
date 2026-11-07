@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wish journey state machine — 简化状态机（v2 五阶段）。
+# Wish journey state machine — 简化状态机（v2 六阶段 + 发布轨授权）。
 #
 # State file: <workspace>/.sdd/journey/<spec>.env
 #
@@ -10,11 +10,15 @@
 #   journey.sh --cwd <workspace> --spec <id> --transition <phase> [--reason "<why>"]
 #   journey.sh --cwd <workspace> --spec <id> --confirm --by <who>    # 需求理解确认工件（人①）
 #   journey.sh --cwd <workspace> --spec <id> --approve --by <who>    # 用户 judge 验收标记（人②）
+#   journey.sh --cwd <workspace> --spec <id> --authorize-deploy --by <who> --quote "<用户原话>"
 #   journey.sh --cwd <workspace> --spec <id> --assert write|build|deploy|claim-deliver
 #
 # Gates (no --force; --set is the human recovery hatch):
 #   - acceptance-passed requires the human approval marker (--approve) AND
-#     check_spec.py --phase close exit 0 (回填: handoff + 决策/债落库)
+#     check_spec.py --phase close exit 0 (回填: handoff + 决策/债落库 + E2E)
+#   - deploy requires the release plan (.sdd/release/<spec>.env) AND the human
+#     authorization marker (--authorize-deploy): one production action, this turn
+#   - claim-deliver with TARGET=production requires release_check.py --run exit 0
 #   - blocked / stuck require --reason and are terminal except human --set
 set -euo pipefail
 
@@ -24,8 +28,9 @@ ACTION=""
 TARGET=""
 REASON=""
 APPROVER=""
+QUOTE=""
 
-usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,6 +42,8 @@ while [[ $# -gt 0 ]]; do
     --transition) ACTION=transition; TARGET="${2:-}"; shift 2 ;;
     --approve) ACTION=approve; shift ;;
     --confirm) ACTION=confirm; shift ;;
+    --authorize-deploy) ACTION=authorize; shift ;;
+    --quote) QUOTE="${2:-}"; shift 2 ;;
     --by) APPROVER="${2:-}"; shift 2 ;;
     --reason) REASON="${2:-}"; shift 2 ;;
     --assert) ACTION=assert; TARGET="${2:-}"; shift 2 ;;
@@ -67,6 +74,8 @@ DIR="$ROOT/.sdd/journey"
 FILE="$DIR/${SPEC}.env"
 APPROVAL="$ROOT/.sdd/acceptance/${SPEC}.approved"
 CONFIRMED="$ROOT/.sdd/acceptance/${SPEC}.confirmed"
+DEPLOY_AUTH="$ROOT/.sdd/acceptance/${SPEC}.deploy-authorized"
+RELEASE_PLAN="$ROOT/.sdd/release/${SPEC}.env"
 mkdir -p "$DIR"
 
 PHASES=(idle acceptance-passed blocked stuck)
@@ -93,7 +102,7 @@ sha256_of() {
 GATES_DIR="$(cd "$(dirname "$0")" && pwd)"
 MANIFEST="$GATES_DIR/MANIFEST.sha256"
 if [[ -f "$MANIFEST" ]]; then
-  for f in journey.sh verify.sh replay.sh check_spec.py; do
+  for f in journey.sh verify.sh replay.sh check_spec.py release_check.py; do
     [[ -f "$GATES_DIR/$f" ]] || continue
     want="$(grep -E "  $f\$" "$MANIFEST" | head -1 | awk '{print $1}')" || want=""
     if [[ -n "$want" ]]; then
@@ -192,6 +201,15 @@ case "$ACTION" in
     [[ -n "${REASON:-}" ]] && printf ' (%s)' "$REASON"
     printf '\n'
     exit 0 ;;
+  authorize)
+    [[ -n "$APPROVER" ]] || { echo "journey: --authorize-deploy needs --by <who>" >&2; exit 2; }
+    [[ -n "$QUOTE" ]] || { echo "journey: --authorize-deploy needs --quote \"<用户原话>\" (授权原话必须逐字落盘)" >&2; exit 2; }
+    [[ -f "$RELEASE_PLAN" ]] || { echo "journey: --authorize-deploy refused: no release plan at $RELEASE_PLAN (先写 P2 发布方案 + P3 验证方案)" >&2; exit 1; }
+    mkdir -p "$(dirname "$DEPLOY_AUTH")"
+    printf 'by=%s\nts=%s\nquote=%s\n' "$APPROVER" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$QUOTE" > "$DEPLOY_AUTH"
+    echo "journey: production deploy authorized by $APPROVER -> $DEPLOY_AUTH"
+    echo "journey: next = execute the release plan, then release_check.py --run must be all PASS"
+    exit 0 ;;
   assert)
     case "$TARGET" in
       write|build)
@@ -200,12 +218,24 @@ case "$ACTION" in
         fi
         echo "journey: assert $TARGET FAIL (phase=$PHASE; need idle)" >&2; exit 1 ;;
       deploy)
-        echo "journey: assert deploy FAIL (deploy requires explicit human authorization this turn)" >&2; exit 1 ;;
+        [[ -f "$RELEASE_PLAN" ]] || { echo "journey: assert deploy FAIL (no release plan at $RELEASE_PLAN)" >&2; exit 1; }
+        [[ -f "$DEPLOY_AUTH" ]] || { echo "journey: assert deploy FAIL (no authorization; journey.sh --authorize-deploy --by <用户> --quote \"<原话>\")" >&2; exit 1; }
+        echo "journey: assert deploy ok (plan + authorization on disk; execute it now, then release_check.py --run)"
+        exit 0 ;;
       claim-deliver)
-        if [[ "$PHASE" == "acceptance-passed" ]]; then
-          echo "journey: assert claim-deliver ok"; exit 0
+        if [[ "$PHASE" != "acceptance-passed" ]]; then
+          echo "journey: assert claim-deliver FAIL (phase=$PHASE)" >&2; exit 1
         fi
-        echo "journey: assert claim-deliver FAIL (phase=$PHASE)" >&2; exit 1 ;;
+        target_conf="$(grep -E '^TARGET=' "$RELEASE_PLAN" 2>/dev/null | tail -1 | sed 's/^TARGET=//' | tr -d '\r' || true)"
+        if [[ "$target_conf" == "production" ]]; then
+          py="$GATES_DIR/release_check.py"
+          [[ -f "$py" ]] || { echo "journey: assert claim-deliver FAIL (release_check.py missing)" >&2; exit 1; }
+          if ! python3 "$py" "$ROOT" "$SPEC" --run >/dev/null 2>&1; then
+            echo "journey: assert claim-deliver FAIL (production target without a full-PASS release_check.py --run; run it and read the table)" >&2
+            exit 1
+          fi
+        fi
+        echo "journey: assert claim-deliver ok"; exit 0 ;;
       *) echo "journey: unknown assert $TARGET" >&2; exit 2 ;;
     esac ;;
 esac

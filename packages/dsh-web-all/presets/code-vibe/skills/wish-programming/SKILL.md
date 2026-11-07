@@ -12,7 +12,7 @@ description: Use when a user gives a high-level software product wish and expect
 设计类愿望（页面/前端/设计/体验/对标/重设计/IA/模块归属/迁移/拆分/选型）在**任何实现派工之前**先产出三段并等用户确认：
 ① 目标复述（用户原话逐字并置 + 你的理解）；② 模块定位陈述（求纠偏）；③ 方案预览。未确认前 subagent 只能做只读调研。
 小改版（单页面族/单模块）走**短路径**：原话 + 简版需求 + 一页设计规范 → 实现 → 机械验收 → 用户看一次；
-大改版（>4 页面族/多天）走**全路径**（五阶段 + journey 人闸）。
+大改版（>4 页面族/多天）走**全路径**（六阶段 + journey 人闸）。
 
 ## PM 前台规范
 
@@ -37,7 +37,7 @@ description: Use when a user gives a high-level software product wish and expect
 4. **原话与理解并置**：确认包必须「你的原话 ↔ 我的理解」对照呈现，让用户低注意力也能发现语义漂移。
 5. **原话外的定性词默认降级**：原话里没有的定性/范围词（如「推倒重画」）一律标〔PM 推断〕，未经用户确认不得进入任何下游承诺。
 
-## 五阶段流程
+## 六阶段流程
 
 > 质量内建在生成层，不靠事后检测。每一阶段的「质量后果」是它存在的唯一理由——说不出真实后果的环节，删。
 
@@ -70,14 +70,22 @@ description: Use when a user gives a high-level software product wish and expect
 - 独立 fresh subagent（deny 写工具）执行：
   1. **需求落点核对**：requirements.md 每条 N → 在新页面找落点，逐条回填；
   2. **存量落点核对**：每条 O → 新落点 + 证据，写成 `.sdd/acceptance/<id>/coverage.tsv`，`coverage_check.py` 机械数数——缺条目 exit 1；
-  3. **多视口真实渲染**：1280/1440/窄分栏截图落 `.sdd/acceptance/<id>/shots/`（浏览器证据才算用户可见验收）。
-- **质量后果**：丢功能、不响应式在交付前被数出来，不是用户投诉后发现。
+  3. **多视口真实渲染**：1280/1440/窄分栏截图落 `.sdd/acceptance/<id>/shots/`（浏览器证据才算用户可见验收）；
+  4. **端到端浏览器走查（E2E，不是截图）**：`.sdd/acceptance/<id>/e2e/` 三件套——`steps.md`（≥2 条编号步骤）+ `run.log`（真实浏览器通道逐步输出）+ 至少一张截图。首屏截图、`curl /health`、单测绿、接口 JSON 都不算；缺三件套不得宣称验收完成，`check_spec --phase close` 会拦。
+- **质量后果**：丢功能、不响应式、没真点过一遍，都在交付前被数出来，不是用户投诉或提醒后才发现。
 
 ### 阶段 5 · 用户 judge（真实渲染迭代）
 
 - 用户看截图说「丑/挤/不对」→ 改 → 再截图，循环到点头。
 - 用户批准 → `journey.sh --approve --by <用户>` 落 `.approved`，然后 `--transition acceptance-passed`。
 - **质量后果**：用户反馈从「交付后投诉」变成「交付前迭代」。
+
+### 阶段 6 · 发布（交付目标为 dev-effective / production-delivered 时）
+
+- 计划期就把目标写进 `docs/wish/<id>/delivery.md`（`Target:` + 目标环境 + 回滚点）；目标含 production 时，发布轨从第一天就在关键路径上，不是验收后的可选项。
+- `acceptance-passed` ≠ 已上线。上线走 `release-gate`：P2 发布方案 + P3 验证方案 → `journey.sh --authorize-deploy --by <用户> --quote "<原话>"`（一次授权）→ 执行 → `release_check.py <ws> <id> --run` 全 PASS 才是 `production-delivered`。
+- 用户问「能上线了吗 / 上线前检查 / 发布前还有什么问题」时**先跑 `release_check.py` 再回答**：表就是答案。缺项要么当场补（代码没 push、没构建、没 E2E、没回滚点都属于我们自己的欠账），要么一句话说清等的是哪一次用户授权。
+- **为什么有这一段**：2026-11-08 的真实会话跑完五阶段后代码没上生产，用户问「具备全量上线条件了吗」，得到的是「生产还在跑旧代码 / 没有回滚演练 / 告警没验证」一串流程欠账——发布不是验收后另起一件事，它本身就是交付目标的一部分。
 
 ## 拆分原则
 
@@ -94,11 +102,12 @@ WISH="<预设>/scripts/wish.sh"          # --new --title "…" [--quote "用户�
 CHECK="<预设>/scripts/check_spec.py"   # <ws> <id> [--phase design|build|close]：机械结构门（下限，不是质量）
 COVER="<预设>/scripts/coverage_check.py"  # <ws> <id>：存量功能落点完整性（阶段 4 用）
 JOURNEY="<预设>/scripts/journey.sh"    # --confirm/--approve/--status/--transition acceptance-passed|blocked|stuck
+RELEASE="<预设>/scripts/release_check.py"  # <ws> <id> --run：发布轨机械门（阶段 6 用；未全 PASS 不得报 production-delivered）
 ```
 
 - 人闸工件：`.sdd/acceptance/<id>.confirmed`（阶段 1 后）、`.sdd/acceptance/<id>.approved`（阶段 5 后）。
-- 终态：`acceptance-passed | blocked（可复现外部阻断）| stuck（修复预算耗尽）`；blocked/stuck 仅人 `--set` 恢复。
-- `--assert deploy` 永远失败：生产动作必须本回合真人授权。
+- 终端态：`acceptance-passed | blocked（可复现外部阻断）| stuck（修复预算耗尽）`；blocked/stuck 仅人 `--set` 恢复。
+- 发布：`journey.sh --authorize-deploy --by <用户> --quote "<原话>"` 落授权工件；`--assert deploy` 只认「发布方案 + 授权」同时存在；`--assert claim-deliver` 在 `TARGET=production` 时必须 `release_check.py --run` 全 PASS。
 - gate-lock：改 scripts/ 后必须重跑 `gate-lock.sh`，否则 verify/journey 拒信。
 
 ## 仓库体系路由规则（既有权威仓库适用）
@@ -110,7 +119,7 @@ JOURNEY="<预设>/scripts/journey.sh"    # --confirm/--approve/--status/--transi
 
 ## 调研/评审模式分轨
 
-调研、探查类任务不套五阶段：产出白名单 = findings + Gap 登记 + 方向缺口对照表；禁越界产出新蓝图。调研前强制读已立项产品方向文档；结论逐条标 符合/偏离/缺口。
+调研、探查类任务不套六阶段：产出白名单 = findings + Gap 登记 + 方向缺口对照表；禁越界产出新蓝图。调研前强制读已立项产品方向文档；结论逐条标 符合/偏离/缺口。
 
 ## 产品判断软约束
 
@@ -145,7 +154,7 @@ JOURNEY="<预设>/scripts/journey.sh"    # --confirm/--approve/--status/--transi
 | dev-effective | dev/preview 真实可用 |
 | production-delivered | 生产真实可用（目标环境 smoke 后） |
 
-`acceptance-passed` 是完成声明不是交付目标；上生产永远需要本回合真人授权。
+`acceptance-passed` 是完成声明不是交付目标；上生产的授权一次、本会话内执行，流程见 `release-gate`。目标为 production 时「上线前检查」= 跑 `release_check.py` 并贴表，禁止用散文结论代替。
 
 ## Construction channel（谁做什么）
 

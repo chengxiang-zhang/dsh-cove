@@ -70,8 +70,7 @@ Verify 证明整份 Spec 集成后（**先证伪，再写 Pass**；见 falsify-c
 
 证明目标版本在**目标环境**真实生效：版本、deploy、health（过程信号）、**产品冒烟**、数据一致性、监控和回滚点。
 
-发布全过程（证据 → 并列设计「怎么发 / 怎么证伪」→ 批准 → 执行 → 关版）见 Skill
-`deploy` 轨道（发布流程见 `journey --assert deploy`；生产须本回合真人授权，P0–P6）。本节只钉 **关版硬门**；执行步骤以 deploy Skill 为准。
+发布全过程（证据 → 并列设计「怎么发 / 怎么证伪」→ 批准 → 执行 → 关版）见 `release-gate`（发布轨 P0–P6：发布方案 `.sdd/release/<id>.env`、一次授权 `journey --authorize-deploy`、执行、`release_check.py --run` 全 PASS 才算 `production-delivered`）。本节只钉 **关版硬门**；执行步骤以 release-gate 为准。
 
 #### Delivery Target 闸门
 

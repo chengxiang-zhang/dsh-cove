@@ -41,6 +41,7 @@ description: 验收/UX 走查/体验审计专项：先证伪再 Pass、人类验
 | api-diff / network-har（分页/请求对照） | 证据文件与该条 O/N 一起，路径填入 coverage.tsv 证据列 |
 | command-run（重跑输出） | coverage.tsv 证据列指向重跑输出文件，或 `.sdd/acceptance/<id>/runs/` |
 | human-acceptance（人类验收包） | `.sdd/acceptance/<id>/human-acceptance-pack.md`（阶段 5 交付前） |
+| browser-job（端到端走查） | `.sdd/acceptance/<id>/e2e/`：`steps.md`（≥2 编号步骤）+ `run.log`（真实浏览器通道）+ ≥1 截图；首屏截图不算 |
 
 规则：coverage.tsv 的每个证据路径必须指向**真实存在的文件**（coverage_check.py 校验）；证据文件的内容满足本 skill 的 Evidence Kind 约束（如「分页」至少是 api-diff 或 network-har，不许首屏截图冒充）。
 

@@ -23,13 +23,13 @@
 1. **P0 Oracle**：每条一行：命令 · exit · 关键观察
 2. **指挥侧证伪**：PASS 日志路径（`COMMAND` + `EXIT_CODE: 0` + `VERDICT`）
 3. **verify-deliver**：`ok · <时间>`
-4. **声明**：实验室证据 ≠ 生产；上线另批 Deploy
+4. **声明**：实验室证据 ≠ 生产；上线另走 `release-gate`（发布轨 P0–P6）
 5. **你若要推翻再说**；默认无需动作
 
 **禁止：** 请人再执行一遍 Agent 刚 exit 0 的同一条 falsify / 单测命令。
 **禁止：** 无 URL 时写「逐步操作、亲自点验」。
 
-机器关版同回合：`run.md` → `acceptance-passed`；`make close-spec` 收口（状态+搬迁一条命令）；询问是否 Deploy（**不**自动上生产）。
+机器关版同回合：`run.md` → `acceptance-passed`；`make close-spec` 收口（状态+搬迁一条命令）；询问是否进入 `release-gate`（**不**自动上生产）。
 
 ## 人类验收包（有 UI / 人判断）
 
@@ -56,13 +56,13 @@
 | 把「请打开/硬刷看是否正常」当验收包 | 包内须有具体用例与期望结果 |
 | 无 UI 仍「请你自验 / 请再跑脚本」 | 证据卡 + 机器关版 |
 | 有 UI 时 Agent 自嗨 Pass 即关版 | 人明示「通过 / 没问题 / 关版」后才 `acceptance-passed` |
-| 验收通过后直接生产发布 | 关版后上线仍走 Deploy + P4 |
+| 验收通过后直接生产发布 | 关版后上线走 `release-gate`，P4 一次授权 |
 
 ## 人反馈分流
 
 | 人说 | Agent |
 |------|--------|
 | 某条不过 / 这里别扭 | 记入 Fail；非 material → Polish；material → 补方案或 Spec 再修；再给更新包 |
-| 通过 / 没问题 / 关版 / 归档（有 UI / 人判断） | 写 `acceptance-passed`；`make close-spec`（禁反问）；询问是否 Deploy |
+| 通过 / 没问题 / 关版 / 归档（有 UI / 人判断） | 写 `acceptance-passed`；`make close-spec`（禁反问）；询问是否进入 `release-gate` |
 | 无 UI 机器关版后未反对 | 已是 `acceptance-passed`；只问是否 Deploy |
-| 先上线 / 发布 | 仅在关版后（或人明文豁免并担责）进 Deploy |
+| 先上线 / 发布 | 仅在关版后（或人明文豁免并担责）进 `release-gate` |

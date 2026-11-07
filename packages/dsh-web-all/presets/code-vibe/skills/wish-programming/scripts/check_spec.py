@@ -13,7 +13,7 @@ Phases:
   --phase plan     (技术架构类门):  arch.md 存在才查其结构 + review-arch.md 交锋段格式与原话对照；
                     页面/前端类愿望无 arch.md → 跳过
   --phase build    (默认):         上述全部 + plan.md 纵向切片；contract.md 条件式（存在才查事实映射）
-  --phase close    (acceptance-passed 门): 回填存在性检查（仓库感知）
+  --phase close    (acceptance-passed 门): 回填存在性检查（仓库感知）+ UI 愿望的 E2E 三件套
 
 Usage:
   python3 check_spec.py <workspace> <id> [--phase design|plan|build|close] [--tier T1|T2-spec|T2-wish|T2-ops|T3]
@@ -395,6 +395,33 @@ def main():
             m = re.search(r"主结果[^\n:：]*[：:]\s*(.+)", contract)
             if not m or not filled(m.group(1)):
                 print("ERROR: contract.md 主结果 not filled", file=sys.stderr)
+                errs += 1
+
+    # ---- close gate: browser E2E evidence (UI wishes only) -------------------
+    # Screenshots alone are not an end-to-end run: a UI delivery ships steps.md,
+    # a real browser run log and at least one screenshot, or it is not accepted.
+    if phase == "close":
+        ui_spec = wish_dir / "design-spec.md"
+        if ui_spec.is_file() and section_exists(ui_spec.read_text(encoding="utf-8", errors="ignore"), "页面树"):
+            e2e = root / ".sdd" / "acceptance" / wid / "e2e"
+            steps = e2e / "steps.md"
+            run_log = e2e / "run.log"
+            if not steps.is_file():
+                print("ERROR: close gate — missing .sdd/acceptance/<id>/e2e/steps.md (端到端浏览器走查 ≥2 条编号步骤；首屏截图不算 E2E)", file=sys.stderr)
+                errs += 1
+            else:
+                numbered = [l for l in steps.read_text(encoding="utf-8", errors="ignore").splitlines()
+                            if re.match(r"^\s*\d+[.)]\s+\S", l)]
+                if len(numbered) < 2:
+                    print("ERROR: close gate — e2e/steps.md needs >=2 numbered steps (打开哪个 URL、点哪个控件、期望看到什么)", file=sys.stderr)
+                    errs += 1
+            if not run_log.is_file() or not run_log.read_text(encoding="utf-8", errors="ignore").strip():
+                print("ERROR: close gate — missing or empty .sdd/acceptance/<id>/e2e/run.log (真实浏览器通道输出，不是手写摘要)", file=sys.stderr)
+                errs += 1
+            shots = [q for q in (root / ".sdd" / "acceptance" / wid).rglob("*")
+                     if q.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}]
+            if not shots:
+                print("ERROR: close gate — no browser screenshot under .sdd/acceptance/<id>/ (至少一张，证明真的渲染过)", file=sys.stderr)
                 errs += 1
 
     # ---- close gate: backfill existence checks (repo-aware) ------------------

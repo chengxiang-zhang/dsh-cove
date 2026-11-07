@@ -14,7 +14,7 @@ description: Use for a medium change (T2) — a single-module feature, backend/d
 |---|---|---|
 | **T2-spec** | 后端/数据/一般功能/多文件 | 数据类加备份 + dry-run + 回滚演练 |
 | **T2-wish** | 用户可见小改（单页面族/单模块） | `quote.md` + 简版 `spec.md` + 一页 `design.md`；用户看一次（截图/渲染） |
-| **T2-ops** | 部署/配置生效/单批演练 | `runbook.md` 六要素 + 写令牌 + 生产授权 |
+| **T2-ops** | 部署/配置生效/单批演练（**生产发布 / rollout 不走本 skill，走 `release-gate`**） | `runbook.md` 六要素 + 写令牌 + 生产授权（`journey.sh --authorize-deploy`） |
 
 ## 步骤
 

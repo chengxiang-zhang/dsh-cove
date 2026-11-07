@@ -142,3 +142,15 @@
     - 改动：claude 适配器 argv 加 `--include-partial-messages`；累计器把 `text_delta` 拼进 `text` 并据此推进 `chars`/`tail`/`idle_ms`；后到的 `assistant` 帧整段重复同一文本，用 `sawDeltas` 标记避免重复计数；没有增量的旧流仍按旧路径解析。
     - 读数：新增 `providers/claude.test.ts` 4 条（增量累计、不重复、旧流兼容、半行跨读）；真机 gated 用例复跑绿，取消那条从 26.6 s 降到 **7.5 s**（增量一进来就满足取消条件）。
     - 回滚：去掉 argv 里的 `--include-partial-messages` 即可回到一帧一消息，累计器对无增量流本就兼容。
+
+23. **发布轨补齐（2026-11-08，用户报告「上线前检查答成生产代码没更新」）**：来源是一次真实会话——用户问「具备全量上线的条件了吗」，回答是「生产还在跑旧代码、检查器 PASS=51/FAIL=15/SKIP=2、没有生产登录验收与回滚演练、告警没在生产验证」。当时预设的结构缺陷：流程止于用户 judge，`journey.sh --assert deploy` 硬编码永远失败，`evidence-contract` 指向一个从未随预设移植的 `deploy` skill，E2E 只有「多视口截图」没有真实点击；于是「能不能上线」只能被答成一段流程欠账。
+    - 新增 `skills/release-gate/`（SKILL + `references/release-plan.md`）：P0–P6、一次授权协议、真 blocker vs 自己欠账、E2E 三件套、判据。
+    - 新增机械门 `skills/wish-programming/scripts/release_check.py`：九项 PASS/FAIL，`--run` 才执行声明的只读命令，产出 `.sdd/release/<id>/status.tsv` 与逐项 log；`gate-lock.sh` 的 FILES 与 `journey.sh` 的完整性校验都纳入它。
+    - `journey.sh` 增 `--authorize-deploy --by --quote`（授权原话落 `.sdd/acceptance/<id>.deploy-authorized`）；`--assert deploy` 从「永远 FAIL」改为「发布方案 + 授权同时在盘」；`--assert claim-deliver` 在 `TARGET=production` 时必须 `release_check.py --run` 全 PASS。
+    - `wish-programming` 五→六阶段：新增阶段 6 发布，阶段 4 增 E2E 三件套；`check_spec.py --phase close` 对 UI 愿望（design-spec 有页面树）要求 `e2e/{steps.md,run.log,≥1 截图}`。
+    - persona 加一段 RELEASE GATE（净 +941 字节 / 约 +235 tokens）：目标计划期声明、production 同会话走完 P0–P6、「能不能上线」贴表、自己的欠账不算 blocker。
+    - 路由：`task-router` §10 增「能上线了吗 / 上线前检查」→ `release-gate`；`change-spec` 的 T2-ops 明示生产发布不走它；`quality-review` 证据表增 browser-job 落点；`evidence-contract` 与 `human-acceptance-pack` 的悬空 `deploy` 引用改为 `release-gate`。
+    - 追加发现（同一轮）：`preset-self-review` 与 `release-gate` 的 SKILL.md frontmatter 里写了 `: `，YAML 解析失败，加载器只打一条 warn 就把整个 skill 丢掉——`pnpm preset:check` 一直是绿的，因为它只正则读 `name:`。修好两处描述，并给 `verify-preset-refs` 加第 7 条：`name`/`description` 的纯量值出现 `: ` 或 ` #` 即判红；真机 mount 复核 36 个 skill 全部进目录（`[SKILLS]` 含 `release-gate`）。
+    - 探针（规则 #1）：`pnpm -C packages/dsh-web-all exec vitest run tests/preset-release-gate.spec.ts tests/preset-release-flow.spec.ts`——`release_check` 正例 9/9，四个负例（缺授权 / `/health` 冒充冒烟 / 缺 E2E / 无 `--run`）逐条红；flow 用例证明「没有发布方案不能授权」「有方案+授权才 `--assert deploy` ok」「UI 愿望缺 e2e 时 `check_spec --close` exit 1、补齐后 exit 0」「release commit 未 push 时 `change-set` FAIL」；`verify.sh --kind ui` 的手工双向探针：e2e 齐备 exit 0，抽掉 `e2e/` exit 1 并点名 `steps.md`。
+    - 已知边界：这是纪律 + 机械门，不是运行时强制；`release_check.py` 只认 `.sdd/release/<id>.env` 的十个键，拼错键按缺失处理；`--run` 执行 agent 自己声明的只读命令，脚本不做沙箱；授权「本回合」语义靠 `.deploy-authorized` 的 ts 与执行记录，脚本不能证明同一回合。
+    - 回滚：`git revert` 本次提交，然后 `node scripts/render-preset.mjs` 与 `bash skills/wish-programming/scripts/gate-lock.sh`。

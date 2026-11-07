@@ -13,7 +13,7 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 MANIFEST="$DIR/MANIFEST.sha256"
-FILES=(check_spec.py coverage_check.py gate-lock.sh journey.sh project.sh replay.sh scan_drift.py verify.sh wish.sh)
+FILES=(check_spec.py coverage_check.py gate-lock.sh journey.sh project.sh release_check.py replay.sh scan_drift.py verify.sh wish.sh)
 
 sha256_of() {
   local f="$1"

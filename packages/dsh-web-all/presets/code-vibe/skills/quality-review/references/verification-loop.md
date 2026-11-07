@@ -67,7 +67,7 @@ Polish / trivial / 无自动化 → `红绿证据: N/A · polish|trivial|无自�
 | Verify（单 Spec） | 证伪刀已跑 | 触及面勾完 + `kind=` + **钉 1** |
 | Verify（系列） | 单 Spec Build Pass **不算** | 矩阵 P0 行级结果表 + **钉 1** |
 | Deploy P5 | health / 进程（过程） | — |
-| Deploy P6 | — | 目标环境关键路径 + 探活执行者=agent + **钉 1** |
+| Deploy P6 | — | 目标环境关键路径 + 探活执行者=agent + **钉 1** + `release_check.py --run` 全 PASS |
 
 Polish / trivial：只跑改动面自探活；仍禁甩用户发现；**不**强制全矩阵 / 全红绿对。
 
@@ -78,7 +78,8 @@ Polish / trivial：只跑改动面自探活；仍禁甩用户发现；**不**强
 产品证据: kind=<名> · <路径或命令摘要>
 触及面: …（勾选或 N/A+理由）
 需要用户做什么: 无需动作 | 按验收包点验 | 批准… | 真人SSO/密钥…
-verify-deliver: ran (check_spec --closing exit 0)   # 可交付 / acceptance-passed / prod-smoke 通过时必有
+verify-deliver: ran (check_spec --closing exit 0)   # 可交付 / acceptance-passed 时必有
+release-check: release_check.py --run → 9/9 PASS     # production-delivered / prod-smoke 通过时必有
 完成标签或结论: …
 ```
 
@@ -87,6 +88,7 @@ verify-deliver: ran (check_spec --closing exit 0)   # 可交付 / acceptance-pas
 | 禁止 | 正确 |
 |---|---|
 | `/health` 关版 | P6 产品路径 + 钉 1 |
+| 用散文回答「能上线了吗」 | 跑 `release_check.py` 贴表（`release-gate`） |
 | 请用户硬刷当探针 | Agent 先探活；挂了自己 Blocked |
 | 改 `tests.md` 刷绿 | 回 Plan；钉 2 |
 | 派 Codex「验到可交付」 | 指挥侧 Verify；钉 3 |

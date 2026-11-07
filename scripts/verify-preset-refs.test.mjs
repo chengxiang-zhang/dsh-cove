@@ -17,6 +17,7 @@ import {
   danglingToolNames,
   declaredSkillName,
   declaredToolNames,
+  frontmatterScalarProblem,
   referencedScripts,
   referencedSkills,
   scriptResolves,
@@ -34,7 +35,12 @@ function makePreset({ persona = '- id: persona\n  name: x\n', skills = { alpha: 
   writeFileSync(join(preset, 'agent.cordis.yml'), persona)
   for (const [name, body] of Object.entries(skills)) {
     mkdirSync(join(preset, 'skills', name), { recursive: true })
-    writeFileSync(join(preset, 'skills', name, 'SKILL.md'), body)
+    // A skill without frontmatter never reaches the catalog, so the fixture
+    // supplies one unless the case is deliberately testing the frontmatter.
+    const text = body.startsWith('---\n')
+      ? body
+      : `---\nname: ${name}\ndescription: ${name} fixture skill\n---\n\n${body}`
+    writeFileSync(join(preset, 'skills', name, 'SKILL.md'), text)
   }
   for (const [name, body] of Object.entries(scripts)) {
     const target = join(preset, 'scripts', name)
@@ -178,7 +184,8 @@ test('rule 6 catches a retired tool name in skill prose at path:line', () => {
   try {
     assert.match(
       violationsFor(root).join('\n'),
-      /skills\/alpha\/SKILL\.md:3 references unknown tool `subagent_astra`/u,
+      // the fixture frontmatter above occupies lines 1-5, so the prose site is line 8
+      /skills\/alpha\/SKILL\.md:8 references unknown tool `subagent_astra`/u,
     )
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -227,6 +234,24 @@ test('rule 6 leaves MAINTENANCE.md and docs/ quotable and stays out of rendered 
     // The rendered patch is still rule 1's business: a name there is fixed in the
     // composition and re-rendered, never edited in place.
     assert.match(found, /drifted from agent\.cordis\.yml/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('rule 7 fails a frontmatter scalar that YAML cannot read, so a skill cannot vanish silently', () => {
+  const broken = '---\nname: beta\ndescription: use when live: now\n---\n\n# Beta\n'
+  const comment = '---\nname: gamma\ndescription: use when live # now\n---\n\n# Gamma\n'
+  const quoted = '---\nname: delta\ndescription: "use when live: now"\n---\n\n# Delta\n'
+  assert.match(frontmatterScalarProblem(broken), /": "/u)
+  assert.match(frontmatterScalarProblem(comment), /" #"/u)
+  assert.equal(frontmatterScalarProblem(quoted), null)
+  assert.equal(frontmatterScalarProblem('no frontmatter here'), 'missing frontmatter block')
+
+  const root = makePreset({ skills: { beta: broken } })
+  try {
+    const items = violationsFor(root)
+    assert.ok(items.some((item) => item.includes('skills/beta/SKILL.md') && item.includes('": "')), items.join('; '))
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

@@ -1,6 +1,6 @@
 ---
 name: preset-self-review
-description: Use when reviewing real sessions to improve the wish-programming preset itself, including the scheduled self-iteration pass. Turns transcript evidence into persona or skill changes, then hands the release and rollout to the user. Triggers: 预设自迭代, 会话复查, 执行纪律复盘, 改进预设, 定时复查, preset self-review.
+description: Use when reviewing real sessions to improve the wish-programming preset itself, including the scheduled self-iteration pass. Turns transcript evidence into persona or skill changes, then hands the release and rollout to the user. Triggers — 预设自迭代, 会话复查, 执行纪律复盘, 改进预设, 定时复查, preset self-review.
 ---
 
 # Preset self-review（预设自迭代）
