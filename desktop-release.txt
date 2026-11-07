@@ -1,0 +1,16 @@
+workflow: desktop-release
+tag: v0.9.1
+commit: bfe4cb20d35fce7a8d8f01bef29b7b7ef9229255
+outcome: success
+run: https://github.com/chengxiang-zhang/dsh-cove/actions/runs/42405651703
+
+macos:   cancelled
+windows: success
+
+--- release assets ---
+Anywhere.Work-0.9.1-220.exe
+AnywhereWork-0.9.1.apk
+dsh-cove-dsh-web-all-0.9.1.tgz
+
+--- failed step log (tail) ---
+run 42405651703 is still in progress; logs will be available when it is complete
