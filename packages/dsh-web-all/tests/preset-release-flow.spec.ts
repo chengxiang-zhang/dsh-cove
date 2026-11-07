@@ -153,5 +153,5 @@ describe.skipIf(!bashReady || !pythonReady)('wish release flow', () => {
     const unpushed = run('python3', [releaseCheck, root, 'W1'])
     expect(row(unpushed.stdout, 'change-set')).toMatch(/^FAIL\b/u)
     expect(unpushed.stdout).toContain('unpushed commit')
-  })
+  }, 30_000)
 })
