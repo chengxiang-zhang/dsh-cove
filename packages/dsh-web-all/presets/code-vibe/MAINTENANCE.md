@@ -162,3 +162,11 @@
     - 生效边界：`plugins/*.js` 走进程 ESM 缓存，**加行或改模块都必须重启 DSH（profile 重组）**；persona/skill 散文仍是新会话生效。真机行为（steer 是否真的发出）本轮未验证——验收动作：重启后新开许愿会话问「能上线了吗」，看是否被 steer 去跑 `release_check.py`。
     - 已知限制：单向软门，不是阻断；文案里的 `<preset>` / `<workspace>` 是模板，模型要按 skill 解析；它不替代 `release_check.py` 的九项机械判据，只负责把回合拉回门前。
     - 回滚：删 `plugins/turn-contract.js` 与组成里那一行，`node scripts/render-preset.mjs`，重启；或 `git revert` 本次提交后重启。
+
+24. **预设没有运行：装配缺最后一步，「全绿」被当成证据（2026-11-08）**：用户追问「agent 预设为什么没办法避免这个事情」——一次「会话绑定」修补交付了放宽范围的兜底 + 锁住它的镜像测试 + 「69 条全绿」的报告，线上仍是全局清单。
+    - 根因（装配）：本机 `~/.dsh/profiles/**` 里 0 处挂载本预设（无 `code-vibe` / `许愿式编程` 字样），会话日志实测 `agent-preset/selected → cordis`（DSH 出厂预设），所以 quality-review / evidence-contract / wish-programming / release-gate 一条都没进上下文。仓里只有 composition + roster + loader patch 三件套，**「挂进 profile」这一步没有文档、没有脚本、也没有检查**；`preset:check` 只校验仓内一致性，不校验是否挂载。
+    - 根因（口径）：即便挂上，旧口径也挡不住这次——Evidence Kind 是 spec-driven（Job Pass 的 `api-diff` / `network-har` / `browser-job`），而这次是没有 spec 的顺手修；`falsify-checklist` 管「证伪某个 Then」，不管「新写的判据必须在旧行为下红」。照实现写的镜像测试 + 全绿在旧口径里完全合法。
+    - 改动：`skills/quality-review/SKILL.md` 加载即执行硬门增第 7 条（行为修复出「旧行为红 / 恢复后绿」一对读数，只贴绿不构成证据，为界面不空而放宽范围判 Fail）；`references/evidence-contract.md` 增 `fails-on-old-behavior` Kind 与「行为修复的硬门」段，并声明与「绿 = 证据」互斥。
+    - 已知边界：`skills/wish-programming/scripts/check_spec.py` 没有 evidence kind 机检（全包 grep 0 命中），这条目前是散文，执行点是评审与仓 `AGENTS.md` 的同款规则（预设无关，`cordis` 会话也读得到）。
+    - 待办：把预设挂进 `~/.dsh/profiles/web` 需要一次 profile 重组（不重启、可回滚）；挂上后新开会话才带许愿编程规则。
+    - 回滚：`git revert` 本条提交；规则条文本身不涉及运行时行为，回滚只影响下一次会话组合。

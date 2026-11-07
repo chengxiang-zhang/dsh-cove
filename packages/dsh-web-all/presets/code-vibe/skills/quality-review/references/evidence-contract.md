@@ -27,11 +27,14 @@
 | `network-har` | 真实通道抓到的请求参数与状态码 | 是（须对齐 Then） |
 | `browser-job` | 浏览器走完 Job，Oracle 可观察 + 截图/日志 | 是（UI / 人工 Test） |
 | `unit` / `integration` | 自动化断言绿 | 仅当该 Test 层声明为 V0/V1 且非 UI Job |
+| `fails-on-old-behavior` | 把旧行为放回去后新判据红、恢复后绿（同一条命令两次读数） | 是（行为修复的强制项；只有绿不成立） |
 | `window-smoke` | 窗口/脚本冒烟 JSON、首屏探活 | **否**（旁证） |
 | `health` | `/health`、进程 active、首页 200 | **否**（旁证；P5 过程信号） |
 
 **硬门：** Pass 行的 Evidence 不得只有 `window-smoke` / `health` / 裸 `*smoke*.json`。
 数据面（分页/排序/筛选/list|dashboard）的 success Pass 须含 `api-diff` 或 `network-har`（或 Then 已写明的等价证伪输出）。
+
+**行为修复的硬门：** 改了现有行为的修复，Evidence 必须含 `fails-on-old-behavior`——把旧行为放回去时新判据红、恢复后绿，两次读数同一命令。只贴全绿不成立，因为照实现写的镜像测试在两种行为下都绿；本条与「绿 = 证据」互斥，冲突时以本条为准。为了保住某个界面不空而放宽范围、把拒绝改成成功、或给旧数据加运行时兜底的，一律判 Fail。
 
 ### 行为优先于文档自洽
 

@@ -16,6 +16,7 @@ description: 验收/UX 走查/体验审计专项：先证伪再 Pass、人类验
 4. **同会话 Build→Verify 禁止誊抄**：Build 期间的 window-smoke/health 结果不得原样当 Verify Pass；须重跑证伪或等价命令并记新证据。
 5. **人类验收包**：有 UI 的愿望交付前产出 `references/human-acceptance-pack.md` 格式的验收包；多角色/多表面系列 → `references/version-acceptance-matrix.md`，禁止单 Spec Pass 冒充系列 Pass。
 6. **证据契约**：Evidence Kind 以 `references/evidence-contract.md` 为准；Browser 证据 → `references/browser-verify.md`（真实通道、多视口截图落 `.sdd/acceptance/<id>/shots/`）。
+7. **行为修复要判别性证据**：改动现有行为时，Pass 前必须出一对读数——把旧行为放回去，新判据红；恢复后绿。只贴「全绿」不构成证据：照实现写的镜像测试在两种行为下都绿。读数与测试名写进 Job Pass 行（`kind=fails-on-old-behavior`）。为让界面不空、不报错而放宽范围或加兜底的，直接 Fail。
 
 ## 册导航（references/ 内）
 
