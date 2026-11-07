@@ -48,6 +48,9 @@ Before merging, run at least `pnpm typecheck && pnpm test && pnpm docs:check`.
 - Prefer CodeGraph for code navigation, symbol lookup, dependency analysis, review, and impact analysis. Use `query`, `explore`, `node`, `impact`, and `affected`; initialize with `codegraph init <project-root>` when needed.
 - After all code changes in a session, before final validation, run `codegraph sync <project-root>` and `codegraph status <project-root>`. If the index is missing or sync fails, run `codegraph index <project-root>`.
 - Keep changes focused, preserve existing work, and verify real behavior. User-visible changes require appropriate runtime evidence; visual changes require screenshots and multimodal validation.
+- A behavior fix needs discriminating evidence: put the old behavior back, confirm the new check fails, then restore it. Green tests alone are not evidence, because a test written from the implementation passes on both behaviors. Name the failing check in the report; a fix that cannot be made to fail is not a fix.
+- Never widen scope, loosen a check, or turn a refusal into a success to keep a surface looking populated. A requirement stated by the user beats a compatibility convenience; when real data cannot satisfy the requirement, surface the gap as a question instead of encoding the fallback.
+- A test must be written from the requirement, not from the code path. When a fallback branch has no owner, deadline, or orphan check, it is debt: migrate the data or reject it, do not keep a runtime shim.
 
 ## 运行中的 DSH 服务
 
