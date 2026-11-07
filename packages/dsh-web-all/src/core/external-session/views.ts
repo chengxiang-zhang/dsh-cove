@@ -129,3 +129,27 @@ export function toSessionOverviewList(
 export function usageOrNull(usage: ExternalUsage | undefined): ExternalUsage | null {
   return usage ?? null
 }
+/**
+ * Which sessions a surfaced list is allowed to show.
+ *
+ * A delegation belongs to the conversation that dispatched it, and this is the
+ * only scoping rule in the capability: the conversation dropdown, the
+ * right-pane panel and the model-facing list all call it. Because it lives in
+ * one place, no surface can drift back into showing the host-wide pool — the
+ * defect was a per-surface compatibility branch that widened the list to
+ * everything whenever no row carried an origin, which is exactly the state
+ * every record written before the field existed is in.
+ *
+ * An unattributable row (no `originSessionId`) belongs to no conversation, so
+ * it is visible only through the explicit `includeAll` view. An unknown
+ * conversation (`undefined`) sees nothing.
+ */
+export function scopeSessionViews<T extends { readonly originSessionId?: string }>(
+  sessions: readonly T[],
+  conversationId: string | undefined,
+  options?: { readonly includeAll?: boolean },
+): readonly T[] {
+  if (options?.includeAll === true) return sessions
+  if (conversationId === undefined) return []
+  return sessions.filter(session => session.originSessionId === conversationId)
+}

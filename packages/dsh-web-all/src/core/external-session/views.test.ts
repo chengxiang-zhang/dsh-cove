@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  toLiveTurnView, toSessionList, toSessionOverview, toSessionOverviewList, toSessionView, toTurnDigest, toTurnView,
+  scopeSessionViews, toLiveTurnView, toSessionList, toSessionOverview, toSessionOverviewList, toSessionView, toTurnDigest, toTurnView,
 } from './views.ts'
 import type { ExternalSessionRecord, ExternalTurnRecord } from './types.ts'
 
@@ -110,5 +110,38 @@ describe('external-session views', () => {
   it('projects the model-facing list', () => {
     expect(toSessionOverviewList([record()]).sessions).toHaveLength(1)
     expect(toSessionOverviewList([]).sessions).toEqual([])
+  })
+})
+describe('session scoping', () => {
+  const row = (id: string, origin?: string) => (origin === undefined ? { id } : { id, originSessionId: origin })
+  const pool = [row('a', 'conv-1'), row('b', 'conv-2'), row('c'), row('d', 'conv-1')]
+
+  it('shows a conversation only the rows it dispatched', () => {
+    expect(scopeSessionViews(pool, 'conv-1').map(item => item.id)).toEqual(['a', 'd'])
+    expect(scopeSessionViews(pool, 'conv-2').map(item => item.id)).toEqual(['b'])
+    expect(scopeSessionViews(pool, 'conv-3')).toEqual([])
+  })
+
+  it('never shows one row in two conversations', () => {
+    const conversations = ['conv-1', 'conv-2', 'conv-3', undefined]
+    for (const left of conversations) {
+      for (const right of conversations) {
+        if (left === right) continue
+        const seen = new Set(scopeSessionViews(pool, left).map(item => item.id))
+        for (const item of scopeSessionViews(pool, right)) expect(seen.has(item.id)).toBe(false)
+      }
+    }
+  })
+
+  it('keeps unattributable history out of every conversation, including a pool with no origin at all', () => {
+    const legacy = [row('x'), row('y')]
+    for (const conversation of ['conv-1', 'conv-2', undefined]) {
+      expect(scopeSessionViews(legacy, conversation)).toEqual([])
+    }
+    expect(scopeSessionViews(legacy, 'conv-1', { includeAll: true }).map(item => item.id)).toEqual(['x', 'y'])
+  })
+
+  it('scopes by nothing when the conversation is unknown', () => {
+    expect(scopeSessionViews(pool, undefined)).toEqual([])
   })
 })

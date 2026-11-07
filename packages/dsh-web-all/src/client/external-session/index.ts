@@ -29,6 +29,7 @@ import {
   type ExternalSessionTranslate,
 } from './panel.tsx'
 import type { ExternalSessionView } from './types.ts'
+import { scopeSessionViews } from '../../core/external-session/views.ts'
 
 /**
  * Snapshot sources the shell exposes for "which conversation is on screen".
@@ -67,23 +68,6 @@ function currentConversation(ctx: ClientContext): string | undefined {
     if (typeof candidate === 'string' && candidate !== '') return candidate
   }
   return undefined
-}
-
-/**
- * Only the sessions this conversation dispatched.
- *
- * Attribution is the only rule. A row without `originSessionId` cannot be
- * attributed to any conversation, so it never enters a conversation's dropdown:
- * a row in every conversation is exactly the global pool this scoping exists to
- * remove. Unattributable history stays reachable from the panel's "all
- * conversations" view, which is an explicit request rather than a default.
- *
- * A shell that cannot name the open conversation scopes by nothing, so nothing
- * is listed either.
- */
-function scopedToConversation(sessions: readonly ExternalSessionView[], conversationId: string | undefined): readonly ExternalSessionView[] {
-  if (conversationId === undefined) return []
-  return sessions.filter(session => session.originSessionId === conversationId)
 }
 
 /** 右栏页签的 kind（官方页签注册用的稳定 id）。 */
@@ -263,7 +247,7 @@ function mountDropdownGroup(deps: FaceDeps, conversationOf: () => string | undef
       if (snapshot.state === 'idle') void deps.store.refresh()
       // 下拉属于当前会话：别的会话派出去的外援不出现在这里，否则每个会话看起来
       // 都挂着同一份全局清单。
-      const scoped = scopedToConversation(snapshot.sessions, conversationOf())
+      const scoped = scopeSessionViews(snapshot.sessions, conversationOf())
       syncExternalGroup(document.body, scoped, groupText(deps.t, scoped.length), deps.openSession)
     } catch {
       // 下拉分组是渐进增强：任何异常都不许影响官方下拉本身。

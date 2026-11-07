@@ -20,6 +20,7 @@ import {
   type ToolDefinition,
 } from '@deepseek-ai/dsh-tools'
 import { EXTERNAL_ERROR_CODES, type ExternalError } from '../../../core/external-session/errors.ts'
+import { scopeSessionViews } from '../../../core/external-session/views.ts'
 import type { ExternalSessionGateway } from '../../../core/external-session/gateway.ts'
 import {
   EXTERNAL_PROVIDERS, EXTERNAL_SESSION_STATUSES,
@@ -463,9 +464,7 @@ export function makeListTool(
       // session by default would put another conversation's work in this one's
       // context. "all" is the explicit opt-in for an operator view.
       if ((args as { scope?: string }).scope === 'all') return listed
-      const origin = callOrigin(exec)
-      if (origin === undefined) return { sessions: [] }
-      return { sessions: listed.sessions.filter(session => session.originSessionId === origin) }
+      return { sessions: [...scopeSessionViews(listed.sessions, callOrigin(exec))] }
     },
     presentCall(args): GenericCallView {
       return { card: 'generic', title: 'External sessions', kind: 'read', rawInput: args }

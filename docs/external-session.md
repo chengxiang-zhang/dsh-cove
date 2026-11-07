@@ -225,6 +225,8 @@ Codex：
 
 右栏启动菜单只保留原生工具（工作区文件、终端、Git 管理）。
 
+三个展示面（会话头部下拉、右侧面板、模型侧 `external_session_list`）调同一处 `scopeSessionViews`（`src/core/external-session/views.ts`）：归属是唯一口径，没有按面各写一份兼容分支。没有 `originSessionId` 的记录在任何会话里都不可见，只在面板显式勾选「全部会话」时出现。
+
 数据由服务域通过宿主 routes 提供给客户端，不写会话日志。
 
 面板入口固定在右侧栏。改挂到侧栏只需要改客户端的挂载点，服务域、路由与数据不动。

@@ -31,6 +31,7 @@ import {
 import type { ExternalSessionStore } from './store.ts'
 import type { ExternalSessionView, ExternalTurnViewStatus } from './types.ts'
 import type { ExternalSessionLocaleKey } from './i18n.ts'
+import { scopeSessionViews } from '../../core/external-session/views.ts'
 import { EXTERNAL_SESSION_PLUGIN, PANEL_PART } from './constants.ts'
 import { PageNotice } from '../sidebar/page-shell.tsx'
 import css from './external-session.module.css'
@@ -164,10 +165,10 @@ export function ExternalSessionPanel({
 
   // 会话绑定：默认只看本会话派出去的外援。没有来源标注的历史记录不参与默认
   // 列表——它们无法归属任何会话，只能进「全部会话」这个显式请求。
-  const scoped = useMemo(() => {
-    if (showAll || conversationId === undefined) return snapshot.sessions
-    return snapshot.sessions.filter(session => session.originSessionId === conversationId)
-  }, [snapshot.sessions, conversationId, showAll])
+  const scoped = useMemo(
+    () => scopeSessionViews(snapshot.sessions, conversationId, { includeAll: showAll || conversationId === undefined }),
+    [snapshot.sessions, conversationId, showAll],
+  )
   const [pending, setPending] = useState<'continue' | 'cancel' | 'close' | undefined>(undefined)
   const [actionError, setActionError] = useState<string | undefined>(undefined)
   const [draft, setDraft] = useState('')
