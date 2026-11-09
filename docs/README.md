@@ -28,7 +28,7 @@ This page is the map of the repository's long-lived documentation. Each document
 | Development workflow | [docs/development.md](development.md), [docs/i18n.md](i18n.md) |
 | What applies hot, and when a restart is really required | [docs/hmr.md](hmr.md) |
 | Remote and self-hosted deployment | [docs/remote-access.md](remote-access.md), [tools/dsh-netbird/README.md](../tools/dsh-netbird/README.md) |
-| Feishu secretary agent design | [docs/superagent/README.md](superagent/README.md), index of 12 documents |
+| Cross-project Agent work delegation design (Chinese; target architecture) | [docs/superagent/README.md](superagent/README.md), [coordination](superagent/12-托管协调.md), [acceptance and evaluation](superagent/13-验收与评估.md) |
 | Fleet collection and merge-back | [docs/fleet-collection.md](fleet-collection.md), [docs/preset-self-review.md](preset-self-review.md) |
 | Release and client packaging | [docs/publish-prep.md](publish-prep.md), [docs/client-release.md](client-release.md) |
 | Desktop client design and delivery | [tools/anywhere-agent/DESIGN.md](../tools/anywhere-agent/DESIGN.md), [product design spec](../tools/anywhere-agent/review/desktop-product-design-spec-2026-10-30.md), [delivery plan](../tools/anywhere-agent/review/desktop-intranet-browser-plan-2026-10-30.md), [window layout and native layer contract](../tools/anywhere-agent/review/window-layout-contract-2026-11-02.md), [tab residency contract](../tools/anywhere-agent/review/tab-residency-contract-2026-11-02.md), [two-network window contract](../tools/anywhere-agent/review/two-network-window-contract-2026-11-04.md) |

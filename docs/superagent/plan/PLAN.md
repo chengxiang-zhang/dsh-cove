@@ -1,5 +1,7 @@
 # superagent 实施方案（PLAN）
 
+> 适用性：本文属于 2026-11-05 原实施批次，保留既有记录，不是当前目标设计的施工依据。2026-11-09 用户授权重整需求后，与[当前设计](../README.md)、[需求基线](../01-需求基线.md)冲突的冻结、任务、默认裁定与 DONE 判据不再有效；新实现需重新规划并按[验收与评估](../13-验收与评估.md)验证。
+
 本文把已冻结的 superagent 设计（`docs/superagent/00`–`11`）拆成 Agent Team 可直接执行的波次、任务、写域与验收人。任务明细在 [TASKS.md](TASKS.md)，每任务的接口与单测在 [spec/](spec/T-00-conventions.md)，第 0 天的 spike 在 [SPIKES.md](SPIKES.md)，需要老板拍板或文档自相矛盾的事项在 [NEEDS-DECISION.md](NEEDS-DECISION.md)。
 
 权威顺序沿用设计 README：原话（00）> 需求基线（01）> 协议（02）> 模块文档 > 本方案。本方案与设计冲突时以设计为准，冲突项已列入 NEEDS-DECISION，不在这里自行改设计。

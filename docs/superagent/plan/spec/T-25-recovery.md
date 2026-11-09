@@ -1,5 +1,7 @@
 # T-25 恢复与降级（T25）
 
+> 适用性：本文属于 2026-11-05 原实施批次，保留既有记录，不是当前目标设计的施工依据。2026-11-09 用户授权重整需求后，与[当前设计](../../README.md)、[需求基线](../../01-需求基线.md)冲突的冻结、任务、默认裁定与 DONE 判据不再有效；新实现需重新规划并按[验收与评估](../../13-验收与评估.md)验证。
+
 设计依据：`11-恢复与降级`（五条不变量 I1–I5、固定启动顺序、tick 拉式对账五步、热更自检 fail-closed、租约与第二个声音、失败隔离、降级矩阵、契约五方法、读数）。需求：G5、G9、B14。事实：F20、F34、P6。
 
 写域：`SA/recovery/startup.ts`、`SA/recovery/reconcile.ts`、`SA/recovery/lease-keeper.ts`、`SA/recovery/degrade.ts`、`SA/recovery/second-voice.ts`、`SA/recovery/roles.ts`、`SA/recovery/checks/index.ts`、`TS/superagent-recovery.spec.ts`。依赖：T13、T14、T19、T20、T22。
