@@ -35,7 +35,7 @@ it.each(['approved','rejected','missing-slot','unknown-terminal'])('preserves ex
       if(ledger.snapshot('session_binding').some(o=>(o.data.worker_ref as any).id===worker.id))c.host.resumeNativeSession(worker,fact);else c.host.bindNativeSession(worker,fact)
       const context=c.host.recordContext(createContextCompiler(ledger,c,()=>undefined).compile({commitmentId:work.id,assignment:ref(assignment.id),worker,audience:[worker.id],purpose:role,sourceRefs:[],failedMethods:[],nativeContextBlindSpots:[]}))
       const domains=['seat:'+worker.id,...workspace.resources.map(id=>'resource:'+id)]
-      return {worker,workspace,scopes,stream,sid,observe,context,domains,launch:envelope.actionRef,stop(){const receipt={status:'failed' as const,stopped:true,evidenceRefs:['fixture:process-exit']};observe({kind:'process_exit',launchRef:envelope.actionRef,receipt});k.host.reconcileAction(envelope.actionRef,receipt)}}
+      return {worker,workspace,scopes,stream,sid,observe,context,domains,launch:envelope.actionRef,stop(){const receipt={status:'failed' as const,stopped:true,evidenceRefs:['fixture:process-exit']};k.host.observeNative(envelope.actionRef,'execution:'+envelope.actionRef.id,{kind:'process_exit',launchRef:envelope.actionRef,receipt});k.host.reconcileAction(envelope.actionRef,receipt)}}
     }
     const execute=(session:ReturnType<typeof launch>,id:string,proposal:any,status:string,answer:string)=>{
       const operation=c.host.claimOperation({id,inputRef:'fixture',proposal,domainKeys:session.domains,scopeRefs:session.scopes,executionSlots:[String(proposal.role ?? 'quality'), ...(id === 'old-operation' && scenario === 'missing-slot' ? ['uncollected'] : [])]})

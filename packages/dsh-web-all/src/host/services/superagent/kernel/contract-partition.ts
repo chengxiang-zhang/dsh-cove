@@ -74,7 +74,7 @@ export function partitionContracts(tx: Transaction, plan: ContractPartition, app
     for (const execution of executions) {
       if (execution.kind !== 'native') throw Error('PARTITION_NON_NATIVE_UNRESOLVED')
       const old = ledger.get(execution.launch.id)!, binding = ledger.snapshot('session_binding').find(o => same(o.data.worker_ref, execution.worker))
-      if (!old || (old.data.receipt as any)?.stopped !== true || binding?.data.native_session_id !== execution.nativeSessionId || !ledger.eventEntries({ nativeStream: execution.stream }).some(({ body }: any) => body.controlled?.command?.observation?.kind === 'process_exit' && body.controlled.command.actionRef?.id === execution.launch.id && body.controlled.command.observation.receipt?.stopped === true)) throw Error('PARTITION_WRITER_UNKNOWN')
+      if (!old || (old.data.receipt as any)?.stopped !== true || binding?.data.native_session_id !== execution.nativeSessionId || !ledger.eventEntries({ nativeStream: 'execution:' + execution.launch.id }).some(({ body }: any) => body.controlled?.command?.observation?.kind === 'process_exit' && body.controlled.command.actionRef?.id === execution.launch.id && body.controlled.command.observation.receipt?.stopped === true)) throw Error('PARTITION_WRITER_UNKNOWN')
       const context = ledger.get(execution.context.id)?.data.envelope as unknown as ContextEnvelope
       const text = JSON.stringify({ managed_input: { request_id: execution.requestId, assignment_revision: context.assignment.revision, payload_digest: context.digest }, text: context.text })
       const terminal = ledger.eventEntries({}).some(({ body }: any) => {
