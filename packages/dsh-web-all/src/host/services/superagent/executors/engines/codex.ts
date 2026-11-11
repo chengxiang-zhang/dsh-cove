@@ -323,7 +323,8 @@ export class CodexNativeExecutor implements NativeExecutor {
         'thread/turns/list',
         {
           threadId: this.identity.native_session_id,
-          limit: 50,
+          // Full turns include material text; aggregate history must fit the unchanged 1 MiB frame fence.
+          limit: 1,
           itemsView: 'full',
           sortDirection: 'asc',
           ...(cursor ? { cursor } : {})
