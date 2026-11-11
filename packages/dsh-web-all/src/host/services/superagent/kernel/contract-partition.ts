@@ -91,6 +91,7 @@ export interface InterruptedVerificationHandoff {
   commitment: Ref; acceptance: Ref; delivery: Ref; assignments: Ref[]; operation: Ref
   candidateRoot: string; candidate: ContractPartition['candidate']; evidenceRefs: string[]
   completedDesignRefusal?: { qualityResult: Ref; hostRefusal: Ref }
+  readonlyQualityInterruption?: true
 }
 function assertStoppedNative(ledger: ManagedLedger, execution: Extract<OperationExecution, { kind: 'native' }>) {
   const old = ledger.get(execution.launch.id)!, binding = ledger.snapshot('session_binding').find(o => same(o.data.worker_ref, execution.worker))
@@ -100,7 +101,7 @@ function assertInterruptedNative(ledger: ManagedLedger, execution: Extract<Opera
   assertStoppedNative(ledger, execution)
   const context = ledger.get(execution.context.id)?.data.envelope as unknown as ContextEnvelope
   const text = JSON.stringify({ managed_input: { request_id: execution.requestId, assignment_revision: context.assignment.revision, payload_digest: context.digest }, text: context.text })
-  const terminal = ledger.eventEntries({nativeKind:'turn-page',nativeThreadId:execution.nativeSessionId}).some(({ body }: any) => {
+  const terminal = ledger.eventEntries({nativeKind:'turn-page',nativeThreadId:execution.nativeSessionId,nativeInputText:text,latest:true}).some(({ body }: any) => {
     const c = body.controlled?.command, observation = c?.observation
     if (c?.kind !== 'native' || observation?.kind !== 'turn-page' || observation.threadId !== execution.nativeSessionId) return false
     const observedAction = ledger.get(c.actionRef?.id), target = (observedAction?.data.execution_spec as any)?.target
@@ -139,18 +140,31 @@ export function handoffInterruptedVerification(tx: Transaction, plan: Interrupte
   const { ledger, current, save } = tx
   const work = current(plan.commitment, 'commitment'), acceptance = current(plan.acceptance, 'acceptance_contract')
   current(plan.delivery, 'delivery_contract')
-  if (work.data.control_state !== 'autonomous' || !['proposed','ready','working',...(plan.completedDesignRefusal?['verifying']:[])].includes(String(work.data.state)) || !same(work.data.acceptance_contract, plan.acceptance) || !same(work.data.delivery_contract, plan.delivery) || !plan.evidenceRefs.length) throw Error('VERIFY_HANDOFF_SCOPE_REQUIRED')
+  if (plan.completedDesignRefusal && plan.readonlyQualityInterruption) throw Error('VERIFY_HANDOFF_PLAN_REQUIRED')
+  if (work.data.control_state !== 'autonomous' || !['proposed','ready','working',...(plan.completedDesignRefusal||plan.readonlyQualityInterruption?['verifying']:[])].includes(String(work.data.state)) || !same(work.data.acceptance_contract, plan.acceptance) || !same(work.data.delivery_contract, plan.delivery) || !plan.evidenceRefs.length) throw Error('VERIFY_HANDOFF_SCOPE_REQUIRED')
   const assignments = ledger.snapshot('team_assignment').filter(o => o.data.commitment_id === work.id)
   if (!same(assignments.map(ref), plan.assignments)) throw Error('PARTITION_ASSIGNMENT_CHANGED')
   assignments.forEach(o => current(ref(o)))
   verifyPartitionCandidate(plan)
   const operation = current(plan.operation, 'coordination_operation'), executions = operation.data.executions as unknown as OperationExecution[]
-  if (operation.data.state !== 'running' || (operation.data.proposal as any)?.kind !== 'verify' || !same(operation.data.execution_slots, ['quality','collect:baseline','collect:candidate']) || executions.length !== 1 || executions[0]?.kind !== 'native' || executions[0].slot !== 'quality' || !refs(operation.data.semantic_refs).some(r => same(r, ref(acceptance)))) throw Error('VERIFY_HANDOFF_PLAN_REQUIRED')
+  const proposal=operation.data.proposal as any, readonly=plan.readonlyQualityInterruption===true
+  if (operation.data.state !== 'running' || (readonly ? proposal?.kind!=='dispatch'||proposal.role!=='quality' : proposal?.kind!=='verify') || !same(operation.data.execution_slots, readonly?['quality']:['quality','collect:baseline','collect:candidate']) || executions.length !== 1 || executions[0]?.kind !== 'native' || executions[0].slot !== 'quality' || !refs(operation.data.semantic_refs).some(r => same(r, ref(acceptance)))) throw Error('VERIFY_HANDOFF_PLAN_REQUIRED')
   refs(operation.data.semantic_refs).forEach(r => current(r))
   const execution = executions[0]
   if (!assignments.some(o => o.data.role === 'quality' && same(o.data.worker_ref, execution.worker))) throw Error('VERIFY_HANDOFF_QUALITY_REQUIRED')
   const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
-  if (launches.some(o => (o.data.receipt as any)?.stopped !== true && !(plan.completedDesignRefusal && ledger.retiredNativeDomain(ref(o))))) throw Error('PARTITION_LIVE_WRITER')
+  if (launches.some(o => (o.data.receipt as any)?.stopped !== true && !((plan.completedDesignRefusal||readonly) && ledger.retiredNativeDomain(ref(o))))) throw Error('PARTITION_LIVE_WRITER')
+  if(readonly){
+    const claims=ledger.eventEntries({operationClaim:operation.id})
+    if(claims.length!==1)throw Error('READONLY_QA_CLAIM_REQUIRED')
+    const plans=ledger.eventEntries({controlledPlans:true,afterSequence:claims[0]!.sequence}).map(({body}:any)=>body.controlled.spec),owner=ledger.get(execution.launch.id)!.data.execution_spec as any
+    if(plans.some((s:any)=>{
+      const nativeShape=s.executable===owner.executable&&same(s.args,owner.args)
+      return !['worker:quality','worker:coordinator'].includes(s.target?.id)||!['dispatch','attach','inspect','collect','send_input','respond_request'].includes(s.kind)||s.purpose==='collector'||!nativeShape||(s.kind!=='dispatch'&&(!/^[a-f0-9]{64}$/.test(s.payloadDigest??'')||(!s.nativeRequestId&&s.kind!=='attach')))
+    }))throw Error('READONLY_QA_EFFECT_ISSUED')
+    assertInterruptedNative(ledger,execution)
+    return [save('coordination_runtime_event',{event:'verify_interrupted_handoff',payload:{after:{commitment:plan.commitment,acceptance:plan.acceptance,delivery:plan.delivery,assignments:plan.assignments},operations:[plan.operation],candidateRoot:plan.candidateRoot,candidate:plan.candidate,native:execution,unissuedSlots:[],readonlyQualityInterruption:true,claimSequence:claims[0]!.sequence,status:'Read-only QA input interrupted and physically stopped; no implementation, collector or delivery effect; original same-thread responsibility remains incomplete'} as unknown as Json,evidence_refs:plan.evidenceRefs},[],'verify-handoff:'+operation.id+':'+operation.revision)]
+  }
   // No collector may have been planned outside this operation's binding. Such effects need their own reconciliation.
   const collectorWorkspaces = ledger.eventEntries({workspaceRole:'collector'}).flatMap(({body:event}: any) => { const c = event.controlled?.command; return c?.kind === 'workspace' && c.workspace.role === 'collector' ? [c.workspace] : [] })
   if (!collectorWorkspaces.some(w => w.resources.every((id: string) => (operation.data.domain_keys as string[]).includes('resource:' + id)))) throw Error('VERIFY_HANDOFF_COLLECTOR_DOMAIN_REQUIRED')

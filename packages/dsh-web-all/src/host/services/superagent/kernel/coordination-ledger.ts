@@ -172,6 +172,11 @@ export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger,
           if (prior.id === operation.id || prior.data.state === 'completed' || !(prior.data.domain_keys as string[]).some(key => domains.includes(key))) continue
           const handoff = partitionHandoff(ledger, prior, refs(operation.data.semantic_refs))
           if (!handoff) throw Error('OPERATION_DOMAIN_UNRESOLVED')
+          if(execution.kind==='controlled' && (handoff.data.payload as any)?.readonlyQualityInterruption===true && (operation.data.proposal as any)?.kind==='verify' && ['collect:baseline','collect:candidate'].includes(execution.slot)){
+            const action=current(execution.action,'action'),spec=action.data.execution_spec as any
+            if(spec.kind!=='collect'||!Array.isArray(spec.resourceIds)||spec.resourceIds.some((id:string)=>(prior.data.domain_keys as string[]).includes('resource:'+id)))throw Error('READONLY_QA_COLLECTOR_DOMAIN_REQUIRED')
+            continue
+          }
           if (execution.kind === 'controlled' && handoff.data.event === 'verify_interrupted_handoff' && (operation.data.proposal as any)?.kind === 'verify' && ((handoff.data.payload as any).unissuedSlots as string[]).includes(execution.slot)) {
             const action = current(execution.action, 'action')
             if ((action.data.execution_spec as any)?.kind !== 'collect') throw Error('VERIFY_HANDOFF_COLLECTOR_REQUIRED')

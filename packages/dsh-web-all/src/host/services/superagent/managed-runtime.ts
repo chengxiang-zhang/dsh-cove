@@ -1,3 +1,5 @@
+import { deliverTechnicalReply } from './executors/native/technical-reply.ts'
+import { currentApiMaterial } from './context/api-material.ts'
 import { coordinationObjectView } from './coordination/look.ts'
 import { DELIVERY_EVIDENCE_POLICY, partitionHandoff, verifyPartitionCandidate, type ContractPartition, type InterruptedVerificationHandoff } from './kernel/contract-partition.ts'
 import { loadManagedMaterials, type ManagedMaterial } from './executors/managed-materials.ts'
@@ -145,7 +147,13 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     instruction = JSON.stringify({ instruction, hostReadOnlyMaterials: supplemental, method: { id: method.id, description: method.description, instructions: method.instructions, responseSchema: method.qualitySchema(criteria), assets: method.assets }, hostExecution: 'During intake return purpose=intake and readiness; no candidate tests are claimed. After implementation the secretary proposes verify; host requests independent verification_design cases then runs the exact registered asynchronous method on baseline and candidate. Workers do not call a shell or invent a new tool. Fixed project gates and controlled local dev delivery follow only after business acceptance. Engineering gate/receipt obligations remain later prerequisites, never synthetic replay facts.' })
     const material = record('role_input', { role, instruction }, coordination.semanticScopes(work!.id))
     materials.set(material.id, { ref: material, text: instruction, digest: createHash('sha256').update(instruction).digest('hex'), visibleTo: [workers.get(role)!.id], mandatory: true, purpose: 'Current controlled professional instruction and observed evidence' })
-    const envelope = compiler.compile({ commitmentId: work!.id, assignment: assignment(role), worker: workers.get(role)!, audience: [workers.get(role)!.id], purpose: role, sourceRefs: [material], failedMethods: [], nativeContextBlindSpots: ['Native automatic context loading is not fully observable'] })
+    const sourceRefs = [material], apiEvidence = currentApiMaterial(ledger, {id:work!.id,revision:ledger.get(work!.id)!.revision}, join(root,'verification'))
+    if (apiEvidence) {
+      const apiSource = record('api_evidence_material', { role, digest: apiEvidence.digest, text: apiEvidence.text }, coordination.semanticScopes(work!.id))
+      materials.set(apiSource.id, {ref:apiSource,text:apiEvidence.text,digest:apiEvidence.digest,visibleTo:[workers.get(role)!.id],mandatory:true,purpose:'Latest recorded API operation evidence and sealed cases; recorded candidate only'})
+      sourceRefs.push(apiSource)
+    }
+    const envelope = compiler.compile({ commitmentId: work!.id, assignment: assignment(role), worker: workers.get(role)!, audience: [workers.get(role)!.id], purpose: role, sourceRefs, failedMethods: [], nativeContextBlindSpots: ['Native automatic context loading is not fully observable'] })
     return { envelope, ref: coordination.host.recordContext(envelope) }
   }
   const consumed = (role: string, context: ReturnType<typeof contextFor>, input: { request_id: string }) => {
@@ -198,13 +206,16 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       if (request.method !== 'item/tool/call') { await session.engine.respondNativeRequest(request.ref, { error: { code: -32000, message: 'Unqualified native tool refused' } }, session.launch); return }
       let reply: { success: boolean; text: string }
       if (p.tool === 'ask') {
+        await deliverTechnicalReply(async () => {
         const evidence = kernel.host.nativeFacts(session.io.stream, 'request').filter(f => (f.observation as any).kind === 'request' && (f.observation as any).request.ref.id === request.ref.id).at(-1)!
         const question = coordination.host.recordQuestion({ commitmentId: work!.id, assignment: assignment(role), worker: workers.get(role)!, nativeRequestRef: request.ref.id, question: p.arguments.question, evidenceRefs: [evidence.ref], nativeEvidenceRef: evidence.ref, nextReviewAt: Date.now()+60000 })
         const answer = await askSecretary('Technical request from '+role+': '+p.arguments.question+'\nReturn exactly an answer proposal with questionId '+question.id+'. Resolve internally from current requirements. No user relay.')
         const decision = answer.proposals.find(p => p.kind === 'answer' && p.questionId === question.id)
         if (!decision?.answer) throw new Error('COORDINATOR_TECHNICAL_ANSWER_REQUIRED')
         const d = coordination.recordProfessionalDecision({ commitmentId: work!.id, question, reviewer: workers.get('coordinator')!, kind: 'technical_answer', conclusion: decision.answer, evidenceRefs: answer.nativeEvidenceRefs, alternatives: [decision.reason], scopeRefs: coordination.semanticScopes(work!.id) })
-        reply = { success: true, text: decision.answer }; record('technical_answer_sent', { question, decision: d }, scope(role))
+        record('technical_answer_sent', { question, decision: d }, scope(role)); return { success: true, text: decision.answer }
+        }, reply => session.engine.respondNativeRequest(request.ref, { result: { success: reply.success, contentItems: [{type:'inputText',text:reply.text}] } }, session.launch), error => { record('technical_answer_failed', {role,request:request.ref.id,error:String(error),workerResponseAttempted:false}, scope(role)) })
+        return
       } else if (role === 'quality' && p.tool === 'write') reply = { success: false, text: 'INDEPENDENT_QUALITY_READ_ONLY' }
       else reply = await helpers.call(p.tool, p.arguments, request.ref.id)
       await session.engine.respondNativeRequest(request.ref, { result: { success: reply.success, contentItems: [{ type: 'inputText', text: reply.text }] } }, session.launch)
