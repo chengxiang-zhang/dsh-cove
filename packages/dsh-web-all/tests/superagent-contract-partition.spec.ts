@@ -8,7 +8,7 @@ import { createContextCompiler } from '../src/host/services/superagent/context/c
 import { encodeInput } from '../src/host/services/superagent/executors/native/bindings.ts'
 import type { ContractPartition } from '../src/host/services/superagent/kernel/contract-partition.ts'
 
-it.each(['approved','rejected','missing-slot','unknown-terminal'])('preserves exact contract and interrupted responsibility boundaries: %s', async (scenario) => {
+it.each(['approved','rejected','missing-slot','unknown-terminal','mismatched-exit'])('preserves exact contract and interrupted responsibility boundaries: %s', async (scenario) => {
   const dir = mkdtempSync(join(tmpdir(), 'partition-')), project = join(dir, 'source'); mkdirSync(project); writeFileSync(join(project, 'asset'), 'baseline')
   const runtime = createManagedRuntime({ root: join(dir, 'managed'), projectRoot: project, publicFiles: ['asset'], implementationWritePaths: ['asset'], engine: { executable: '/never-started', authFile: '/absent', model: 'fixture', stateRoot: join(dir, 'native') } })
   const { ledger, coordination: c, kernel: k, source, workers, workspaces } = runtime
@@ -35,7 +35,7 @@ it.each(['approved','rejected','missing-slot','unknown-terminal'])('preserves ex
       if(ledger.snapshot('session_binding').some(o=>(o.data.worker_ref as any).id===worker.id))c.host.resumeNativeSession(worker,fact);else c.host.bindNativeSession(worker,fact)
       const context=c.host.recordContext(createContextCompiler(ledger,c,()=>undefined).compile({commitmentId:work.id,assignment:ref(assignment.id),worker,audience:[worker.id],purpose:role,sourceRefs:[],failedMethods:[],nativeContextBlindSpots:[]}))
       const domains=['seat:'+worker.id,...workspace.resources.map(id=>'resource:'+id)]
-      return {worker,workspace,scopes,stream,sid,observe,context,domains,launch:envelope.actionRef,stop(){const receipt={status:'failed' as const,stopped:true,evidenceRefs:['fixture:process-exit']};k.host.observeNative(envelope.actionRef,'execution:'+envelope.actionRef.id,{kind:'process_exit',launchRef:envelope.actionRef,receipt});k.host.reconcileAction(envelope.actionRef,receipt)}}
+      return {worker,workspace,scopes,stream,sid,observe,context,domains,launch:envelope.actionRef,stop(){const receipt={status:'failed' as const,stopped:true,evidenceRefs:['fixture:process-exit']};k.host.observeNative(envelope.actionRef,'execution:'+envelope.actionRef.id,{kind:'process_exit',launchRef:scenario === 'mismatched-exit' && role === 'implementation' ? { ...envelope.actionRef, revision: envelope.actionRef.revision + 1 } : envelope.actionRef,receipt});k.host.reconcileAction(envelope.actionRef,receipt)}}
     }
     const execute=(session:ReturnType<typeof launch>,id:string,proposal:any,status:string,answer:string)=>{
       const operation=c.host.claimOperation({id,inputRef:'fixture',proposal,domainKeys:session.domains,scopeRefs:session.scopes,executionSlots:[String(proposal.role ?? 'quality'), ...(id === 'old-operation' && scenario === 'missing-slot' ? ['uncollected'] : [])]})
@@ -58,7 +58,7 @@ it.each(['approved','rejected','missing-slot','unknown-terminal'])('preserves ex
     expect(()=>c.host.partitionContracts(plan,approval)).toThrow('PARTITION_CANDIDATE_CHANGED')
     writeFileSync(join(plan.candidateRoot,'asset'),'baseline')
     expect(()=>c.host.completeOperation(old.operation,{status:'pretend-success'},old.evidenceRefs)).toThrow(scenario === 'missing-slot' ? 'OPERATION_COMPLETION_PROOF_REQUIRED' : 'OPERATION_NATIVE_OUTCOME_UNKNOWN')
-    if (scenario !== 'approved') { expect(()=>c.host.partitionContracts(plan,approval)).toThrow(scenario === 'rejected' ? 'PARTITION_QA_REQUIRED' : scenario === 'missing-slot' ? 'PARTITION_UNCOLLECTED_SLOT' : 'PARTITION_NATIVE_OUTCOME_UNKNOWN'); return }
+    if (scenario !== 'approved') { expect(()=>c.host.partitionContracts(plan,approval)).toThrow(scenario === 'rejected' ? 'PARTITION_QA_REQUIRED' : scenario === 'missing-slot' ? 'PARTITION_UNCOLLECTED_SLOT' : scenario === 'mismatched-exit' ? 'PARTITION_WRITER_UNKNOWN' : 'PARTITION_NATIVE_OUTCOME_UNKNOWN'); return }
     c.host.partitionContracts(plan,approval)
     expect(ledger.get('req')).toEqual(originalRequirement);expect(ledger.get('engineering')).toEqual(originalEngineering)
     expect(ledger.get('acceptance')!.data.criterion_refs).toEqual([business]);expect(ledger.get('delivery')!.data.criterion_refs).toEqual([engineering])
