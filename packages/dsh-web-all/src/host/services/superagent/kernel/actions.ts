@@ -890,6 +890,23 @@ export function createControlledKernel(ledger: ManagedLedger, trustedSource: Ref
           active.delete(ref.id)
         }
       },
+      reconcileSingleProcessAbsence(ref: Ref): ProcessActionResult | ActionRecord {
+        const current = ledger.get(ref.id)
+        if (!current || current.revision !== ref.revision || current.kind !== 'action') throw Error('PROCESS_ABSENCE_ACTION_CHANGED')
+        const action = record(current)
+        if (action.spec.kind !== 'dispatch' || action.spec.processPolicy !== 'single') throw Error('PROCESS_ABSENCE_SINGLE_REQUIRED')
+        if (action.receipt?.stopped === true && ['confirmed','failed'].includes(action.state)) return action
+        if (action.state !== 'unknown' || action.receipt?.stopped !== false) throw Error('PROCESS_ABSENCE_UNKNOWN_REQUIRED')
+        const executionDigest = createHash('sha256').update(JSON.stringify(action.spec)).digest('hex')
+        const proof = ledger.eventEntries({ nativeStream: 'execution:' + ref.id }).map(({sequence,body}: any) => ({ sequence, command: body.controlled?.kind === 'host' ? body.controlled.command : undefined })).findLast(({command}: any) => command?.kind === 'native' && command.actionRef?.id === ref.id && command.observation?.kind === 'process_exit' && command.observation.executionDigest === executionDigest && JSON.stringify(command.observation.receipt) === JSON.stringify(action.receipt))
+        const launchRef = proof?.command.observation.launchRef as Ref | undefined
+        const ids = action.receipt.evidenceRefs.map(value => /^process:([1-9][0-9]*):[^:]+$/.exec(value)).filter(Boolean)
+        if (!proof || !launchRef || JSON.stringify(launchRef) !== JSON.stringify(proof.command.actionRef) || ids.length !== 1) throw Error('PROCESS_ABSENCE_OWNED_PID_REQUIRED')
+        const pid = Number(ids[0]![1]); if (!Number.isSafeInteger(pid)) throw Error('PROCESS_ABSENCE_OWNED_PID_REQUIRED')
+        try { process.kill(pid, 0); throw Error('PROCESS_STILL_PRESENT') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+        const observedAt = Date.now(), observation = hostCommand({ kind: 'native', actionRef: launchRef, stream: 'execution:' + ref.id, observation: { kind: 'process_absence', launchRef: launchRef as unknown as Json, executionDigest, pid, observedAt, basis: 'ESRCH for the previously owned single-process PID; no signal sent', priorObservationRef: 'native-event:' + proof.sequence } }) as { nativeRef: string }
+        return reconcileExecution({ actionRef: launchRef, spec: action.spec } as ExecutionEnvelope, { status: 'failed', stopped: true, reason: 'OWNED_SINGLE_PROCESS_ABSENT', evidenceRefs: ['native-event:' + proof.sequence, observation.nativeRef], observation: { stdout: '', stderr: '', observedAt } })
+      },
       observeNative: (actionRef: Ref, stream: string, observation: Json) =>
         hostCommand({ kind: 'native', actionRef, stream, observation }) as { nativeRef: string },
       nativeFacts: (stream: string): { ref: string; observation: Json }[] =>

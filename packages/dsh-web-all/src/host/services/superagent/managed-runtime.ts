@@ -1,4 +1,4 @@
-import { DELIVERY_EVIDENCE_POLICY, partitionHandoff, verifyPartitionCandidate, type ContractPartition } from './kernel/contract-partition.ts'
+import { DELIVERY_EVIDENCE_POLICY, partitionHandoff, verifyPartitionCandidate, type ContractPartition, type InterruptedVerificationHandoff } from './kernel/contract-partition.ts'
 import { loadManagedMaterials, type ManagedMaterial } from './executors/managed-materials.ts'
 import { sealProjectInputs, verifyProjectSeal } from './executors/project-snapshot.ts'
 import { runProjectVerification, type ProjectGate } from './executors/project-verification.ts'
@@ -30,6 +30,7 @@ import type { ContextSource } from './protocol/coordination.ts'
 const json = (value: unknown): Json => { assertJson(value); return value }
 
 export interface ManagedRuntimeConfig {
+  interruptedVerificationHandoff?: InterruptedVerificationHandoff
   contractPartition?: ContractPartition
   readOnlyMaterials?: ManagedMaterial[]
   frameworkBaselineTransition?: { commitmentId: string; before: string; after: string; evidenceRefs: string[] }
@@ -79,6 +80,17 @@ export function assertDeliveryProposalPersisted(ledger: ManagedLedger, operation
     return result?.status === 'delivered-local' && JSON.stringify(result.receipt) === JSON.stringify(receipt)
   }
   if (!operationId.endsWith(':operation') || operation?.kind !== 'coordination_operation' || operation.data.state !== 'completed' || (operation.data.proposal as any)?.kind !== 'verify' || !matches(operation.data.result) || proposal?.kind !== 'coordination_runtime_event' || proposal.data.event !== 'proposal_result' || !matches(proposal.data.payload)) throw Error('DELIVERY_PROPOSAL_NOT_DURABLE')
+}
+
+export async function releaseManagedSession(ledger: Pick<ManagedLedger, 'get'>, session: Pick<Awaited<ReturnType<typeof launchManagedCodex>>, 'launch' | 'stop' | 'cleanupCredentials'>) {
+  const current = () => ledger.get(session.launch.actionRef.id)
+  try {
+    if ((current()?.data.receipt as any)?.stopped !== true) await session.stop()
+    const deadline = Date.now() + 1000
+    while ((current()?.data.receipt as any)?.stopped !== true && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25))
+    if ((current()?.data.receipt as any)?.stopped !== true) throw Error('NATIVE_CESSATION_UNKNOWN')
+    return current()!.data.receipt!
+  } finally { session.cleanupCredentials() }
 }
 
 export function latestFrameworkBaseline(ledger: ManagedLedger): any {
@@ -141,9 +153,30 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     const proof = (fact.observation as any).consumption
     return coordination.host.recordConsumedContext({ context: context.ref, requestId: input.request_id, assignmentRevision: assignment(role).revision, payloadDigest: context.envelope.digest, worker: workers.get(role)!, nativeSessionId: session.engine.identity.native_session_id, turnId: proof.turn_id, processingStartedEventRef: proof.processing_started_event_ref, nativeEvidenceRef: fact.ref })
   }
+  const closeRole = async (role: string) => {
+    const session = native.get(role); if (!session) return null
+    const receipt = await releaseManagedSession(ledger, session)
+    if (native.get(role) === session) native.delete(role)
+    return receipt
+  }
+  const liveRole = (role: string) => {
+    const session = native.get(role); if (!session) return undefined
+    const action = ledger.get(session.launch.actionRef.id)!
+    if ((action.data.receipt as any)?.stopped === true) { session.cleanupCredentials(); native.delete(role); return undefined }
+    if (action.data.state !== 'sent') throw Error('NATIVE_CESSATION_UNKNOWN')
+    return session
+  }
+  async function getCoordinator() {
+    const existing = liveRole('coordinator'); if (existing) return existing
+    const binding = ledger.snapshot('session_binding').find(o => (o.data.worker_ref as any)?.id === workers.get('coordinator')!.id)
+    if (!binding) throw Error('COORDINATOR_ORIGINAL_THREAD_REQUIRED')
+    const session = await launchManagedCodex(kernel, { ...config.engine, source, stateRoot: String(binding.data.runtime_namespace) }, workers.get('coordinator')!, workspaces.get('coordinator')!.workspace, scope('coordinator'), instructions, [], managedCoordinatorSchema, { home: String(binding.data.runtime_namespace), nativeSessionId: String(binding.data.native_session_id) })
+    native.set('coordinator', session); attach('coordinator', session)
+    return session
+  }
   const roleInstructions = 'You are a professional worker in a controlled managed team. Use only registered managed read/write/check/ask. Never use shell, exec, browser, delegation, MCP or any other builtin. The input is a managed_input envelope; execute its text. Read actual source before judgments. check is only text equality, not tests. Technical uncertainty must use ask, never ask the user. Never claim whole-project tests or delivery happened without evidence.'
   async function getRole(role: string, schema?: Json) {
-    const existing = native.get(role)
+    const existing = liveRole(role)
     if (existing) return existing
     const oldBinding = ledger.snapshot().find(o => o.kind === 'session_binding' && (o.data.worker_ref as any)?.id === workers.get(role)!.id)
     const resume = oldBinding ? { home: String(oldBinding.data.runtime_namespace), nativeSessionId: String(oldBinding.data.native_session_id) } : undefined
@@ -160,7 +193,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
         const answer = await askSecretary('Technical request from '+role+': '+p.arguments.question+'\nReturn exactly an answer proposal with questionId '+question.id+'. Resolve internally from current requirements. No user relay.')
         const decision = answer.proposals.find(p => p.kind === 'answer' && p.questionId === question.id)
         if (!decision?.answer) throw new Error('COORDINATOR_TECHNICAL_ANSWER_REQUIRED')
-        const d = coordination.recordProfessionalDecision({ commitmentId: work!.id, question, reviewer: workers.get('coordinator')!, kind: 'technical_answer', conclusion: decision.answer, evidenceRefs: kernel.host.nativeFacts(native.get('coordinator')!.io.stream).slice(-4).map(f => f.ref), alternatives: [decision.reason], scopeRefs: coordination.semanticScopes(work!.id) })
+        const d = coordination.recordProfessionalDecision({ commitmentId: work!.id, question, reviewer: workers.get('coordinator')!, kind: 'technical_answer', conclusion: decision.answer, evidenceRefs: answer.nativeEvidenceRefs, alternatives: [decision.reason], scopeRefs: coordination.semanticScopes(work!.id) })
         reply = { success: true, text: decision.answer }; record('technical_answer_sent', { question, decision: d }, scope(role))
       } else if (role === 'quality' && p.tool === 'write') reply = { success: false, text: 'INDEPENDENT_QUALITY_READ_ONLY' }
       else reply = await helpers.call(p.tool, p.arguments, request.ref.id)
@@ -183,14 +216,18 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       qaResult = JSON.parse(result.answer)
       if (qaResult.purpose === 'intake') coordination.host.recordTeamReview(work!.id, workers.get(role)!, team, [evidence.id, proof.id], intakeReadiness(qaResult))
     }
+    await closeRole(role)
     return { status: 'observed', role, evidence, answer: result.answer } as unknown as Json
   }
   async function askSecretary(text: string) {
+    const session = await getCoordinator()
     const context = contextFor('coordinator', text), requestId = 'coordination:'+randomUUID()
     const batch = await ports.coordinator({ request_id: requestId, assignment_revision: assignment('coordinator').revision, text: context.envelope.text }, abort.signal)
     const proof = consumed('coordinator', context, { request_id: requestId })
     record('coordinator_proposals', batch as unknown as Json, scope('coordinator'), [proof.id])
-    return batch
+    const nativeEvidenceRefs = kernel.host.nativeFacts(session.io.stream).slice(-4).map(f => f.ref)
+    await closeRole('coordinator')
+    return { ...batch, nativeEvidenceRefs }
   }
   const assertVerificationReady = () => {
     if (!work || !contract || !requirement || !coordination.dispatchReadiness(work.id).ready) throw new Error('QUALITY_INTAKE_REQUIRED')
@@ -336,8 +373,8 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       if (parent) record('parent_goal_pending', { requirements: parent as unknown as Json, status: 'pending', reason: 'Separate prior platform outcome; this business delivery does not fulfill or discard it.' }, [project])
       work = coordination.acceptManagedIntent(source, { id: 'work:' + id, intent: v.goal, requirements: [requirement], acceptanceContract: contract, deliveryContract: deliveryRef, projects: [project], boundary: 'Only host-authorized paths; independent business acceptance plus exact-tree project gates before controlled local dev commit; no push or deployment', accountable: workers.get('coordinator')!.id, policy, nextReviewAt: Date.now()+60000 })
       team = ports.plan(work, v.assignments.map(a => ({ role: a.role, applicable: true, basis: a.basis, worker: workers.get(a.role) ?? null, deliverables: a.deliverables, consumers: a.consumers, criteria: a.criteria.map(i => criteria[i]!), dependencies: [], combinationBasis: '' })))
-      const old = native.get('coordinator')!, identity = old.engine.identity, closed = await old.stop()
-      if (closed.receipt?.stopped !== true) throw new Error('BOOTSTRAP_CESSATION_UNKNOWN')
+      const old = native.get('coordinator')!, identity = old.engine.identity
+      await closeRole('coordinator')
       const next = await launchManagedCodex(kernel, { ...config.engine, source, stateRoot: old.home }, workers.get('coordinator')!, workspaces.get('coordinator')!.workspace, scope('coordinator'), instructions, [], managedCoordinatorSchema, { home: old.home, nativeSessionId: identity.native_session_id })
       native.set('coordinator', next); attach('coordinator', next)
       return json({ status: 'accepted', commitment: work, team, criteria, parentRequirementsPreserved: true })
@@ -380,9 +417,12 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     },
     async prepareContinuation() {
       if (!work || native.size) throw Error('MANAGED_CONTINUATION_NOT_QUIESCENT')
-      const partition = config.contractPartition
+      const partition = config.contractPartition && !ledger.get('contract-partition:' + work.id + ':' + config.contractPartition.acceptance.revision) ? config.contractPartition : undefined
+      const handoff = config.interruptedVerificationHandoff
+      if (handoff && (handoff.commitment.id !== work.id || handoff.candidateRoot !== workspaces.get('implementation')!.workspace.root || JSON.stringify(handoff.candidate.map(x => x.path).sort()) !== JSON.stringify([...config.publicFiles].sort()))) throw Error('VERIFY_HANDOFF_CANDIDATE_SCOPE')
+      if (handoff) { verifyPartitionCandidate(handoff); verifyPartitionCandidate({ ...handoff, candidateRoot: workspaces.get('quality')!.workspace.root }) }
       const unresolved = ledger.snapshot('coordination_operation').filter(o => o.data.state !== 'completed' && !partitionHandoff(ledger, o, contract ? [contract] : []))
-      if (unresolved.length && (!partition || JSON.stringify(unresolved.map(o => ({ id: o.id, revision: o.revision }))) !== JSON.stringify(partition.operations))) throw Error('MANAGED_CONTINUATION_NOT_QUIESCENT')
+      if (unresolved.length && JSON.stringify(unresolved.map(o => ({ id: o.id, revision: o.revision }))) !== JSON.stringify(partition?.operations ?? (handoff ? [handoff.operation] : []))) throw Error('MANAGED_CONTINUATION_NOT_QUIESCENT')
       if (partition && (partition.commitment.id !== work.id || partition.candidateRoot !== workspaces.get('implementation')!.workspace.root || JSON.stringify(partition.candidate.map(x => x.path).sort()) !== JSON.stringify([...config.publicFiles].sort()))) throw Error('PARTITION_CANDIDATE_SCOPE')
       if (partition) verifyPartitionCandidate(partition)
       const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
@@ -398,7 +438,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       for (const path of config.publicFiles) {
         const before = treeEntries(config.projectRoot, transition.before).get(path), after = treeEntries(config.projectRoot, head).get(path)
         if (!before || !after || before.blob !== after.blob || before.mode !== after.mode) throw Error('MANAGED_BASELINE_BUSINESS_CHANGED')
-        for (const sourceRoot of [config.projectRoot, ...['coordinator','implementation','quality'].map(role => workspaces.get(role)!.workspace.root)]) { if (partition && sourceRoot === partition.candidateRoot) continue; const entry = file(sourceRoot, path); if (!entry || entry.blob !== before.blob || entry.mode !== before.mode) throw Error('MANAGED_CANDIDATE_NOT_UNCHANGED') }
+        for (const sourceRoot of [config.projectRoot, ...['coordinator','implementation','quality'].map(role => workspaces.get(role)!.workspace.root)]) { if ((partition && sourceRoot === partition.candidateRoot) || (handoff && [handoff.candidateRoot, workspaces.get('quality')!.workspace.root].includes(sourceRoot))) continue; const entry = file(sourceRoot, path); if (!entry || entry.blob !== before.blob || entry.mode !== before.mode) throw Error('MANAGED_CANDIDATE_NOT_UNCHANGED') }
       }
       record('framework_baseline_bound', { ...transition, materialDigest: supplemental.digest, stoppedLaunches: launches.map(o => ({ id: o.id, revision: o.revision })) }, [project], transition.evidenceRefs)
       coordination.host.renewProfileQualification(profile, transition.evidenceRefs, Date.now() + 30 * 60_000)
@@ -428,6 +468,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
         criteria = ledger.get(contract.id)!.data.criterion_refs as unknown as Ref[]
         team = ledger.snapshot('team_assignment').filter(o => o.data.commitment_id === work!.id).map(o => ({ id: o.id, revision: o.revision }))
       }
+      if (handoff && !ledger.get('verify-handoff:' + handoff.operation.id + ':' + handoff.operation.revision)) coordination.host.handoffInterruptedVerification(handoff)
       initialParent = head
       return { head, materialDigest: supplemental.digest, ...(partition ? { contractPartition: 'contract-partition:' + work.id + ':' + partition.acceptance.revision } : {}) }
     },
@@ -437,7 +478,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       const binding = ledger.snapshot().find(o => o.kind === 'session_binding' && (o.data.worker_ref as any)?.id === workers.get('coordinator')!.id)!
       const session = await launchManagedCodex(kernel, { ...config.engine, source, stateRoot: String(binding.data.runtime_namespace) }, workers.get('coordinator')!, workspaces.get('coordinator')!.workspace, scope('coordinator'), instructions, [], managedCoordinatorSchema, { home: String(binding.data.runtime_namespace), nativeSessionId: String(binding.data.native_session_id) })
       native.set('coordinator', session); attach('coordinator', session)
-      return { requestId: 'resume:'+randomUUID(), proposals: await askSecretary(JSON.stringify({ instruction: text, hostContractPartition: ledger.snapshot('coordination_runtime_event').filter(o => o.data.event === 'contract_partition').map(o => o.data.payload), continuationRule: 'Old interrupted operations and unanswered request records remain history, not success. Their old native RPC is terminated; address outstanding technical content in the new original-thread turns, never claim the old request was answered. After contract partition first request original quality to approve the new team mapping before implementation resumes its retained candidate.' })) }
+      return { requestId: 'resume:'+randomUUID(), proposals: await askSecretary(JSON.stringify({ instruction: text, hostInterruptedVerification: ledger.snapshot('coordination_runtime_event').filter(o => o.data.event === 'verify_interrupted_handoff').map(o => o.data.payload), hostContractPartition: ledger.snapshot('coordination_runtime_event').filter(o => o.data.event === 'contract_partition').map(o => o.data.payload), continuationRule: 'Old interrupted operations and unanswered request records remain history, not success. Their old native RPC is terminated; address outstanding technical content in the new original-thread turns, never claim the old request was answered. After contract partition first request original quality to approve the new team mapping before implementation resumes its retained candidate.' })) }
     },
     async advance(batch: { requestId: string; proposals: { proposals: RuntimeProposal[] } }) {
       const outcomes: Json[] = []
@@ -464,7 +505,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     },
     async stopNative(): Promise<Json[]> {
       const results: Json[] = []
-      for (const [role, session] of native) { try { const result = await session.stop(); results.push({ role, result: result as unknown as Json }) } finally { session.cleanupCredentials(); native.delete(role) } }
+      for (const role of [...native.keys()]) { try { results.push({ role, receipt: await closeRole(role) }) } catch (error) { results.push({ role, error: String(error), stopped: false }) } }
       return results
     },
     async dispose() { const results = await api.stopNative(); ledger.close(); return results }

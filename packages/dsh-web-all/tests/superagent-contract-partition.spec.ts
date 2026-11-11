@@ -8,7 +8,7 @@ import { createContextCompiler } from '../src/host/services/superagent/context/c
 import { encodeInput } from '../src/host/services/superagent/executors/native/bindings.ts'
 import type { ContractPartition } from '../src/host/services/superagent/kernel/contract-partition.ts'
 
-it.each(['approved','rejected','missing-slot','unknown-terminal','mismatched-exit'])('preserves exact contract and interrupted responsibility boundaries: %s', async (scenario) => {
+it.each(['approved','rejected','missing-slot','unknown-terminal','mismatched-exit','verify-handoff','verify-unknown','verify-issued'])('preserves exact contract and interrupted responsibility boundaries: %s', async (scenario) => {
   const dir = mkdtempSync(join(tmpdir(), 'partition-')), project = join(dir, 'source'); mkdirSync(project); writeFileSync(join(project, 'asset'), 'baseline')
   const runtime = createManagedRuntime({ root: join(dir, 'managed'), projectRoot: project, publicFiles: ['asset'], implementationWritePaths: ['asset'], engine: { executable: '/never-started', authFile: '/absent', model: 'fixture', stateRoot: join(dir, 'native') } })
   const { ledger, coordination: c, kernel: k, source, workers, workspaces } = runtime
@@ -38,12 +38,36 @@ it.each(['approved','rejected','missing-slot','unknown-terminal','mismatched-exi
       return {worker,workspace,scopes,stream,sid,observe,context,domains,launch:envelope.actionRef,stop(){const receipt={status:'failed' as const,stopped:true,evidenceRefs:['fixture:process-exit']};k.host.observeNative(envelope.actionRef,'execution:'+envelope.actionRef.id,{kind:'process_exit',launchRef:scenario === 'mismatched-exit' && role === 'implementation' ? { ...envelope.actionRef, revision: envelope.actionRef.revision + 1 } : envelope.actionRef,receipt});k.host.reconcileAction(envelope.actionRef,receipt)}}
     }
     const execute=(session:ReturnType<typeof launch>,id:string,proposal:any,status:string,answer:string)=>{
-      const operation=c.host.claimOperation({id,inputRef:'fixture',proposal,domainKeys:session.domains,scopeRefs:session.scopes,executionSlots:[String(proposal.role ?? 'quality'), ...(id === 'old-operation' && scenario === 'missing-slot' ? ['uncollected'] : [])]})
+      const operation=c.host.claimOperation({id,inputRef:'fixture',proposal,domainKeys:session.domains,scopeRefs:session.scopes,executionSlots:[String(proposal.role ?? 'quality'), ...(proposal.kind==='verify' ? ['collect:baseline','collect:candidate'] : []), ...(id === 'old-operation' && scenario === 'missing-slot' ? ['uncollected'] : [])]})
       const slot=String(proposal.role ?? 'quality'),requestId=id+':input:'+slot,context=ledger.get(session.context.id)!.data.envelope as any
       c.host.bindOperationExecution(operation,{kind:'native',slot,worker:session.worker,context:session.context,launch:session.launch,stream:session.stream,nativeSessionId:session.sid,requestId})
       const input={request_id:requestId,assignment_revision:context.assignment.revision,payload_digest:context.digest,payload_ref:requestId,text:context.text};session.observe({kind:'input-intent',input})
       const evidence=session.observe({kind:'turn-page',threadId:session.sid,page:{data:[{id:id+':turn',status,startedAt:1,items:[{type:'userMessage',content:[{type:'text',text:encodeInput(input)}]},{type:'agentMessage',text:answer}]}]}})
       return {operation:ref(id),evidenceRefs:[evidence]}
+    }
+    if(scenario.startsWith('verify-')) {
+      const qa=launch('quality'),old=execute(qa,'old-verify',{kind:'verify'},scenario==='verify-unknown'?'inProgress':'interrupted','');qa.stop()
+      const handoff={commitment:work,acceptance:ref('acceptance'),delivery:ref('delivery'),assignments:team().map(o=>ref(o.id)),operation:old.operation,candidateRoot:plan.candidateRoot,candidate:plan.candidate,evidenceRefs:['host:exact-interruption']}
+      const nextInput={id:'next-verify',inputRef:'same-business',proposal:{kind:'verify'},domainKeys:qa.domains,scopeRefs:qa.scopes,executionSlots:['quality','collect:baseline','collect:candidate']}
+      expect(()=>c.host.claimOperation(nextInput)).toThrow('OPERATION_DOMAIN_UNRESOLVED')
+      const collect=()=>{
+        const launchObject=ledger.get(qa.launch.id)!,spec=launchObject.data.execution_spec as any,id='unissued-collector'
+        return k.actions.planAction({...spec,id,idempotencyKey:id,kind:'collect'})
+      }
+      if(scenario==='verify-issued'){collect();expect(()=>c.host.handoffInterruptedVerification(handoff)).toThrow('VERIFY_HANDOFF_COLLECTOR_ALREADY_ISSUED');return}
+      if(scenario==='verify-unknown'){expect(()=>c.host.handoffInterruptedVerification(handoff)).toThrow('PARTITION_NATIVE_OUTCOME_UNKNOWN');return}
+      c.host.handoffInterruptedVerification(handoff)
+      expect(ledger.get(old.operation.id)?.data.state).toBe('running')
+      expect(()=>c.host.completeOperation(old.operation,{status:'pretend'},old.evidenceRefs)).toThrow('OPERATION_COMPLETION_PROOF_REQUIRED')
+      const resumed=launch('quality'),next=c.host.claimOperation({...nextInput,scopeRefs:resumed.scopes})
+      const execution={kind:'native' as const,slot:'quality',worker:resumed.worker,context:resumed.context,launch:resumed.launch,stream:resumed.stream,nativeSessionId:'different-thread',requestId:'next-verify:input:quality'}
+      expect(()=>c.host.bindOperationExecution(next,execution)).toThrow('PARTITION_SAME_NATIVE_THREAD_REQUIRED')
+      c.host.bindOperationExecution(next,{...execution,nativeSessionId:resumed.sid})
+      const action=collect()
+      expect(()=>c.host.bindOperationExecution(ref(next.id),{kind:'controlled',slot:'quality',action:action.ref})).toThrow('OPERATION_EXECUTION_CONFLICT')
+      c.host.bindOperationExecution(ref(next.id),{kind:'controlled',slot:'collect:baseline',action:action.ref})
+      expect((ledger.get(next.id)!.data.executions as any[]).map(e=>e.kind)).toEqual(['native','controlled'])
+      resumed.stop();return
     }
     const impl=launch('implementation'),old=execute(impl,'old-operation',{kind:'dispatch',role:'implementation'},scenario === 'unknown-terminal' ? 'inProgress' : 'interrupted','')
     impl.stop();plan.operations=[old.operation]

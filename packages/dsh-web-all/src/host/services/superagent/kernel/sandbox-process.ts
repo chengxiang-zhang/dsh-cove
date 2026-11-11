@@ -154,6 +154,14 @@ export function openSandboxProcess<Result>(
   child.once('exit', (exitCode) => {
     exited = true
     code = exitCode
+    if (ended) {
+      // The owned handle can report exit after the bounded drain recorded unknown.
+      // This is same-execution evidence, never a PID lookup or children-domain proof.
+      if (e.spec.processPolicy === 'single') {
+        try { reconcile({ status: code === 0 && !reason ? 'confirmed' : 'failed', stopped: true, evidenceRefs: [`process:${child.pid}:${randomUUID()}`], ...(code === null ? {} : { exitCode: code }), ...(reason ? { reason } : {}), observation: { stdout: '', stderr, observedAt: Date.now() } }) } catch { /* A closed ledger retains unknown; do not claim a persisted reconciliation. */ }
+      }
+      return
+    }
     kill()
     boundedDrain()
   })

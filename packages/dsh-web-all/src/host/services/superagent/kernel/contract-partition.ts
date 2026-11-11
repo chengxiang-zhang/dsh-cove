@@ -15,7 +15,7 @@ export interface PartitionApproval { operation: Ref; evidenceRefs: string[] }
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const refs = (value: unknown) => value as Ref[]
 const ref = (o: ManagedObject): Ref => ({ id: o.id, revision: o.revision })
-export function verifyPartitionCandidate(plan: ContractPartition): void {
+export function verifyPartitionCandidate(plan: Pick<ContractPartition, 'candidateRoot' | 'candidate'>): void {
   if (!plan.candidate.length || realpathSync(plan.candidateRoot) !== plan.candidateRoot) throw Error('PARTITION_CANDIDATE_REQUIRED')
   for (const entry of plan.candidate) {
     const path = join(plan.candidateRoot, entry.path), stat = lstatSync(path)
@@ -26,7 +26,7 @@ export function verifyPartitionCandidate(plan: ContractPartition): void {
 export function partitionHandoff(ledger: ManagedLedger, operation: ManagedObject, scopes: Ref[]) {
   return ledger.snapshot('coordination_runtime_event').find(o => {
     const p = o.data.payload as any
-    return o.data.event === 'contract_partition' && p?.operations?.some((r: Ref) => same(r, ref(operation))) && scopes.some(r => same(r, p.after.acceptance)) && ledger.get(p.after.acceptance.id)?.revision === p.after.acceptance.revision
+    return ['contract_partition','verify_interrupted_handoff'].includes(String(o.data.event)) && p?.operations?.some((r: Ref) => same(r, ref(operation))) && scopes.some(r => same(r, p.after.acceptance)) && ledger.get(p.after.acceptance.id)?.revision === p.after.acceptance.revision
   })
 }
 type Transaction = {
@@ -73,17 +73,7 @@ export function partitionContracts(tx: Transaction, plan: ContractPartition, app
     if (!slots.length || slots.length !== executions.length || slots.some(slot => !executions.some(e => e.slot === slot))) throw Error('PARTITION_UNCOLLECTED_SLOT')
     for (const execution of executions) {
       if (execution.kind !== 'native') throw Error('PARTITION_NON_NATIVE_UNRESOLVED')
-      const old = ledger.get(execution.launch.id)!, binding = ledger.snapshot('session_binding').find(o => same(o.data.worker_ref, execution.worker))
-      if (!old || (old.data.receipt as any)?.stopped !== true || binding?.data.native_session_id !== execution.nativeSessionId || !ledger.eventEntries({ nativeStream: 'execution:' + execution.launch.id }).some(({ body }: any) => body.controlled?.command?.observation?.kind === 'process_exit' && same(body.controlled.command.actionRef, execution.launch) && same(body.controlled.command.observation.launchRef, execution.launch) && same(body.controlled.command.observation.receipt, old.data.receipt))) throw Error('PARTITION_WRITER_UNKNOWN')
-      const context = ledger.get(execution.context.id)?.data.envelope as unknown as ContextEnvelope
-      const text = JSON.stringify({ managed_input: { request_id: execution.requestId, assignment_revision: context.assignment.revision, payload_digest: context.digest }, text: context.text })
-      const terminal = ledger.eventEntries({}).some(({ body }: any) => {
-        const c = body.controlled?.command, observation = c?.observation
-        if (c?.kind !== 'native' || observation?.kind !== 'turn-page' || observation.threadId !== execution.nativeSessionId) return false
-        const observedAction = ledger.get(c.actionRef?.id), target = (observedAction?.data.execution_spec as any)?.target
-        return same(target, execution.worker) && observation.page?.data?.some((t: any) => ['interrupted','failed'].includes(t.status) && t.items?.some((i: any) => i.type === 'userMessage' && i.content?.some((v: any) => v.text === text)))
-      })
-      if (!terminal) throw Error('PARTITION_NATIVE_OUTCOME_UNKNOWN')
+      assertInterruptedNative(ledger, execution)
     }
   }
   // Preserve every original criterion and requirement object. Only responsibility references move.
@@ -95,4 +85,45 @@ export function partitionContracts(tx: Transaction, plan: ContractPartition, app
   const team = assignments.map(o => save(o.kind, { ...o.data, criterion_refs: refs(o.data.criterion_refs).filter(r => !plan.deliveryCriteria.some(x => same(x, r))) as unknown as Json }, replace(o.scope_revision_refs).map(r => same(r, ref(intake)) ? ref(i) : r), undefined, o))
   const event = save('coordination_runtime_event', { event: 'contract_partition', payload: { before: { commitment: plan.commitment, acceptance: plan.acceptance, delivery: plan.delivery, assignments: plan.assignments }, after: { commitment: ref(w), acceptance: ref(a), delivery: ref(d), assignments: team.map(ref) }, operations: plan.operations, candidate: plan.candidate, candidateRoot: plan.candidateRoot, businessCriteria: plan.businessCriteria, deliveryCriteria: plan.deliveryCriteria, approval, status: 'Interrupted executions retained; successor responsibility on the same native threads, not business completion' } as unknown as Json, evidence_refs: plan.evidenceRefs }, [], 'contract-partition:' + work.id + ':' + plan.acceptance.revision)
   return [w, a, d, i, ...team, event]
+}
+
+export interface InterruptedVerificationHandoff {
+  commitment: Ref; acceptance: Ref; delivery: Ref; assignments: Ref[]; operation: Ref
+  candidateRoot: string; candidate: ContractPartition['candidate']; evidenceRefs: string[]
+}
+function assertInterruptedNative(ledger: ManagedLedger, execution: Extract<OperationExecution, { kind: 'native' }>) {
+  const old = ledger.get(execution.launch.id)!, binding = ledger.snapshot('session_binding').find(o => same(o.data.worker_ref, execution.worker))
+  if (!old || (old.data.receipt as any)?.stopped !== true || binding?.data.native_session_id !== execution.nativeSessionId || !ledger.eventEntries({ nativeStream: 'execution:' + execution.launch.id }).some(({ body }: any) => body.controlled?.command?.observation?.kind === 'process_exit' && same(body.controlled.command.actionRef, execution.launch) && same(body.controlled.command.observation.launchRef, execution.launch) && same(body.controlled.command.observation.receipt, old.data.receipt))) throw Error('PARTITION_WRITER_UNKNOWN')
+  const context = ledger.get(execution.context.id)?.data.envelope as unknown as ContextEnvelope
+  const text = JSON.stringify({ managed_input: { request_id: execution.requestId, assignment_revision: context.assignment.revision, payload_digest: context.digest }, text: context.text })
+  const terminal = ledger.eventEntries({}).some(({ body }: any) => {
+    const c = body.controlled?.command, observation = c?.observation
+    if (c?.kind !== 'native' || observation?.kind !== 'turn-page' || observation.threadId !== execution.nativeSessionId) return false
+    const observedAction = ledger.get(c.actionRef?.id), target = (observedAction?.data.execution_spec as any)?.target
+    return same(target, execution.worker) && observation.page?.data?.some((t: any) => ['interrupted','failed'].includes(t.status) && t.items?.some((i: any) => i.type === 'userMessage' && i.content?.some((v: any) => v.text === text)))
+  })
+  if (!terminal) throw Error('PARTITION_NATIVE_OUTCOME_UNKNOWN')
+}
+/** Fixed verify plan only: one interrupted QA input, and two collectors that were never issued. */
+export function handoffInterruptedVerification(tx: Transaction, plan: InterruptedVerificationHandoff): ManagedObject[] {
+  const { ledger, current, save } = tx
+  const work = current(plan.commitment, 'commitment'), acceptance = current(plan.acceptance, 'acceptance_contract')
+  current(plan.delivery, 'delivery_contract')
+  if (work.data.control_state !== 'autonomous' || !['proposed','ready','working'].includes(String(work.data.state)) || !same(work.data.acceptance_contract, plan.acceptance) || !same(work.data.delivery_contract, plan.delivery) || !plan.evidenceRefs.length) throw Error('VERIFY_HANDOFF_SCOPE_REQUIRED')
+  const assignments = ledger.snapshot('team_assignment').filter(o => o.data.commitment_id === work.id)
+  if (!same(assignments.map(ref), plan.assignments)) throw Error('PARTITION_ASSIGNMENT_CHANGED')
+  assignments.forEach(o => current(ref(o)))
+  verifyPartitionCandidate(plan)
+  const operation = current(plan.operation, 'coordination_operation'), executions = operation.data.executions as unknown as OperationExecution[]
+  if (operation.data.state !== 'running' || (operation.data.proposal as any)?.kind !== 'verify' || !same(operation.data.execution_slots, ['quality','collect:baseline','collect:candidate']) || executions.length !== 1 || executions[0]?.kind !== 'native' || executions[0].slot !== 'quality' || !refs(operation.data.semantic_refs).some(r => same(r, ref(acceptance)))) throw Error('VERIFY_HANDOFF_PLAN_REQUIRED')
+  refs(operation.data.semantic_refs).forEach(r => current(r))
+  const execution = executions[0]
+  if (!assignments.some(o => o.data.role === 'quality' && same(o.data.worker_ref, execution.worker))) throw Error('VERIFY_HANDOFF_QUALITY_REQUIRED')
+  const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
+  if (launches.some(o => (o.data.receipt as any)?.stopped !== true)) throw Error('PARTITION_LIVE_WRITER')
+  // No collector may have been planned outside this operation's binding. Such effects need their own reconciliation.
+  const collectorActions = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'collect' && refs((o.data.execution_spec as any)?.scopeRefs ?? []).some(r => same(r, plan.acceptance)))
+  if (collectorActions.length) throw Error('VERIFY_HANDOFF_COLLECTOR_ALREADY_ISSUED')
+  assertInterruptedNative(ledger, execution)
+  return [save('coordination_runtime_event', { event: 'verify_interrupted_handoff', payload: { after: { commitment: plan.commitment, acceptance: plan.acceptance, delivery: plan.delivery, assignments: plan.assignments }, operations: [plan.operation], candidateRoot: plan.candidateRoot, candidate: plan.candidate, unissuedSlots: ['collect:baseline','collect:candidate'], native: execution, status: 'QA interrupted and stopped; collectors never issued; same-thread successor required; no business completion' } as unknown as Json, evidence_refs: plan.evidenceRefs }, [], 'verify-handoff:' + operation.id + ':' + operation.revision)]
 }

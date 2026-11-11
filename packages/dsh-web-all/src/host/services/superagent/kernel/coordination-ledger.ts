@@ -1,4 +1,4 @@
-import { partitionContracts, partitionHandoff, type ContractPartition, type PartitionApproval } from './contract-partition.ts'
+import { handoffInterruptedVerification, type InterruptedVerificationHandoff, partitionContracts, partitionHandoff, type ContractPartition, type PartitionApproval } from './contract-partition.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import type { ManagedLedger } from './managed-ledger.ts'
@@ -8,6 +8,7 @@ import { refOf, type HostSpec, type ProjectSpec, type PolicySpec, type ProfileSp
   type ContextConsumption, type OperationClaim, type OperationExecution } from '../protocol/coordination.ts'
 
 type Payload =
+  | { kind: 'verify_interrupted_handoff'; plan: InterruptedVerificationHandoff }
   | { kind: 'partition_contract'; plan: ContractPartition; approval: PartitionApproval }
   | { kind: 'operation_claim'; input: OperationClaim }
   | { kind: 'operation_bind'; operation: Ref; execution: OperationExecution }
@@ -146,7 +147,9 @@ export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger,
     }
     const p = command.payload
     let result: ManagedObject[] = []
-    if (p.kind === 'partition_contract') {
+    if (p.kind === 'verify_interrupted_handoff') {
+      result = handoffInterruptedVerification({ ledger, current, save, nativeFact }, p.plan)
+    } else if (p.kind === 'partition_contract') {
       result = partitionContracts({ ledger, current, save, nativeFact }, p.plan, p.approval)
     } else if (p.kind === 'operation_claim') {
       const input=p.input; requireText(input.id,input.inputRef); texts(input.domainKeys); texts(input.executionSlots,false); assertRefs(input.scopeRefs)
@@ -167,7 +170,13 @@ export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger,
         const domains=operation.data.domain_keys as string[]
         for (const prior of ledger.snapshot('coordination_operation')) {
           if (prior.id === operation.id || prior.data.state === 'completed' || !(prior.data.domain_keys as string[]).some(key => domains.includes(key))) continue
-          if (!partitionHandoff(ledger, prior, refs(operation.data.semantic_refs))) throw Error('OPERATION_DOMAIN_UNRESOLVED')
+          const handoff = partitionHandoff(ledger, prior, refs(operation.data.semantic_refs))
+          if (!handoff) throw Error('OPERATION_DOMAIN_UNRESOLVED')
+          if (execution.kind === 'controlled' && handoff.data.event === 'verify_interrupted_handoff' && (operation.data.proposal as any)?.kind === 'verify' && ((handoff.data.payload as any).unissuedSlots as string[]).includes(execution.slot)) {
+            const action = current(execution.action, 'action')
+            if ((action.data.execution_spec as any)?.kind !== 'collect') throw Error('VERIFY_HANDOFF_COLLECTOR_REQUIRED')
+            continue
+          }
           const inherited = (prior.data.executions as unknown as OperationExecution[]).find(e => e.kind === 'native' && execution.kind === 'native' && sameRef(e.worker, execution.worker))
           if (execution.kind !== 'native' || !inherited || inherited.kind !== 'native' || inherited.nativeSessionId !== execution.nativeSessionId) throw Error('PARTITION_SAME_NATIVE_THREAD_REQUIRED')
         }

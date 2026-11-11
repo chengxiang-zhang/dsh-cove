@@ -1,4 +1,4 @@
-import type { ContractPartition, PartitionApproval } from '../kernel/contract-partition.ts'
+import type { InterruptedVerificationHandoff, ContractPartition, PartitionApproval } from '../kernel/contract-partition.ts'
 import type { ManagedLedger } from '../kernel/managed-ledger.ts'
 import { createCoordinationWriter, coordinationScopes } from '../kernel/coordination-ledger.ts'
 import type { Ref, ManagedObject, Json } from '../protocol/managed-work.ts'
@@ -10,6 +10,7 @@ export function createCoordinationService(ledger: ManagedLedger, source: Ref) {
   const write = createCoordinationWriter(ledger, source)
   return Object.freeze({
     host: Object.freeze({
+      handoffInterruptedVerification: (plan: InterruptedVerificationHandoff) => write({ kind: 'verify_interrupted_handoff', plan }),
       partitionContracts: (plan: ContractPartition, approval: PartitionApproval) => write({ kind: 'partition_contract', plan, approval }),
       claimOperation: (input: OperationClaim) => write({ kind: 'operation_claim', input })[0]!,
       bindOperationExecution: (operation: Ref, execution: OperationExecution) => write({ kind: 'operation_bind', operation, execution })[0]!,
