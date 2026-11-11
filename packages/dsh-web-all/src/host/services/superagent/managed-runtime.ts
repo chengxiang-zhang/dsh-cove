@@ -81,6 +81,11 @@ export function assertDeliveryProposalPersisted(ledger: ManagedLedger, operation
   if (!operationId.endsWith(':operation') || operation?.kind !== 'coordination_operation' || operation.data.state !== 'completed' || (operation.data.proposal as any)?.kind !== 'verify' || !matches(operation.data.result) || proposal?.kind !== 'coordination_runtime_event' || proposal.data.event !== 'proposal_result' || !matches(proposal.data.payload)) throw Error('DELIVERY_PROPOSAL_NOT_DURABLE')
 }
 
+export function latestFrameworkBaseline(ledger: ManagedLedger): any {
+  const event = ledger.events().filter((event: any) => event.coordination?.payload?.kind === 'runtime_event' && event.coordination.payload.event === 'framework_baseline_bound').at(-1) as any
+  return event?.coordination.payload.payload
+}
+
 /** Only the trusted web-all host creates this runtime. JSON intake material cannot construct a grant. */
 export function createManagedRuntime(config: ManagedRuntimeConfig) {
   mkdirSync(config.root, { recursive: true, mode: 0o700 })
@@ -383,7 +388,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
       if (!launches.length || launches.some(o => !(o.data.receipt as any)?.stopped)) throw Error('MANAGED_CONTINUATION_WRITER_UNKNOWN')
       const transition = config.frameworkBaselineTransition, head = git(config.projectRoot, ['rev-parse', 'HEAD'])
-      const previous = ledger.snapshot('coordination_runtime_event').filter(o => o.data.event === 'framework_baseline_bound').at(-1)?.data.payload as any
+      const previous = latestFrameworkBaseline(ledger)
       if (!transition || transition.commitmentId !== work.id || !transition.evidenceRefs.length || transition.after !== head || (previous && previous.after !== transition.before && previous.after !== transition.after)) throw Error('MANAGED_BASELINE_TRANSITION_REQUIRED')
       if (git(config.projectRoot, ['merge-base', transition.before, head]) !== transition.before) throw Error('MANAGED_BASELINE_NOT_DESCENDANT')
       for (const role of ['coordinator','implementation','quality']) {

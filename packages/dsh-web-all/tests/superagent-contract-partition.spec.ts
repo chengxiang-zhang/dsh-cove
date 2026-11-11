@@ -87,3 +87,16 @@ it('reopens the sealed public baseline manifest while retaining the interrupted 
     expect(readFileSync(join(after.workspace.root,'asset'),'utf8')).toBe('retained unfinished candidate')
   } finally {await runtime.dispose();rmSync(dir,{recursive:true,force:true})}
 })
+
+it('selects the last durable baseline binding by event sequence, regardless of random event id order', async () => {
+  const { ManagedLedger }=await import('../src/host/services/superagent/kernel/managed-ledger.ts')
+  const { createCoordinationService }=await import('../src/host/services/superagent/coordination/intake.ts')
+  const { latestFrameworkBaseline }=await import('../src/host/services/superagent/managed-runtime.ts')
+  const dir=mkdtempSync(join(tmpdir(),'baseline-sequence-')),ledger=new ManagedLedger(join(dir,'ledger'))
+  try {
+    const c=createCoordinationService(ledger,{id:'host',revision:1})
+    c.host.recordRuntimeEvent('baseline:z-old','framework_baseline_bound',{before:'first',after:'second'},[])
+    c.host.recordRuntimeEvent('baseline:a-new','framework_baseline_bound',{before:'second',after:'third'},[])
+    expect(latestFrameworkBaseline(ledger)).toEqual({before:'second',after:'third'})
+  }finally{ledger.close();rmSync(dir,{recursive:true,force:true})}
+})
