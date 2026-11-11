@@ -18,7 +18,7 @@ type Payload =
   | { kind: 'host'; input: HostSpec } | { kind: 'project'; input: ProjectSpec }
   | { kind: 'policy'; input: PolicySpec } | { kind: 'profile'; input: ProfileSpec }
   | { kind: 'worker'; input: WorkerSpec } | { kind: 'accept'; source: Ref; input: CommitmentSpec }
-  | { kind: 'native_binding'; worker: Ref; evidenceRef: string; resume?: boolean }
+  | { kind: 'native_binding'; worker: Ref; evidenceRef: string; resume?: boolean; priorDomainEvidenceRef?: string }
   | { kind: 'team'; commitment: Ref; assignments: AssignmentSpec[] }
   | { kind: 'question'; input: QuestionSpec }
   | { kind: 'native_question'; question: Ref; evidenceRef: string }
@@ -262,7 +262,12 @@ export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger,
       if (previous) {
         if (!p.resume || !sameRef(ref(previous.data.worker_ref), p.worker) || previous.data.native_session_id !== identity.native_session_id || previous.data.engine_ref !== identity.engine_ref || previous.data.runtime_namespace !== identity.runtime_namespace || ref(previous.data.host_ref).id !== host.id) throw new Error('EXPLICIT_HANDOFF_REQUIRED')
         const oldLaunch = ledger.get(ref(previous.data.launch_ref).id)
-        if (oldLaunch?.id === binding.launchRef.id || (oldLaunch?.data.receipt as any)?.stopped !== true) throw new Error('OLD_NATIVE_WRITER_CESSATION_REQUIRED')
+        if (!oldLaunch || oldLaunch.id === binding.launchRef.id) throw new Error('OLD_NATIVE_WRITER_CESSATION_REQUIRED')
+        if ((oldLaunch.data.receipt as any)?.stopped !== true) {
+          if (!p.priorDomainEvidenceRef) throw new Error('OLD_NATIVE_WRITER_CESSATION_REQUIRED')
+          const proof = nativeFact(p.priorDomainEvidenceRef,p.worker), observation = proof.observation, oldSpec = oldLaunch.data.execution_spec as any
+          if (observation.kind !== 'domain_absence' || proof.command.stream !== 'execution:'+oldLaunch.id || !sameRef(proof.command.actionRef,refOf(oldLaunch)) || !sameRef(observation.launchRef,refOf(oldLaunch)) || observation.executionDigest !== createHash('sha256').update(JSON.stringify(oldSpec)).digest('hex') || observation.runtimeRoot !== identity.runtime_namespace || observation.processPolicy !== 'single' || oldSpec.processPolicy !== 'single' || oldSpec.workspaceId !== fact.spec.workspaceId || Number(fact.spec.epoch) <= Number(oldSpec.epoch) || !Number.isSafeInteger(observation.observedAt) || observation.observedAt > Date.now() || Date.now()-observation.observedAt > 60000 || Number(p.priorDomainEvidenceRef.slice(13)) >= Number(p.evidenceRef.slice(13))) throw new Error('OLD_NATIVE_WRITER_CESSATION_REQUIRED')
+        }
       } else if (p.resume) throw new Error('WORKER_BINDING_REQUIRED')
       if (ledger.snapshot().some(o => o.kind === 'session_binding' && o.id !== previous?.id && ref(o.data.host_ref).id === host.id && o.data.engine_ref === identity.engine_ref && o.data.runtime_namespace === identity.runtime_namespace && o.data.native_session_id === identity.native_session_id)) throw new Error('EXPLICIT_HANDOFF_REQUIRED')
       result = [save('session_binding', { worker_ref: json(p.worker), host_ref: json(refOf(host)), profile_ref: json(refOf(profile)), project_refs: json(projects), engine_ref: identity.engine_ref, runtime_namespace: identity.runtime_namespace, native_session_id: identity.native_session_id, native_binding_ref: json(binding.ref), native_evidence_ref: p.evidenceRef, launch_ref: json(binding.launchRef), stream: fact.command.stream }, [p.worker], undefined, previous)]

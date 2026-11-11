@@ -1,3 +1,4 @@
+import { inspectNativeDomainAbsence } from './native-domain.ts'
 import type { ExpectedDevTransition } from '../protocol/delivery.ts'
 import { managedLaunchScope } from './coordination-ledger.ts'
 import type { DatabaseSync } from 'node:sqlite'
@@ -137,6 +138,7 @@ interface ReadLedger {
 }
 const hostTokens = new WeakSet<object>()
 type HostCommand =
+  | { kind: 'native_domain_absence'; actionRef: Ref }
   | { kind: 'request_claim'; ownerRef: Ref; key: string }
   | { kind: 'native'; actionRef: Ref; stream: string; observation: Json }
   | { kind: 'mandate'; mandate: Omit<Mandate, 'source'> }
@@ -313,7 +315,22 @@ export function controlledTransaction(
     if (cmd.kind === 'host') {
       assertRefs([cmd.source])
       const h = cmd.command
-      if (h.kind === 'request_claim') {
+      if (h.kind === 'native_domain_absence') {
+        const object = l.get(h.actionRef.id)
+        if (!object || object.kind !== 'action' || object.revision !== h.actionRef.revision) throw Error('NATIVE_DOMAIN_STALE_ACTION')
+        const action = record(object), capability = state.capabilities.find(c => c.id === action.spec.capabilityRef.id && c.revision === action.spec.capabilityRef.revision), workspace = state.workspaces.find(w => w.id === action.spec.workspaceId)
+        if (!['sent','unknown'].includes(action.state) || action.spec.kind !== 'dispatch' || !capability?.nativeRuntime || !workspace || capability.externalTools !== 'blocked' || !state.opened?.includes(action.ref.id)) throw Error('NATIVE_DOMAIN_OWNED_LAUNCH_REQUIRED')
+        if (JSON.stringify(capability.launch) !== JSON.stringify({executable:action.spec.executable,args:action.spec.args,processPolicy:action.spec.processPolicy})) throw Error('NATIVE_DOMAIN_LAUNCH_MISMATCH')
+        const observation = {kind:'domain_absence',launchRef:h.actionRef,executionDigest:createHash('sha256').update(JSON.stringify(action.spec)).digest('hex'),...inspectNativeDomainAbsence(action.spec,capability.nativeRuntime,workspace.root)}
+        // Retire only this absent execution's authority and leases, never its business outcome.
+        capability.revoked = true
+        const control = state.controls.find(c => c.target.id === action.spec.target.id && c.epoch === action.spec.epoch)
+        if (control) { control.revoked = true; control.expiresAt = now }
+        const releasedResources = state.resources.filter(r => r.actionRef.id === action.ref.id && r.status === 'held')
+        for (const lease of releasedResources) lease.status = 'released'
+        cmd = {...cmd,command:{kind:'native',actionRef:h.actionRef,stream:'execution:'+h.actionRef.id,observation:{...observation,releasedResources:releasedResources.map(r=>r.resourceId),retiredCapability:{id:capability.id,revision:capability.revision}} as unknown as Json}}
+        result = {nativeRef:'native-event:'+String(Number(db.prepare('SELECT sequence FROM sa_managed_meta WHERE singleton=1').get()!.sequence)+1)}
+      } else if (h.kind === 'request_claim') {
         const owner = l.get(h.ownerRef.id)
         if (
           !owner ||
@@ -911,6 +928,7 @@ export function createControlledKernel(ledger: ManagedLedger, trustedSource: Ref
       observeNative: (actionRef: Ref, stream: string, observation: Json) =>
         hostCommand({ kind: 'native', actionRef, stream, observation }) as { nativeRef: string },
       nativeRecoveryFacts: (stream: string): { ref: string; observation: Json }[] => ledger.eventEntries({ nativeStream: stream, nativeKinds: ['request', 'input-intent'], nativeRpcMethod: 'turn/started' }).map(({ sequence, body }: any) => ({ ref: 'native-event:' + sequence, observation: body.controlled.command.observation })),
+      observeNativeDomainAbsence: (actionRef: Ref) => hostCommand({kind:'native_domain_absence',actionRef}) as {nativeRef:string},
       nativeFactRefs: (stream: string, nativeKind?: string): string[] => ledger.eventRefs({ nativeStream: stream, ...(nativeKind ? { nativeKind } : {}) }),
       nativeFacts: (stream: string, nativeKind?: string, afterSequence?: number): { ref: string; observation: Json }[] =>
         ledger.eventEntries({ nativeStream: stream, ...(nativeKind ? { nativeKind } : {}), ...(afterSequence === undefined ? {} : { afterSequence }) }).flatMap(({ body: value, sequence }) => {

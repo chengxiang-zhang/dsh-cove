@@ -21,7 +21,7 @@ export function createCoordinationService(ledger: ManagedLedger, source: Ref) {
       registerPolicy: (input: PolicySpec) => write({ kind: 'policy', input })[0]!,
       registerProfile: (input: ProfileSpec) => write({ kind: 'profile', input })[0]!,
       registerWorker: (input: WorkerSpec) => write({ kind: 'worker', input })[0]!,
-      resumeNativeSession: (worker: Ref, evidenceRef: string) => write({ kind: 'native_binding', worker, evidenceRef, resume: true })[0]!,
+      resumeNativeSession: (worker: Ref, evidenceRef: string, priorDomainEvidenceRef?: string) => write({ kind: 'native_binding', worker, evidenceRef, resume: true, ...(priorDomainEvidenceRef ? {priorDomainEvidenceRef} : {}) })[0]!,
       bindNativeSession: (worker: Ref, evidenceRef: string) => write({ kind: 'native_binding', worker, evidenceRef })[0]!,
       renewProfileQualification: (profile: Ref, evidenceRefs: string[], expiresAt: number) => write({ kind: 'renew_profile', profile, evidenceRefs, expiresAt })[0]!,
       recordQuestion: (input: QuestionSpec) => write({ kind: 'question', input })[0]!,

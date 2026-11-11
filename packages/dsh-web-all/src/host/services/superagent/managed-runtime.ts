@@ -7,7 +7,7 @@ import { planLocalGitDelivery } from './executors/delivery/local-git.ts'
 import { git, gitBytes, file, treeEntries, manifestDigest } from './executors/delivery/git.ts'
 import { resourceIds } from './protocol/execution.ts'
 import { deliveryReportText } from './protocol/delivery.ts'
-import { mkdirSync, realpathSync, readFileSync, writeFileSync, mkdtempSync, chmodSync, existsSync, renameSync, openSync, closeSync, fsyncSync, statSync, readdirSync } from 'node:fs'
+import { mkdirSync, rmSync, realpathSync, readFileSync, writeFileSync, mkdtempSync, chmodSync, existsSync, renameSync, openSync, closeSync, fsyncSync, statSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
 import { ManagedLedger } from './kernel/managed-ledger.ts'
@@ -135,10 +135,10 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   const record = (event: string, payload: unknown, scopes: Ref[] = [project], evidence: string[] = []) => coordination.host.recordRuntimeEvent(event + ':' + randomUUID(), event, json(payload), scopes, evidence)
   const scope = (role: string) => [workers.get(role)!, ...coordination.semanticScopes(work!.id), ...team.filter(r => (ledger.get(r.id)!.data.worker_ref as any)?.id === workers.get(role)!.id)]
   const assignment = (role: string) => team.find(r => (ledger.get(r.id)!.data.worker_ref as any)?.id === workers.get(role)!.id)!
-  const attach = (role: string, session: Awaited<ReturnType<typeof launchManagedCodex>>) => {
+  const attach = (role: string, session: Awaited<ReturnType<typeof launchManagedCodex>>, priorDomainEvidenceRef?: string) => {
     const fact = kernel.host.nativeFacts(session.io.stream, 'binding').find(f => (f.observation as any).kind === 'binding')!
     const existing = ledger.snapshot().some(o => o.kind === 'session_binding' && (o.data.worker_ref as any)?.id === workers.get(role)!.id)
-    if (existing) coordination.host.resumeNativeSession(workers.get(role)!, fact.ref); else coordination.host.bindNativeSession(workers.get(role)!, fact.ref)
+    if (existing) coordination.host.resumeNativeSession(workers.get(role)!, fact.ref, priorDomainEvidenceRef); else coordination.host.bindNativeSession(workers.get(role)!, fact.ref)
   }
   const contextFor = (role: string, instruction: string) => {
     instruction = JSON.stringify({ instruction, hostReadOnlyMaterials: supplemental, method: { id: method.id, description: method.description, instructions: method.instructions, responseSchema: method.qualitySchema(criteria), assets: method.assets }, hostExecution: 'During intake return purpose=intake and readiness; no candidate tests are claimed. After implementation the secretary proposes verify; host requests independent verification_design cases then runs the exact registered asynchronous method on baseline and candidate. Workers do not call a shell or invent a new tool. Fixed project gates and controlled local dev delivery follow only after business acceptance. Engineering gate/receipt obligations remain later prerequisites, never synthetic replay facts.' })
@@ -179,9 +179,18 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     const existing = liveRole(role)
     if (existing) return existing
     const oldBinding = ledger.snapshot().find(o => o.kind === 'session_binding' && (o.data.worker_ref as any)?.id === workers.get(role)!.id)
+    let priorDomainEvidenceRef: string | undefined
+    if (oldBinding) {
+      const oldAction = ledger.get((oldBinding.data.launch_ref as unknown as Ref).id)!
+      if ((oldAction.data.receipt as any)?.stopped !== true) {
+        if (role !== 'quality' || String(oldBinding.data.runtime_namespace) !== join(config.engine.stateRoot,'quality')) throw Error('NATIVE_CESSATION_UNKNOWN')
+        priorDomainEvidenceRef = kernel.host.observeNativeDomainAbsence({id:oldAction.id,revision:oldAction.revision}).nativeRef
+        rmSync(join(String(oldBinding.data.runtime_namespace),'auth.json'),{force:true})
+      }
+    }
     const resume = oldBinding ? { home: String(oldBinding.data.runtime_namespace), nativeSessionId: String(oldBinding.data.native_session_id) } : undefined
     const session = await launchManagedCodex(kernel, { ...config.engine, source, stateRoot: join(config.engine.stateRoot, role) }, workers.get(role)!, workspaces.get(role)!.workspace, scope(role), roleInstructions, nativeFileToolSchemas, schema ?? (role === 'quality' ? method.qualitySchema(criteria) : undefined), resume)
-    native.set(role, session); attach(role, session)
+    native.set(role, session); attach(role, session, priorDomainEvidenceRef)
     const helpers = new ControlledFileTools(kernel, session.launch, process.execPath, { writePaths: role === 'implementation' ? [...config.implementationWritePaths] : [] })
     session.engine.onRequest(request => { void (async () => {
       const p = request.params as any
@@ -421,12 +430,28 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       const handoff = config.interruptedVerificationHandoff
       if (handoff && (handoff.commitment.id !== work.id || handoff.candidateRoot !== workspaces.get('implementation')!.workspace.root || JSON.stringify(handoff.candidate.map(x => x.path).sort()) !== JSON.stringify([...config.publicFiles].sort()))) throw Error('VERIFY_HANDOFF_CANDIDATE_SCOPE')
       if (handoff) { verifyPartitionCandidate(handoff); verifyPartitionCandidate({ ...handoff, candidateRoot: workspaces.get('quality')!.workspace.root }) }
+      const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
+      if (!launches.length) throw Error('MANAGED_CONTINUATION_WRITER_UNKNOWN')
+      const domainQuiescenceProofs: string[] = []
+      for (const action of launches.filter(o => (o.data.receipt as any)?.stopped !== true)) {
+        const spec = action.data.execution_spec as any
+        const binding = ledger.snapshot('session_binding').find(o => (o.data.worker_ref as any)?.id === workers.get('quality')!.id)
+        if (binding && (binding.data.launch_ref as any)?.id !== action.id) {
+          const retired = ledger.retiredNativeDomain({id:action.id,revision:action.revision})
+          if (retired) { domainQuiescenceProofs.push(retired); continue }
+        }
+        if (spec.target.id !== workers.get('quality')!.id || !binding || (binding.data.launch_ref as any)?.id !== action.id || String(binding.data.runtime_namespace) !== join(config.engine.stateRoot, 'quality')) throw Error('MANAGED_CONTINUATION_WRITER_UNKNOWN')
+        const observation = kernel.host.observeNativeDomainAbsence({id:action.id,revision:action.revision})
+        domainQuiescenceProofs.push(observation.nativeRef)
+        rmSync(join(String(binding.data.runtime_namespace),'auth.json'),{force:true})
+      }
+      // Completed native input is reconciled by the existing exact-terminal guard.
+      // Domain absence alone never completes an operation or claims business acceptance.
+      reconcileOperations()
       const unresolved = ledger.snapshot('coordination_operation').filter(o => o.data.state !== 'completed' && !partitionHandoff(ledger, o, contract ? [contract] : []))
       if (unresolved.length && JSON.stringify(unresolved.map(o => ({ id: o.id, revision: o.revision }))) !== JSON.stringify(partition?.operations ?? (handoff ? [handoff.operation] : []))) throw Error('MANAGED_CONTINUATION_NOT_QUIESCENT')
       if (partition && (partition.commitment.id !== work.id || partition.candidateRoot !== workspaces.get('implementation')!.workspace.root || JSON.stringify(partition.candidate.map(x => x.path).sort()) !== JSON.stringify([...config.publicFiles].sort()))) throw Error('PARTITION_CANDIDATE_SCOPE')
       if (partition) verifyPartitionCandidate(partition)
-      const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
-      if (!launches.length || launches.some(o => !(o.data.receipt as any)?.stopped)) throw Error('MANAGED_CONTINUATION_WRITER_UNKNOWN')
       const transition = config.frameworkBaselineTransition, head = git(config.projectRoot, ['rev-parse', 'HEAD'])
       const previous = latestFrameworkBaseline(ledger)
       if (!transition || transition.commitmentId !== work.id || !transition.evidenceRefs.length || transition.after !== head || (previous && previous.after !== transition.before && previous.after !== transition.after)) throw Error('MANAGED_BASELINE_TRANSITION_REQUIRED')
@@ -440,7 +465,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
         if (!before || !after || before.blob !== after.blob || before.mode !== after.mode) throw Error('MANAGED_BASELINE_BUSINESS_CHANGED')
         for (const sourceRoot of [config.projectRoot, ...['coordinator','implementation','quality'].map(role => workspaces.get(role)!.workspace.root)]) { if ((partition && sourceRoot === partition.candidateRoot) || (handoff && [handoff.candidateRoot, workspaces.get('quality')!.workspace.root].includes(sourceRoot))) continue; const entry = file(sourceRoot, path); if (!entry || entry.blob !== before.blob || entry.mode !== before.mode) throw Error('MANAGED_CANDIDATE_NOT_UNCHANGED') }
       }
-      record('framework_baseline_bound', { ...transition, materialDigest: supplemental.digest, stoppedLaunches: launches.map(o => ({ id: o.id, revision: o.revision })) }, [project], transition.evidenceRefs)
+      record('framework_baseline_bound', { ...transition, materialDigest: supplemental.digest, stoppedLaunches: launches.filter(o => (o.data.receipt as any)?.stopped === true).map(o => ({ id: o.id, revision: o.revision })), domainQuiescenceProofs }, [project], transition.evidenceRefs)
       coordination.host.renewProfileQualification(profile, transition.evidenceRefs, Date.now() + 30 * 60_000)
       if (partition && !ledger.get('contract-partition:' + work.id + ':' + partition.acceptance.revision)) {
         const refSchema = { type: 'object', additionalProperties: false, required: ['id','revision'], properties: { id: { type: 'string' }, revision: { type: 'integer' } } }

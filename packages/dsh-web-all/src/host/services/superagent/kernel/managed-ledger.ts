@@ -2,6 +2,7 @@ import { deliveryTransaction, type DeliveryCommitCommand } from './delivery-ledg
 import { verificationTransaction, type VerificationCommand } from './verification-ledger.ts'
 import { VERIFICATION_KINDS } from '../protocol/verification.ts'
 import { controlledTransaction, type ControlledCommand, type ControlledResult } from './actions.ts'
+import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { assertJson, assertRefs, TERMINAL_MANAGED_STATES, validateManagedObject, type ManagedObject, type ManagedProposal, type Ref, type CommittedRevision, type Conflict } from '../protocol/managed-work.ts'
 import { managedGeneration, migrateManagedWork } from '../protocol/migrations/managed-work.ts'
@@ -67,6 +68,17 @@ export class ManagedLedger {
   return this.#db.prepare('SELECT '+(referencesOnly ? 'sequence' : 'sequence,body_json')+' FROM sa_managed_event' + (clauses.length ? ' WHERE '+clauses.join(' AND ') : '') + ' ORDER BY sequence' + (filter.latest ? ' DESC LIMIT 1' : '')).all(...values)
  }
  snapshot(kind?: string): ManagedObject[] { return (kind === undefined ? this.#db.prepare('SELECT body_json FROM sa_managed_object ORDER BY id').all() : this.#db.prepare('SELECT body_json FROM sa_managed_object WHERE kind=? ORDER BY id').all(kind)).map(r => JSON.parse(String(r.body_json)) as ManagedObject) }
+ retiredNativeDomain(actionRef: Ref): string | undefined {
+  const action = this.get(actionRef.id), spec = action?.data.execution_spec as any
+  if (!action || action.revision !== actionRef.revision || action.kind !== 'action' || spec?.kind !== 'dispatch' || spec.processPolicy !== 'single') return undefined
+  const raw = this.#db.prepare('SELECT body_json FROM sa_managed_control WHERE singleton=1').get()
+  if (!raw) return undefined
+  const state = JSON.parse(String(raw.body_json)), capability = state.capabilities.find((c:any)=>c.id===spec.capabilityRef.id && c.revision===spec.capabilityRef.revision)
+  if (!capability?.revoked || state.controls.some((c:any)=>c.target.id===spec.target.id && c.epoch===spec.epoch && !c.revoked) || state.resources.some((r:any)=>r.actionRef.id===action.id && r.status==='held')) return undefined
+  const proof = this.eventEntries({nativeStream:'execution:'+action.id,nativeKind:'domain_absence',latest:true})[0], command = (proof?.body as any)?.controlled.command, observation = command?.observation
+  if (!proof || JSON.stringify(command.actionRef)!==JSON.stringify(actionRef) || JSON.stringify(observation.launchRef)!==JSON.stringify(actionRef) || observation.executionDigest!==createHash('sha256').update(JSON.stringify(spec)).digest('hex') || JSON.stringify(observation.retiredCapability)!==JSON.stringify(spec.capabilityRef)) return undefined
+  return 'native-event:'+proof.sequence
+ }
  profileExpiresAt(profile: ManagedObject): number {
   const lease = this.get('profile-qualification:'+profile.id+'@'+profile.revision)
   return lease?.kind === 'profile_qualification' && JSON.stringify(lease.data.profile_ref) === JSON.stringify({id:profile.id,revision:profile.revision}) ? Math.max(Number(profile.data.expires_at),Number(lease.data.expires_at)) : Number(profile.data.expires_at)

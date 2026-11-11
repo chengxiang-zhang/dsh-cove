@@ -376,3 +376,29 @@ it('renews only an exact host registered profile qualification without changing 
     expect(f.ledger.snapshot('profile_qualification')).toHaveLength(1)
   } finally { vi.useRealTimers(); f.ledger.close() }
 })
+
+it('requires a fresh exact domain observation when resuming the same SID without a historical stop receipt', async () => {
+ const {createHash}=await import('node:crypto'), f=await coordinationFixture()
+ try {
+  f.service.planProfessionalTeam(f.commitment,f.assignments);f.attachWorkers()
+  const old=f.native.get(f.reviewer.id)!, oldObject=f.ledger.get(old.launch.actionRef.id)!, oldSpec=oldObject.data.execution_spec as any
+  const workspace=old.launch.workspace,expiresAt=Date.now()+60000
+  const proof=(changes:Record<string,unknown>={})=>f.k.host.observeNative(old.launch.actionRef,'execution:'+old.launch.actionRef.id,{kind:'domain_absence',launchRef:old.launch.actionRef,executionDigest:createHash('sha256').update(JSON.stringify(oldSpec)).digest('hex'),runtimeRoot:'test-native',processPolicy:'single',observedAt:Date.now(),...changes} as any).nativeRef
+  const stale=proof({observedAt:Date.now()-60001}),wrong=proof({executionDigest:'wrong'}),fresh=proof()
+  // Fixture relinquishment is separate from the native evidence under test; the old action stays sent.
+  const db=new (await import('node:sqlite')).DatabaseSync(f.path),state=JSON.parse(String(db.prepare('SELECT body_json FROM sa_managed_control').get()!.body_json))
+  for(const lease of state.resources)if(lease.actionRef.id===old.launch.actionRef.id)lease.status='released'
+  db.prepare('UPDATE sa_managed_control SET body_json=?').run(JSON.stringify(state));db.close()
+  const control=f.k.host.grantControl(f.reviewer,f.reviewer.id,expiresAt),id='new-quality',spec={...oldSpec,id,idempotencyKey:id,epoch:control.epoch}
+  const action=f.k.actions.planAction(spec);f.k.actions.claimResources(action.ref,workspace.resources)
+  const launch=f.k.host.beginDispatch(action.ref);if(launch.kind==='denial')throw Error(launch.code)
+  const evidence=f.k.host.observeNative(launch.actionRef,'new-stream',{kind:'binding',binding:{identity:old.identity,ref:{id:'new-binding',revision:control.epoch},launchRef:launch.actionRef}} as any).nativeRef
+  expect(()=>f.service.host.resumeNativeSession(f.reviewer,evidence)).toThrow('OLD_NATIVE_WRITER_CESSATION_REQUIRED')
+  expect(()=>f.service.host.resumeNativeSession(f.reviewer,evidence,stale)).toThrow('OLD_NATIVE_WRITER_CESSATION_REQUIRED')
+  expect(()=>f.service.host.resumeNativeSession(f.reviewer,evidence,wrong)).toThrow('OLD_NATIVE_WRITER_CESSATION_REQUIRED')
+  expect(f.service.host.resumeNativeSession(f.reviewer,evidence,fresh)).toBeTruthy()
+  expect(f.ledger.get(oldObject.id)?.data.state).toBe('sent')
+  expect(f.ledger.get(oldObject.id)?.data.receipt).toBeUndefined()
+  expect(()=>f.service.host.resumeNativeSession(f.reviewer,evidence,fresh)).toThrow('OLD_NATIVE_WRITER_CESSATION_REQUIRED')
+ }finally{f.ledger.close()}
+})
