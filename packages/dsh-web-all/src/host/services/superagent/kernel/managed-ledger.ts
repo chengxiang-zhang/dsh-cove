@@ -18,6 +18,7 @@ export interface ManagedEventFilter {
  nativeStream?: string; nativeKind?: string; nativeThreadId?: string; workerRegistration?: Ref
  profileRegistration?: Ref; workspaceRoot?: string; workspaceRole?: string; runtimeEvent?: string; deliveryStep?: Ref
  latest?: boolean; afterSequence?: number; nativeKinds?: string[]; nativeRpcMethod?: string
+ operationClaim?: string; controlledPlanKind?: string; nativeTurnId?: string
 }
 export class ManagedLedger {
  readonly #db: DatabaseSync
@@ -64,6 +65,9 @@ export class ManagedLedger {
   if (filter.profileRegistration) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='profile' AND json_extract(body_json,'$.coordination.payload.input.id')=? AND EXISTS(SELECT 1 FROM json_each(body_json,'$.refs') WHERE json_extract(value,'$.id')=? AND json_extract(value,'$.revision')=?)"); values.push(filter.profileRegistration.id, filter.profileRegistration.id, filter.profileRegistration.revision) }
   for (const [key, value] of [['root', filter.workspaceRoot], ['role', filter.workspaceRole]] as const) if (value !== undefined) { clauses.push("json_extract(body_json,'$.controlled.kind')='host' AND json_extract(body_json,'$.controlled.command.kind')='workspace' AND json_extract(body_json,'$.controlled.command.workspace."+key+"')=?"); values.push(value) }
   if (filter.runtimeEvent !== undefined) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='runtime_event' AND json_extract(body_json,'$.coordination.payload.event')=?"); values.push(filter.runtimeEvent) }
+  if (filter.operationClaim !== undefined) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='operation_claim' AND json_extract(body_json,'$.coordination.payload.input.id')=?"); values.push(filter.operationClaim) }
+  if (filter.controlledPlanKind !== undefined) { clauses.push("json_extract(body_json,'$.controlled.kind')='plan' AND json_extract(body_json,'$.controlled.spec.kind')=?"); values.push(filter.controlledPlanKind) }
+  if (filter.nativeTurnId !== undefined) { clauses.push("json_extract(body_json,'$.controlled.kind')='host' AND json_extract(body_json,'$.controlled.command.kind')='native' AND json_extract(body_json,'$.controlled.command.observation.kind')='turn-page' AND EXISTS(SELECT 1 FROM json_each(body_json,'$.controlled.command.observation.page.data') WHERE json_extract(value,'$.id')=?)"); values.push(filter.nativeTurnId) }
   if (filter.deliveryStep) { clauses.push("json_extract(body_json,'$.delivery')='fulfilled' AND json_extract(body_json,'$.step.ref.id')=? AND json_extract(body_json,'$.step.ref.revision')=?"); values.push(filter.deliveryStep.id, filter.deliveryStep.revision) }
   return this.#db.prepare('SELECT '+(referencesOnly ? 'sequence' : 'sequence,body_json')+' FROM sa_managed_event' + (clauses.length ? ' WHERE '+clauses.join(' AND ') : '') + ' ORDER BY sequence' + (filter.latest ? ' DESC LIMIT 1' : '')).all(...values)
  }

@@ -90,10 +90,14 @@ export function partitionContracts(tx: Transaction, plan: ContractPartition, app
 export interface InterruptedVerificationHandoff {
   commitment: Ref; acceptance: Ref; delivery: Ref; assignments: Ref[]; operation: Ref
   candidateRoot: string; candidate: ContractPartition['candidate']; evidenceRefs: string[]
+  completedDesignRefusal?: { qualityResult: Ref; hostRefusal: Ref }
 }
-function assertInterruptedNative(ledger: ManagedLedger, execution: Extract<OperationExecution, { kind: 'native' }>) {
+function assertStoppedNative(ledger: ManagedLedger, execution: Extract<OperationExecution, { kind: 'native' }>) {
   const old = ledger.get(execution.launch.id)!, binding = ledger.snapshot('session_binding').find(o => same(o.data.worker_ref, execution.worker))
   if (!old || (old.data.receipt as any)?.stopped !== true || binding?.data.native_session_id !== execution.nativeSessionId || !ledger.eventEntries({ nativeStream: 'execution:' + execution.launch.id, nativeKind: 'process_exit' }).some(({ body }: any) => body.controlled?.command?.observation?.kind === 'process_exit' && same(body.controlled.command.actionRef, execution.launch) && same(body.controlled.command.observation.launchRef, execution.launch) && same(body.controlled.command.observation.receipt, old.data.receipt))) throw Error('PARTITION_WRITER_UNKNOWN')
+}
+function assertInterruptedNative(ledger: ManagedLedger, execution: Extract<OperationExecution, { kind: 'native' }>) {
+  assertStoppedNative(ledger, execution)
   const context = ledger.get(execution.context.id)?.data.envelope as unknown as ContextEnvelope
   const text = JSON.stringify({ managed_input: { request_id: execution.requestId, assignment_revision: context.assignment.revision, payload_digest: context.digest }, text: context.text })
   const terminal = ledger.eventEntries({nativeKind:'turn-page',nativeThreadId:execution.nativeSessionId}).some(({ body }: any) => {
@@ -104,12 +108,38 @@ function assertInterruptedNative(ledger: ManagedLedger, execution: Extract<Opera
   })
   if (!terminal) throw Error('PARTITION_NATIVE_OUTCOME_UNKNOWN')
 }
+/** A completed design refusal is not a completed verification operation. */
+function assertDesignRefusal(tx: Transaction, plan: InterruptedVerificationHandoff, execution: Extract<OperationExecution, { kind: 'native' }>): number {
+  const {ledger,current}=tx, proof=plan.completedDesignRefusal!
+  const result=current(proof.qualityResult,'coordination_runtime_event'), refusal=current(proof.hostRefusal,'coordination_runtime_event')
+  const payload=result.data.payload as any, denial=refusal.data.payload as any
+  let answer: any
+  try { answer=JSON.parse(payload.answer) } catch { throw Error('VERIFY_DESIGN_REFUSAL_PROOF_REQUIRED') }
+  if(result.data.event!=='professional_result'||refusal.data.event!=='proposal_unknown'||payload.operationId!==plan.operation.id||payload.role!=='quality'||typeof payload.turnId!=='string'||!payload.turnId||payload.nativeSessionId!==execution.nativeSessionId||denial.operation!==plan.operation.id||denial.reason!=='Error: CRITERION_COVERAGE_REQUIRED'||answer.purpose!=='verification_design'||answer.intake_readiness!=='blocked'||answer.verdict!=='inconclusive') throw Error('VERIFY_DESIGN_REFUSAL_PROOF_REQUIRED')
+  const claims=ledger.eventEntries({operationClaim:plan.operation.id})
+  if(claims.length!==1) throw Error('VERIFY_DESIGN_REFUSAL_PROOF_REQUIRED')
+  const claim=claims[0]!, resultEvent=ledger.eventEntries({runtimeEvent:'professional_result',afterSequence:claim.sequence}).find(({body}:any)=>same(body.refs,[proof.qualityResult])), refusalEvent=ledger.eventEntries({runtimeEvent:'proposal_unknown',afterSequence:claim.sequence}).find(({body}:any)=>same(body.refs,[proof.hostRefusal]))
+  if(!resultEvent||!refusalEvent||refusalEvent.sequence<=resultEvent.sequence) throw Error('VERIFY_DESIGN_REFUSAL_PROOF_REQUIRED')
+  const envelope=current(execution.context,'context_envelope').data.envelope as unknown as ContextEnvelope
+  const text=JSON.stringify({managed_input:{request_id:execution.requestId,assignment_revision:envelope.assignment.revision,payload_digest:envelope.digest},text:envelope.text})
+  const consumed=ledger.eventEntries({nativeStream:execution.stream,nativeKind:'input-consumed',afterSequence:claim.sequence}).some(({sequence,body}:any)=>{
+    const c=body.controlled.command,p=c.observation.consumption
+    return sequence<resultEvent.sequence&&same(c.actionRef,execution.launch)&&p.request_id===execution.requestId&&p.assignment_revision===envelope.assignment.revision&&p.payload_digest===envelope.digest&&p.session_identity?.native_session_id===execution.nativeSessionId&&p.turn_id===payload.turnId
+  })
+  const terminal=ledger.eventEntries({nativeStream:execution.stream,nativeTurnId:payload.turnId,afterSequence:claim.sequence}).some(({sequence,body}:any)=>{
+    const c=body.controlled.command,o=c.observation
+    return sequence<resultEvent.sequence&&same(c.actionRef,execution.launch)&&o.threadId===execution.nativeSessionId&&o.page.data.some((t:any)=>t.id===payload.turnId&&t.status==='completed'&&t.items?.some((i:any)=>i.type==='userMessage'&&i.content?.some((v:any)=>v.text===text))&&t.items.filter((i:any)=>i.type==='agentMessage').at(-1)?.text===payload.answer)
+  })
+  if(!consumed||!terminal) throw Error('VERIFY_DESIGN_REFUSAL_PROOF_REQUIRED')
+  assertStoppedNative(ledger,execution)
+  return claim.sequence
+}
 /** Fixed verify plan only: one interrupted QA input, and two collectors that were never issued. */
 export function handoffInterruptedVerification(tx: Transaction, plan: InterruptedVerificationHandoff): ManagedObject[] {
   const { ledger, current, save } = tx
   const work = current(plan.commitment, 'commitment'), acceptance = current(plan.acceptance, 'acceptance_contract')
   current(plan.delivery, 'delivery_contract')
-  if (work.data.control_state !== 'autonomous' || !['proposed','ready','working'].includes(String(work.data.state)) || !same(work.data.acceptance_contract, plan.acceptance) || !same(work.data.delivery_contract, plan.delivery) || !plan.evidenceRefs.length) throw Error('VERIFY_HANDOFF_SCOPE_REQUIRED')
+  if (work.data.control_state !== 'autonomous' || !['proposed','ready','working',...(plan.completedDesignRefusal?['verifying']:[])].includes(String(work.data.state)) || !same(work.data.acceptance_contract, plan.acceptance) || !same(work.data.delivery_contract, plan.delivery) || !plan.evidenceRefs.length) throw Error('VERIFY_HANDOFF_SCOPE_REQUIRED')
   const assignments = ledger.snapshot('team_assignment').filter(o => o.data.commitment_id === work.id)
   if (!same(assignments.map(ref), plan.assignments)) throw Error('PARTITION_ASSIGNMENT_CHANGED')
   assignments.forEach(o => current(ref(o)))
@@ -120,17 +150,18 @@ export function handoffInterruptedVerification(tx: Transaction, plan: Interrupte
   const execution = executions[0]
   if (!assignments.some(o => o.data.role === 'quality' && same(o.data.worker_ref, execution.worker))) throw Error('VERIFY_HANDOFF_QUALITY_REQUIRED')
   const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
-  if (launches.some(o => (o.data.receipt as any)?.stopped !== true)) throw Error('PARTITION_LIVE_WRITER')
+  if (launches.some(o => (o.data.receipt as any)?.stopped !== true && !(plan.completedDesignRefusal && ledger.retiredNativeDomain(ref(o))))) throw Error('PARTITION_LIVE_WRITER')
   // No collector may have been planned outside this operation's binding. Such effects need their own reconciliation.
   const collectorWorkspaces = ledger.eventEntries({workspaceRole:'collector'}).flatMap(({body:event}: any) => { const c = event.controlled?.command; return c?.kind === 'workspace' && c.workspace.role === 'collector' ? [c.workspace] : [] })
   if (!collectorWorkspaces.some(w => w.resources.every((id: string) => (operation.data.domain_keys as string[]).includes('resource:' + id)))) throw Error('VERIFY_HANDOFF_COLLECTOR_DOMAIN_REQUIRED')
-  const collectorActions = ledger.snapshot('action').filter(o => {
-    const spec = o.data.execution_spec as any
+  const claimSequence=plan.completedDesignRefusal?assertDesignRefusal(tx,plan,execution):undefined
+  const collectorSpecs=claimSequence===undefined?ledger.snapshot('action').map(o=>o.data.execution_spec):ledger.eventEntries({controlledPlanKind:'collect',afterSequence:claimSequence}).map(({body}:any)=>body.controlled.spec)
+  const collectorActions = collectorSpecs.filter((spec:any) => {
     // Native thread/list RPC also uses collect, but targets a worker in its engineering workspace.
     // Any action addressing the verifier domain is conservatively an issued collector, even if its launch is malformed.
     return spec?.kind === 'collect' && refs(spec.scopeRefs ?? []).some(r => same(r, plan.acceptance)) && (ledger.get(spec.target?.id)?.kind === 'verification_context' || spec.purpose === 'collector' || collectorWorkspaces.some(w => w.id === spec.workspaceId || w.resources.some((id: string) => spec.resourceIds?.includes(id))))
   })
   if (collectorActions.length) throw Error('VERIFY_HANDOFF_COLLECTOR_ALREADY_ISSUED')
-  assertInterruptedNative(ledger, execution)
-  return [save('coordination_runtime_event', { event: 'verify_interrupted_handoff', payload: { after: { commitment: plan.commitment, acceptance: plan.acceptance, delivery: plan.delivery, assignments: plan.assignments }, operations: [plan.operation], candidateRoot: plan.candidateRoot, candidate: plan.candidate, unissuedSlots: ['collect:baseline','collect:candidate'], native: execution, status: 'QA interrupted and stopped; collectors never issued; same-thread successor required; no business completion' } as unknown as Json, evidence_refs: plan.evidenceRefs }, [], 'verify-handoff:' + operation.id + ':' + operation.revision)]
+  if(!plan.completedDesignRefusal) assertInterruptedNative(ledger, execution)
+  return [save('coordination_runtime_event', { event: 'verify_interrupted_handoff', payload: { after: { commitment: plan.commitment, acceptance: plan.acceptance, delivery: plan.delivery, assignments: plan.assignments }, operations: [plan.operation], candidateRoot: plan.candidateRoot, candidate: plan.candidate, unissuedSlots: ['collect:baseline','collect:candidate'], native: execution, ...(plan.completedDesignRefusal?{completedDesignRefusal:plan.completedDesignRefusal,claimSequence}:{}), status: plan.completedDesignRefusal?'QA design completed but coverage rejected before collectors; both slots never issued; original obligations pass to same-thread successor; no business completion':'QA interrupted and stopped; collectors never issued; same-thread successor required; no business completion' } as unknown as Json, evidence_refs: plan.evidenceRefs }, [], 'verify-handoff:' + operation.id + ':' + operation.revision)]
 }
