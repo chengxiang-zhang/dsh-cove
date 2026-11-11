@@ -49,7 +49,7 @@ const CITATION_ONLY_RESPONSE: AnthropicResponse = {
   usage: { server_tool_use: { web_search_requests: 1 } },
 }
 
-/** 非 Anthropic 模型：把 web_search 当普通客户端工具回一个 tool_use，端点并未搜索。 */
+/** 某些路由把 web_search 当普通客户端工具回一个 tool_use：端点并未执行搜索。 */
 const CLIENT_TOOL_RESPONSE: AnthropicResponse = {
   content: [
     { type: 'text', text: 'I will search the web.' },
@@ -180,11 +180,36 @@ describe('web-search-anthropic provider', () => {
     expect(result.truncated).toBe(false)
   })
 
-  it('fails with model guidance when the endpoint returns a client tool call', async () => {
+  it('fails with route guidance when the endpoint returns a client tool call', async () => {
     const error = await providerReturning(CLIENT_TOOL_RESPONSE).search({ query: 'x' }).catch((reason: unknown) => reason)
     expect(error).toMatchObject({ name: 'WebError', code: 'WEB_PROVIDER_ERROR' })
-    expect(String((error as Error).message)).toContain('client-side tool_use(web_search)')
-    expect(String((error as Error).message)).toContain('Claude model')
+    const message = String((error as Error).message)
+    expect(message).toContain('client-side tool_use(web_search)')
+    expect(message).toContain('does not execute the native server-side web_search_20250305 tool')
+    expect(message).toContain('not from this plugin')
+    // 模型家族不是判据：本地实测 kaon 路由上的 DeepSeek 模型同样执行原生服务端搜索，
+    // 因此报错不得再断言「必须选 Claude 模型」。
+    expect(message).not.toContain('Claude model')
+    expect(message).not.toContain('Anthropic-model feature')
+  })
+
+  it('surfaces the endpoint authorization message verbatim (per-key model allowlist)', async () => {
+    const provider = new AnthropicMessagesSearchProvider(
+      () => options({ model: 'kaon/claude-haiku-4-5-20251001' }),
+      async () => 'sk-test',
+      async () => new Response(JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          message: 'kaon-router [stage=authorize req=abc]: identity: forbidden: model "kaon/claude-haiku-4-5-20251001" not in allowlist',
+        },
+      }), { status: 403 }),
+    )
+    const error = await provider.search({ query: 'x' }).catch((reason: unknown) => reason)
+    const message = String((error as Error).message)
+    expect(message).toContain('HTTP 403')
+    expect(message).toContain('identity: forbidden: model "kaon/claude-haiku-4-5-20251001" not in allowlist')
+    expect(message).toContain('https://search.test/v1/messages')
   })
 
   it('fails instead of returning an empty source list', async () => {

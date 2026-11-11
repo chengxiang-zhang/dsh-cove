@@ -178,8 +178,8 @@ function noResultError(mapped: MappedSearchResponse, config: SearchConfig): WebS
   if (mapped.clientToolUse) {
     return new WebSearchError(
       `The endpoint returned a client-side tool_use(web_search) instead of executing the search itself, so model ${JSON.stringify(config.model)} has no web search results. `
-      + 'Native server-side web_search_20250305 is an Anthropic-model feature: on a multi-vendor gateway pick a Claude model, because DeepSeek/Gemini routes reply with a client tool call. '
-      + 'The model comes from the Web search settings, not from this plugin.',
+      + 'The route behind that model does not execute the native server-side web_search_20250305 tool; pick a model whose route does (model family is not the criterion: some DeepSeek routes execute it, some vendor routes only answer with a client tool call). '
+      + 'The model comes from the Web search settings (Plugins > Built-in plugin settings > Web search), not from this plugin.',
       'WEB_PROVIDER_ERROR',
     )
   }
