@@ -18,7 +18,7 @@ export function deliveryTransaction(db: DatabaseSync, ledger: ManagedLedger, com
     // All semantic versions, gate artifacts and physical Git facts are read again
     // inside this transaction, after any asynchronous executor work has finished.
     const acceptance = tokens.get(command.token)!(step, receipt)
-    const prior = ledger.events().find(event => { const x = event as unknown as { delivery?: string; step?: DeliveryStep; receipt?: DeliveryReceipt }; return x.delivery === 'fulfilled' && JSON.stringify(x.step) === JSON.stringify(step) && JSON.stringify(x.receipt) === JSON.stringify(receipt) })
+    const prior = ledger.eventEntries({deliveryStep:step.ref}).map(e=>e.body).find(event => { const x = event as unknown as { delivery?: string; step?: DeliveryStep; receipt?: DeliveryReceipt }; return x.delivery === 'fulfilled' && JSON.stringify(x.step) === JSON.stringify(step) && JSON.stringify(x.receipt) === JSON.stringify(receipt) })
     if (prior) { db.exec('COMMIT'); return { id: step.action.target.id, revision: step.action.target.revision + 1 } }
     const action = ledger.get(receipt.actionRef.id)
     if (!action || action.kind !== 'action' || action.revision !== receipt.actionRef.revision || action.data.state !== 'confirmed' || (action.data.receipt as Record<string, unknown>)?.stopped !== true || JSON.stringify(action.data.execution_spec) !== JSON.stringify(prepareDeliveryStep(step))) throw new Error('DELIVERY_ACTION_RECEIPT_REQUIRED')

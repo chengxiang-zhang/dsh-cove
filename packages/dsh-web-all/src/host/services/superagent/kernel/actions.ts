@@ -128,7 +128,8 @@ interface State {
 }
 interface ReadLedger {
   events(): Json[]
-  eventEntries(filter: { nativeStream?: string; workerRegistration?: Ref }): { sequence: number; body: Json }[]
+  eventEntries(filter: import('./managed-ledger.ts').ManagedEventFilter): { sequence: number; body: Json }[]
+  eventRefs(filter: import('./managed-ledger.ts').ManagedEventFilter): string[]
   validate(object: ManagedObject): void
   get(id: string): ManagedObject | undefined
   applicability(id: string): string
@@ -898,7 +899,7 @@ export function createControlledKernel(ledger: ManagedLedger, trustedSource: Ref
         if (action.receipt?.stopped === true && ['confirmed','failed'].includes(action.state)) return action
         if (action.state !== 'unknown' || action.receipt?.stopped !== false) throw Error('PROCESS_ABSENCE_UNKNOWN_REQUIRED')
         const executionDigest = createHash('sha256').update(JSON.stringify(action.spec)).digest('hex')
-        const proof = ledger.eventEntries({ nativeStream: 'execution:' + ref.id }).map(({sequence,body}: any) => ({ sequence, command: body.controlled?.kind === 'host' ? body.controlled.command : undefined })).findLast(({command}: any) => command?.kind === 'native' && command.actionRef?.id === ref.id && command.observation?.kind === 'process_exit' && command.observation.executionDigest === executionDigest && JSON.stringify(command.observation.receipt) === JSON.stringify(action.receipt))
+        const proof = ledger.eventEntries({ nativeStream: 'execution:' + ref.id, nativeKind: 'process_exit' }).map(({sequence,body}: any) => ({ sequence, command: body.controlled?.kind === 'host' ? body.controlled.command : undefined })).findLast(({command}: any) => command?.kind === 'native' && command.actionRef?.id === ref.id && command.observation?.kind === 'process_exit' && command.observation.executionDigest === executionDigest && JSON.stringify(command.observation.receipt) === JSON.stringify(action.receipt))
         const launchRef = proof?.command.observation.launchRef as Ref | undefined
         const ids = action.receipt.evidenceRefs.map(value => /^process:([1-9][0-9]*):[^:]+$/.exec(value)).filter(Boolean)
         if (!proof || !launchRef || JSON.stringify(launchRef) !== JSON.stringify(proof.command.actionRef) || ids.length !== 1) throw Error('PROCESS_ABSENCE_OWNED_PID_REQUIRED')
@@ -909,8 +910,10 @@ export function createControlledKernel(ledger: ManagedLedger, trustedSource: Ref
       },
       observeNative: (actionRef: Ref, stream: string, observation: Json) =>
         hostCommand({ kind: 'native', actionRef, stream, observation }) as { nativeRef: string },
-      nativeFacts: (stream: string): { ref: string; observation: Json }[] =>
-        ledger.eventEntries({ nativeStream: stream }).flatMap(({ body: value, sequence }) => {
+      nativeRecoveryFacts: (stream: string): { ref: string; observation: Json }[] => ledger.eventEntries({ nativeStream: stream, nativeKinds: ['request', 'input-intent'], nativeRpcMethod: 'turn/started' }).map(({ sequence, body }: any) => ({ ref: 'native-event:' + sequence, observation: body.controlled.command.observation })),
+      nativeFactRefs: (stream: string, nativeKind?: string): string[] => ledger.eventRefs({ nativeStream: stream, ...(nativeKind ? { nativeKind } : {}) }),
+      nativeFacts: (stream: string, nativeKind?: string, afterSequence?: number): { ref: string; observation: Json }[] =>
+        ledger.eventEntries({ nativeStream: stream, ...(nativeKind ? { nativeKind } : {}), ...(afterSequence === undefined ? {} : { afterSequence }) }).flatMap(({ body: value, sequence }) => {
           const event = value as unknown as { controlled?: { kind: string; command?: HostCommand } }
           const command = event.controlled?.command
           return event.controlled?.kind === 'host' && command?.kind === 'native' && command.stream === stream

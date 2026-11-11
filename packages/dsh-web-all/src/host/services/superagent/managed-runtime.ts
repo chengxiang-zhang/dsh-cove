@@ -94,7 +94,7 @@ export async function releaseManagedSession(ledger: Pick<ManagedLedger, 'get'>, 
 }
 
 export function latestFrameworkBaseline(ledger: ManagedLedger): any {
-  const event = ledger.events().filter((event: any) => event.coordination?.payload?.kind === 'runtime_event' && event.coordination.payload.event === 'framework_baseline_bound').at(-1) as any
+  const event = ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound', latest: true })[0]?.body as any
   return event?.coordination.payload.payload
 }
 
@@ -114,7 +114,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   const policy = known('policy:engineering', () => coordination.host.registerPolicy({ id: 'policy:engineering', roles: [{ name: 'coordinator', required: true, independentOf: [] }, { name: 'implementation', required: true, independentOf: [] }, { name: 'quality', required: true, independentOf: ['implementation'] }] }))
   const workers = new Map<string, Ref>(), workspaces = new Map<string, ReturnType<typeof createManagedWorkspace>>()
   for (const role of ['coordinator','implementation','quality','collector']) {
-    const savedWorkspace = ledger.events().map((event: any) => event.controlled?.command).find((c: any) => c?.kind === 'workspace' && c.workspace.root === join(root, role))?.workspace
+    const savedWorkspace = (ledger.eventEntries({ workspaceRoot: join(root, role) })[0]?.body as any)?.controlled.command.workspace
     const prepared = savedWorkspace ? { workspace: savedWorkspace, manifest: (role === 'collector' ? [] : config.publicFiles).map(path => ({ path, digest: createHash('sha256').update(gitBytes(savedWorkspace.root, ['show', savedWorkspace.baseline + ':' + path])).digest('hex') })) } : createManagedWorkspace(config.projectRoot, role === 'collector' ? [] : config.publicFiles, join(root, role), role === 'collector' ? 'collector' : 'engineering')
     if (!savedWorkspace) kernel.host.registerWorkspace(prepared.workspace); workspaces.set(role, prepared)
     if (role !== 'collector') workers.set(role, known('worker:'+role, () => coordination.host.registerWorker({ id: 'worker:' + role, host, profile, projects: [project], engineRef: 'codex', runtimeNamespace: role === 'coordinator' && config.bootstrapResume ? config.bootstrapResume.home : join(config.engine.stateRoot, role) })))
@@ -136,7 +136,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   const scope = (role: string) => [workers.get(role)!, ...coordination.semanticScopes(work!.id), ...team.filter(r => (ledger.get(r.id)!.data.worker_ref as any)?.id === workers.get(role)!.id)]
   const assignment = (role: string) => team.find(r => (ledger.get(r.id)!.data.worker_ref as any)?.id === workers.get(role)!.id)!
   const attach = (role: string, session: Awaited<ReturnType<typeof launchManagedCodex>>) => {
-    const fact = kernel.host.nativeFacts(session.io.stream).find(f => (f.observation as any).kind === 'binding')!
+    const fact = kernel.host.nativeFacts(session.io.stream, 'binding').find(f => (f.observation as any).kind === 'binding')!
     const existing = ledger.snapshot().some(o => o.kind === 'session_binding' && (o.data.worker_ref as any)?.id === workers.get(role)!.id)
     if (existing) coordination.host.resumeNativeSession(workers.get(role)!, fact.ref); else coordination.host.bindNativeSession(workers.get(role)!, fact.ref)
   }
@@ -148,7 +148,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     return { envelope, ref: coordination.host.recordContext(envelope) }
   }
   const consumed = (role: string, context: ReturnType<typeof contextFor>, input: { request_id: string }) => {
-    const session = native.get(role)!, fact = kernel.host.nativeFacts(session.io.stream).filter(f => (f.observation as any).kind === 'input-consumed' && (f.observation as any).consumption.request_id === input.request_id).at(-1)
+    const session = native.get(role)!, fact = kernel.host.nativeFacts(session.io.stream, 'input-consumed').filter(f => (f.observation as any).kind === 'input-consumed' && (f.observation as any).consumption.request_id === input.request_id).at(-1)
     if (!fact) throw new Error('ACTUAL_NATIVE_CONSUMPTION_REQUIRED')
     const proof = (fact.observation as any).consumption
     return coordination.host.recordConsumedContext({ context: context.ref, requestId: input.request_id, assignmentRevision: assignment(role).revision, payloadDigest: context.envelope.digest, worker: workers.get(role)!, nativeSessionId: session.engine.identity.native_session_id, turnId: proof.turn_id, processingStartedEventRef: proof.processing_started_event_ref, nativeEvidenceRef: fact.ref })
@@ -188,7 +188,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       if (request.method !== 'item/tool/call') { await session.engine.respondNativeRequest(request.ref, { error: { code: -32000, message: 'Unqualified native tool refused' } }, session.launch); return }
       let reply: { success: boolean; text: string }
       if (p.tool === 'ask') {
-        const evidence = kernel.host.nativeFacts(session.io.stream).filter(f => (f.observation as any).kind === 'request' && (f.observation as any).request.ref.id === request.ref.id).at(-1)!
+        const evidence = kernel.host.nativeFacts(session.io.stream, 'request').filter(f => (f.observation as any).kind === 'request' && (f.observation as any).request.ref.id === request.ref.id).at(-1)!
         const question = coordination.host.recordQuestion({ commitmentId: work!.id, assignment: assignment(role), worker: workers.get(role)!, nativeRequestRef: request.ref.id, question: p.arguments.question, evidenceRefs: [evidence.ref], nativeEvidenceRef: evidence.ref, nextReviewAt: Date.now()+60000 })
         const answer = await askSecretary('Technical request from '+role+': '+p.arguments.question+'\nReturn exactly an answer proposal with questionId '+question.id+'. Resolve internally from current requirements. No user relay.')
         const decision = answer.proposals.find(p => p.kind === 'answer' && p.questionId === question.id)
@@ -225,7 +225,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     const batch = await ports.coordinator({ request_id: requestId, assignment_revision: assignment('coordinator').revision, text: context.envelope.text }, abort.signal)
     const proof = consumed('coordinator', context, { request_id: requestId })
     record('coordinator_proposals', batch as unknown as Json, scope('coordinator'), [proof.id])
-    const nativeEvidenceRefs = kernel.host.nativeFacts(session.io.stream).slice(-4).map(f => f.ref)
+    const nativeEvidenceRefs = kernel.host.nativeFactRefs(session.io.stream).slice(-4)
     await closeRole('coordinator')
     return { ...batch, nativeEvidenceRefs }
   }
@@ -351,7 +351,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   }, () => ({ contract_version: '1.0.0', schema_versions: ['2'], permissions: ['propose','coordinate','read-context','controlled-execute','verify','observe'], extensions: ['maintenance/source@1'], isolated_modes: ['controlled'], now: Date.now(), qualifications }), undefined, validateRuntimeProposals)
   const completeOperation = (operationId: string, result: Json) => {
     const operation=ledger.get(operationId)!
-    const evidence=(operation.data.executions as unknown as import('./protocol/coordination.ts').OperationExecution[]).flatMap(execution=>execution.kind==='native'?kernel.host.nativeFacts(execution.stream).filter(f=>(f.observation as any).kind==='turn-page').map(f=>f.ref):[])
+    const evidence=(operation.data.executions as unknown as import('./protocol/coordination.ts').OperationExecution[]).flatMap(execution=>execution.kind==='native'?kernel.host.nativeFactRefs(execution.stream, 'turn-page'):[])
     return coordination.host.completeOperation({id:operation.id,revision:operation.revision},result,evidence)
   }
   const reconcileOperations = () => ledger.snapshot('coordination_operation').filter(o=>o.data.state!=='completed').map(operation=>{
@@ -412,7 +412,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       const requestId = 'bootstrap:' + randomUUID()
       coordination.host.recordRuntimeEvent(requestId, 'authenticated_intake', { text, projectRoot: config.projectRoot, manifest: workspaces.get('implementation')!.manifest }, [project], [source.id])
       const proposals = await ports.coordinator({ request_id: requestId, assignment_revision: 1, text }, signal)
-      coordination.host.recordRuntimeEvent(requestId + ':proposals', 'coordinator_proposals', proposals as unknown as Json, [project], kernel.host.nativeFacts(session.io.stream).map(f => f.ref))
+      coordination.host.recordRuntimeEvent(requestId + ':proposals', 'coordinator_proposals', proposals as unknown as Json, [project], kernel.host.nativeFactRefs(session.io.stream))
       return { requestId, proposals, identity: session.engine.identity }
     },
     async prepareContinuation() {
@@ -639,7 +639,7 @@ export function createManagedAdmission(config: ManagedHostConfig, onResult: (req
       const materialDigest = loadManagedMaterials(settings.readOnlyMaterials).digest
       const continuations = prior.continuations ?? [], old = continuations.find((item: any) => item.id === continuationId)
       if (old) { if (old.text !== text || old.materialDigest !== materialDigest) throw Error('MANAGED_CONTINUATION_CONFLICT'); return { requestId, continuationId, state: prior.state, duplicate: true } }
-      if (prior.state !== 'needs-attention' || !prior.runtimeRoot) throw Error('MANAGED_CONTINUATION_NOT_READY')
+      if (!['needs-attention', 'needs-reconciliation'].includes(prior.state) || !prior.runtimeRoot) throw Error('MANAGED_CONTINUATION_NOT_READY')
       const item = { id: continuationId, text, materialDigest, state: 'queued', admittedAt: Date.now() }
       const version = continuationVersion(prior, item)
       persist(path, version)

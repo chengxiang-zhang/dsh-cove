@@ -100,7 +100,7 @@ it('retains one stable native consumption proof while repeated unchanged history
   const { createHash } = await import('node:crypto')
   const input={request_id:'same-input',assignment_revision:1,text:'actual full payload',payload_ref:'context',payload_digest:createHash('sha256').update('actual full payload').digest('hex')}
   const observations: any[]=[]
-  const io={launch:{epoch:1,actionRef:{id:'launch',revision:1}},generation:'generation',stream:'stream',kernel:{host:{nativeFacts:()=>[]}},onMessage:()=>{},observe:(v:any)=>{observations.push(v);return 'native-event:'+observations.length},call:async()=>({data:[{id:'turn',status:'completed',startedAt:1,items:[{type:'userMessage',content:[{type:'text',text:encodeInput(input)}]}]}]})}
+  const io={launch:{epoch:1,actionRef:{id:'launch',revision:1}},generation:'generation',stream:'stream',kernel:{host:{nativeFacts:()=>[],nativeRecoveryFacts:()=>[]}},onMessage:()=>{},observe:(v:any)=>{observations.push(v);return 'native-event:'+observations.length},call:async()=>({data:[{id:'turn',status:'completed',startedAt:1,items:[{type:'userMessage',content:[{type:'text',text:encodeInput(input)}]}]}]})}
   const engine=new (CodexNativeExecutor as any)(io,{hostRef:'host',engineRef:'codex',runtimeNamespace:'private'},'same-thread')
   const first=await engine.receiptFor(input),second=await engine.receiptFor(input)
   expect(first.status).toBe('consumed'); expect(second).toEqual(first)

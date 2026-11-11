@@ -9,7 +9,7 @@ it('collects complete material-heavy history without requesting an oversized mul
   const observations: any[] = [], pages: number[] = []
   const io = {
     launch: { epoch: 1, actionRef: { id: 'launch', revision: 1 } }, generation: 'generation', stream: 'stream',
-    kernel: { host: { nativeFacts: () => [] } }, onMessage: () => {},
+    kernel: { host: { nativeFacts: () => [], nativeRecoveryFacts: () => [] } }, onMessage: () => {},
     observe(value: any) { observations.push(value); return `fact:${observations.length}` },
     async call(method: string, params: any) {
       expect(method).toBe('thread/turns/list')
@@ -36,7 +36,7 @@ it('collects complete material-heavy history without requesting an oversized mul
 it('resumes the same thread without embedding aggregate history in its attach frame', async () => {
   const io = {
     launch: { epoch: 1, actionRef: { id: 'launch', revision: 1 } }, generation: 'generation', stream: 'stream',
-    kernel: { host: { nativeFacts: () => [] } }, onMessage: () => {}, observe: () => 'fact', notify: async () => {},
+    kernel: { host: { nativeFacts: () => [], nativeRecoveryFacts: () => [] } }, onMessage: () => {}, observe: () => 'fact', notify: async () => {},
     async call(method: string, params: any) {
       if (method === 'config/read') return { config: { features: Object.fromEntries(['shell_tool','code_mode_host','apps','plugins','remote_plugin','multi_agent'].map(key => [key, false])) } }
       if (method === 'mcpServerStatus/list') return { data: [] }
@@ -50,4 +50,17 @@ it('resumes the same thread without embedding aggregate history in its attach fr
   }
   const engine = await CodexNativeExecutor.connect(io as any, { hostRef: 'host', engineRef: 'codex', runtimeNamespace: 'private', cwd: '/public', instructions: 'same work', nativeSessionId: 'original-thread' })
   expect(engine.identity.native_session_id).toBe('original-thread')
+})
+
+it('collects only events after an exact same-stream cursor and keeps empty-page cursors', async () => {
+ const { vi }=await import('vitest')
+ const facts=[{ref:'native-event:1',observation:{kind:'request'}},{ref:'native-event:3',observation:{kind:'binding'}}]
+ const read=vi.fn((_stream:string,_kind?:string,after?:number)=>{if(after===undefined)throw Error('FULL_STREAM_MATERIALIZED');return facts.filter(f=>Number(f.ref.split(':')[1])>after)})
+ const io={launch:{epoch:1,actionRef:{id:'launch',revision:1}},generation:'g',stream:'s',kernel:{host:{fenceDispatch:()=>({kind:'envelope'}),nativeRecoveryFacts:()=>[],nativeFactRefs:()=>facts.map(f=>f.ref),nativeFacts:read}},onMessage:()=>{},observe:()=> 'native-event:4'}
+ const engine=new (CodexNativeExecutor as any)(io,{hostRef:'h',engineRef:'codex',runtimeNamespace:'r'},'thread')
+ vi.spyOn(engine,'refreshTurns').mockResolvedValue(true)
+ expect((await engine.collectNativeEvents(engine.binding.ref,'native-event:1')).events.map((e:any)=>e.ref)).toEqual(['native-event:3'])
+ expect(await engine.collectNativeEvents(engine.binding.ref,'native-event:3')).toMatchObject({events:[],cursor:'native-event:3',completeness:'complete'})
+ expect(await engine.collectNativeEvents(engine.binding.ref,'native-event:2')).toMatchObject({events:[],completeness:'gap'})
+ expect(read).toHaveBeenCalledTimes(2)
 })

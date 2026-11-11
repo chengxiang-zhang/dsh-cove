@@ -76,3 +76,21 @@ it('binds read-only host materials to exact source hashes and rejects drift', ()
   writeFileSync(path, 'changed evidence')
   expect(() => loadManagedMaterials(entries)).toThrow('MANAGED_MATERIAL_CHANGED')
 })
+
+
+it('re-enters a host-interrupted admission through the same continuation preflight, preserving its prior outcome', async () => {
+ const dir=mkdtempSync(join(tmpdir(),'managed-recovery-')),root=join(dir,'host'),requests=join(root,'requests'),runtimeRoot=join(root,'jobs','same-job'),bootstrap=join(dir,'bootstrap.json')
+ mkdirSync(requests,{recursive:true});mkdirSync(runtimeRoot,{recursive:true})
+ cleanup.push(()=>rmSync(dir,{recursive:true,force:true}))
+ const request={requestId:'interrupted',project:'p',text:'Original requirement',origin:{kind:'trusted-host'}}
+ writeFileSync(join(requests,createHash('sha256').update(request.requestId).digest('hex')+'.json'),JSON.stringify({request,state:'running',runtimeRoot,result:{old:'preserved'}}))
+ writeFileSync(bootstrap,JSON.stringify({root,defaultProject:'p',projects:{p:{projectRoot:join(dir,'missing-source'),publicFiles:['input.ts'],implementationWritePaths:['input.ts'],engine:{executable:'/never-execute',authFile:join(dir,'absent'),model:'fixture'}}}}),{mode:0o600})
+ const port=createManagedAdmission({bootstrapFile:bootstrap},()=>{});cleanup.push(()=>port.dispose())
+ expect(port.read(request.requestId).state).toBe('needs-reconciliation')
+ expect(port.continue(request.requestId,'exact-recovery','Continue original work')).toMatchObject({state:'queued',duplicate:false})
+ await port.settle()
+ const final=port.read(request.requestId) as any
+ expect(final).toMatchObject({state:'needs-attention',request,runtimeRoot,priorOutcome:{state:'needs-reconciliation',result:{old:'preserved'}}})
+ expect(final.error).toBeTruthy()
+ expect(readdirSync(join(root,'jobs'))).toEqual(['same-job'])
+})

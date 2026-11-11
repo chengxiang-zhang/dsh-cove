@@ -30,7 +30,7 @@ export function readDeliveryAcceptance(ledger: ManagedLedger, s: DeliveryStep, b
     return o
   }
   if (!same(binding.ref, s.acceptanceRef) || !binding.authorizationVersion || !verifyProjectSeal(binding.seal)) throw new Error('DELIVERY_ACCEPTANCE_SEAL')
-  const recorded = historical && ledger.events().some(event => { const x = event as unknown as { delivery?: string; step?: DeliveryStep }; return x.delivery === 'fulfilled' && same(x.step, s) })
+  const recorded = historical && ledger.eventEntries({deliveryStep:s.ref}).some(({body:event}) => { const x = event as unknown as { delivery?: string; step?: DeliveryStep }; return x.delivery === 'fulfilled' && same(x.step, s) })
   const c = recorded ? current({ id: s.action.target.id, revision: s.action.target.revision + 1 }, 'commitment') : current(s.action.target, 'commitment'), e = current(binding.evaluation, 'evaluation'), candidate = current(binding.candidate, 'candidate')
   if ((c.data.state !== 'delivering' && !(recorded && c.data.state === 'fulfilled')) || c.data.control_state !== 'autonomous' || e.data.verdict !== 'pass' || e.data.commitment_id !== c.id || !same(e.data.candidate_ref, binding.candidate) || !same(e.data.contract_ref, c.data.acceptance_contract)) throw new Error('DELIVERY_ACCEPTANCE_EVALUATION')
   // A child matrix cannot stand in for an inherited outcome contract.

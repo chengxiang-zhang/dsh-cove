@@ -93,10 +93,10 @@ export interface InterruptedVerificationHandoff {
 }
 function assertInterruptedNative(ledger: ManagedLedger, execution: Extract<OperationExecution, { kind: 'native' }>) {
   const old = ledger.get(execution.launch.id)!, binding = ledger.snapshot('session_binding').find(o => same(o.data.worker_ref, execution.worker))
-  if (!old || (old.data.receipt as any)?.stopped !== true || binding?.data.native_session_id !== execution.nativeSessionId || !ledger.eventEntries({ nativeStream: 'execution:' + execution.launch.id }).some(({ body }: any) => body.controlled?.command?.observation?.kind === 'process_exit' && same(body.controlled.command.actionRef, execution.launch) && same(body.controlled.command.observation.launchRef, execution.launch) && same(body.controlled.command.observation.receipt, old.data.receipt))) throw Error('PARTITION_WRITER_UNKNOWN')
+  if (!old || (old.data.receipt as any)?.stopped !== true || binding?.data.native_session_id !== execution.nativeSessionId || !ledger.eventEntries({ nativeStream: 'execution:' + execution.launch.id, nativeKind: 'process_exit' }).some(({ body }: any) => body.controlled?.command?.observation?.kind === 'process_exit' && same(body.controlled.command.actionRef, execution.launch) && same(body.controlled.command.observation.launchRef, execution.launch) && same(body.controlled.command.observation.receipt, old.data.receipt))) throw Error('PARTITION_WRITER_UNKNOWN')
   const context = ledger.get(execution.context.id)?.data.envelope as unknown as ContextEnvelope
   const text = JSON.stringify({ managed_input: { request_id: execution.requestId, assignment_revision: context.assignment.revision, payload_digest: context.digest }, text: context.text })
-  const terminal = ledger.eventEntries({}).some(({ body }: any) => {
+  const terminal = ledger.eventEntries({nativeKind:'turn-page',nativeThreadId:execution.nativeSessionId}).some(({ body }: any) => {
     const c = body.controlled?.command, observation = c?.observation
     if (c?.kind !== 'native' || observation?.kind !== 'turn-page' || observation.threadId !== execution.nativeSessionId) return false
     const observedAction = ledger.get(c.actionRef?.id), target = (observedAction?.data.execution_spec as any)?.target
@@ -122,7 +122,7 @@ export function handoffInterruptedVerification(tx: Transaction, plan: Interrupte
   const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
   if (launches.some(o => (o.data.receipt as any)?.stopped !== true)) throw Error('PARTITION_LIVE_WRITER')
   // No collector may have been planned outside this operation's binding. Such effects need their own reconciliation.
-  const collectorWorkspaces = ledger.events().flatMap((event: any) => { const c = event.controlled?.command; return c?.kind === 'workspace' && c.workspace.role === 'collector' ? [c.workspace] : [] })
+  const collectorWorkspaces = ledger.eventEntries({workspaceRole:'collector'}).flatMap(({body:event}: any) => { const c = event.controlled?.command; return c?.kind === 'workspace' && c.workspace.role === 'collector' ? [c.workspace] : [] })
   if (!collectorWorkspaces.some(w => w.resources.every((id: string) => (operation.data.domain_keys as string[]).includes('resource:' + id)))) throw Error('VERIFY_HANDOFF_COLLECTOR_DOMAIN_REQUIRED')
   const collectorActions = ledger.snapshot('action').filter(o => {
     const spec = o.data.execution_spec as any

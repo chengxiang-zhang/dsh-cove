@@ -92,7 +92,7 @@ export class CodexNativeExecutor implements NativeExecutor {
       source: 'codex-app-server',
       control_version: io.launch.epoch
     }
-    const facts = io.kernel.host.nativeFacts(io.stream)
+    const facts = io.kernel.host.nativeRecoveryFacts(io.stream)
     const restored = new Map<string, ExecutorRequest>()
     for (const fact of facts) {
       const v = fact.observation as any
@@ -272,9 +272,8 @@ export class CodexNativeExecutor implements NativeExecutor {
   async collectNativeEvents(binding: Ref, cursor?: string): Promise<NativeEventPage> {
     this.assertBinding(binding)
     const complete = await this.refreshTurns(),
-      facts = this.io.kernel.host.nativeFacts(this.io.stream),
-      index = cursor ? facts.findIndex((f) => f.ref === cursor) : -1
-    if (cursor && index < 0)
+      refs = this.io.kernel.host.nativeFactRefs(this.io.stream)
+    if (cursor && !refs.includes(cursor))
       return {
         binding,
         source: 'codex-app-server',
@@ -283,7 +282,8 @@ export class CodexNativeExecutor implements NativeExecutor {
         events: [],
         completeness: 'gap'
       }
-    const events = facts.slice(index + 1).map((f) => ({
+    const facts = this.io.kernel.host.nativeFacts(this.io.stream, undefined, cursor ? Number(cursor.slice('native-event:'.length)) : undefined)
+    const events = facts.map((f) => ({
       ref: f.ref,
       identity: this.identity,
       cursor: f.ref,
@@ -298,7 +298,7 @@ export class CodexNativeExecutor implements NativeExecutor {
       control_version: this.binding.control_version,
       events,
       completeness: complete ? 'complete' : 'gap',
-      ...(facts.length ? { cursor: facts.at(-1)!.ref } : {})
+      ...(facts.length ? { cursor: facts.at(-1)!.ref } : cursor ? { cursor } : {})
     }
   }
   async cancel(): Promise<ActionReceipt> {

@@ -13,6 +13,11 @@ const transitions: Record<string, readonly string[]> = { proposed: ['ready','wai
  * Every mutated existing object needs a matching expectedRef; every scoped fact is
  * checked against live revisions again when queried/consumed, across all projects.
  */
+export interface ManagedEventFilter {
+ nativeStream?: string; nativeKind?: string; nativeThreadId?: string; workerRegistration?: Ref
+ profileRegistration?: Ref; workspaceRoot?: string; workspaceRole?: string; runtimeEvent?: string; deliveryStep?: Ref
+ latest?: boolean; afterSequence?: number; nativeKinds?: string[]; nativeRpcMethod?: string
+}
 export class ManagedLedger {
  readonly #db: DatabaseSync
  readonly #extensions: ExtensionRegistry | undefined
@@ -38,11 +43,28 @@ export class ManagedLedger {
   return r ? JSON.parse(String(r.body_json)) as ManagedObject : undefined
  }
  events(): import('../protocol/managed-work.ts').Json[] { return this.#db.prepare('SELECT body_json FROM sa_managed_event ORDER BY sequence').all().map(r => JSON.parse(String(r.body_json))) }
- eventEntries(filter: { nativeStream?: string; workerRegistration?: Ref }): { sequence: number; body: import('../protocol/managed-work.ts').Json }[] {
+ eventEntries(filter: ManagedEventFilter): { sequence: number; body: import('../protocol/managed-work.ts').Json }[] {
+  return this.#eventRows(filter, false).map(r => ({ sequence: Number(r.sequence), body: JSON.parse(String(r.body_json)) }))
+ }
+ eventRefs(filter: ManagedEventFilter): string[] { return this.#eventRows(filter, true).map(r => 'native-event:' + Number(r.sequence)) }
+ #eventRows(filter: ManagedEventFilter, referencesOnly: boolean) {
   const clauses: string[] = [], values: (string | number)[] = []
   if (filter.nativeStream !== undefined) { clauses.push("json_extract(body_json,'$.controlled.kind')='host' AND json_extract(body_json,'$.controlled.command.kind')='native' AND json_extract(body_json,'$.controlled.command.stream')=?"); values.push(filter.nativeStream) }
   if (filter.workerRegistration) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='worker' AND json_extract(body_json,'$.coordination.payload.input.id')=? AND EXISTS(SELECT 1 FROM json_each(body_json,'$.refs') WHERE json_extract(value,'$.id')=? AND json_extract(value,'$.revision')=?)"); values.push(filter.workerRegistration.id, filter.workerRegistration.id, filter.workerRegistration.revision) }
-  return this.#db.prepare('SELECT sequence,body_json FROM sa_managed_event' + (clauses.length ? ' WHERE '+clauses.join(' AND ') : '') + ' ORDER BY sequence').all(...values).map(r => ({ sequence: Number(r.sequence), body: JSON.parse(String(r.body_json)) }))
+  if (filter.nativeKind !== undefined) { clauses.push("json_extract(body_json,'$.controlled.kind')='host' AND json_extract(body_json,'$.controlled.command.kind')='native' AND json_extract(body_json,'$.controlled.command.observation.kind')=?"); values.push(filter.nativeKind) }
+  if (filter.afterSequence !== undefined) { if (!Number.isSafeInteger(filter.afterSequence) || filter.afterSequence < 0) throw Error('EVENT_CURSOR_INVALID'); clauses.push('sequence>?'); values.push(filter.afterSequence) }
+  if (filter.nativeKinds?.length || filter.nativeRpcMethod) {
+   const choices: string[] = []
+   if (filter.nativeKinds?.length) { choices.push("json_extract(body_json,'$.controlled.command.observation.kind') IN ("+filter.nativeKinds.map(()=>'?').join(',')+")"); values.push(...filter.nativeKinds) }
+   if (filter.nativeRpcMethod) { choices.push("(json_extract(body_json,'$.controlled.command.observation.kind')='rpc' AND json_extract(body_json,'$.controlled.command.observation.message.method')=?)"); values.push(filter.nativeRpcMethod) }
+   clauses.push("json_extract(body_json,'$.controlled.kind')='host' AND json_extract(body_json,'$.controlled.command.kind')='native' AND ("+choices.join(' OR ')+')')
+  }
+  if (filter.nativeThreadId !== undefined) { clauses.push("json_extract(body_json,'$.controlled.command.observation.threadId')=?"); values.push(filter.nativeThreadId) }
+  if (filter.profileRegistration) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='profile' AND json_extract(body_json,'$.coordination.payload.input.id')=? AND EXISTS(SELECT 1 FROM json_each(body_json,'$.refs') WHERE json_extract(value,'$.id')=? AND json_extract(value,'$.revision')=?)"); values.push(filter.profileRegistration.id, filter.profileRegistration.id, filter.profileRegistration.revision) }
+  for (const [key, value] of [['root', filter.workspaceRoot], ['role', filter.workspaceRole]] as const) if (value !== undefined) { clauses.push("json_extract(body_json,'$.controlled.kind')='host' AND json_extract(body_json,'$.controlled.command.kind')='workspace' AND json_extract(body_json,'$.controlled.command.workspace."+key+"')=?"); values.push(value) }
+  if (filter.runtimeEvent !== undefined) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='runtime_event' AND json_extract(body_json,'$.coordination.payload.event')=?"); values.push(filter.runtimeEvent) }
+  if (filter.deliveryStep) { clauses.push("json_extract(body_json,'$.delivery')='fulfilled' AND json_extract(body_json,'$.step.ref.id')=? AND json_extract(body_json,'$.step.ref.revision')=?"); values.push(filter.deliveryStep.id, filter.deliveryStep.revision) }
+  return this.#db.prepare('SELECT '+(referencesOnly ? 'sequence' : 'sequence,body_json')+' FROM sa_managed_event' + (clauses.length ? ' WHERE '+clauses.join(' AND ') : '') + ' ORDER BY sequence' + (filter.latest ? ' DESC LIMIT 1' : '')).all(...values)
  }
  snapshot(kind?: string): ManagedObject[] { return (kind === undefined ? this.#db.prepare('SELECT body_json FROM sa_managed_object ORDER BY id').all() : this.#db.prepare('SELECT body_json FROM sa_managed_object WHERE kind=? ORDER BY id').all(kind)).map(r => JSON.parse(String(r.body_json)) as ManagedObject) }
  profileExpiresAt(profile: ManagedObject): number {
