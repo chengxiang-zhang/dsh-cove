@@ -141,7 +141,7 @@ export function handoffInterruptedVerification(tx: Transaction, plan: Interrupte
   const work = current(plan.commitment, 'commitment'), acceptance = current(plan.acceptance, 'acceptance_contract')
   current(plan.delivery, 'delivery_contract')
   if (plan.completedDesignRefusal && plan.readonlyQualityInterruption) throw Error('VERIFY_HANDOFF_PLAN_REQUIRED')
-  if (work.data.control_state !== 'autonomous' || !['proposed','ready','working',...(plan.completedDesignRefusal||plan.readonlyQualityInterruption?['verifying']:[])].includes(String(work.data.state)) || !same(work.data.acceptance_contract, plan.acceptance) || !same(work.data.delivery_contract, plan.delivery) || !plan.evidenceRefs.length) throw Error('VERIFY_HANDOFF_SCOPE_REQUIRED')
+  if (work.data.control_state !== 'autonomous' || !['proposed','ready','working','verifying'].includes(String(work.data.state)) || !same(work.data.acceptance_contract, plan.acceptance) || !same(work.data.delivery_contract, plan.delivery) || !plan.evidenceRefs.length) throw Error('VERIFY_HANDOFF_SCOPE_REQUIRED')
   const assignments = ledger.snapshot('team_assignment').filter(o => o.data.commitment_id === work.id)
   if (!same(assignments.map(ref), plan.assignments)) throw Error('PARTITION_ASSIGNMENT_CHANGED')
   assignments.forEach(o => current(ref(o)))
@@ -153,7 +153,7 @@ export function handoffInterruptedVerification(tx: Transaction, plan: Interrupte
   const execution = executions[0]
   if (!assignments.some(o => o.data.role === 'quality' && same(o.data.worker_ref, execution.worker))) throw Error('VERIFY_HANDOFF_QUALITY_REQUIRED')
   const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
-  if (launches.some(o => (o.data.receipt as any)?.stopped !== true && !((plan.completedDesignRefusal||readonly) && ledger.retiredNativeDomain(ref(o))))) throw Error('PARTITION_LIVE_WRITER')
+  if (launches.some(o => (o.data.receipt as any)?.stopped !== true && !ledger.retiredNativeDomain(ref(o)))) throw Error('PARTITION_LIVE_WRITER')
   if(readonly){
     const claims=ledger.eventEntries({operationClaim:operation.id})
     if(claims.length!==1)throw Error('READONLY_QA_CLAIM_REQUIRED')
@@ -168,8 +168,10 @@ export function handoffInterruptedVerification(tx: Transaction, plan: Interrupte
   // No collector may have been planned outside this operation's binding. Such effects need their own reconciliation.
   const collectorWorkspaces = ledger.eventEntries({workspaceRole:'collector'}).flatMap(({body:event}: any) => { const c = event.controlled?.command; return c?.kind === 'workspace' && c.workspace.role === 'collector' ? [c.workspace] : [] })
   if (!collectorWorkspaces.some(w => w.resources.every((id: string) => (operation.data.domain_keys as string[]).includes('resource:' + id)))) throw Error('VERIFY_HANDOFF_COLLECTOR_DOMAIN_REQUIRED')
-  const claimSequence=plan.completedDesignRefusal?assertDesignRefusal(tx,plan,execution):undefined
-  const collectorSpecs=claimSequence===undefined?ledger.snapshot('action').map(o=>o.data.execution_spec):ledger.eventEntries({controlledPlanKind:'collect',afterSequence:claimSequence}).map(({body}:any)=>body.controlled.spec)
+  const claims=ledger.eventEntries({operationClaim:operation.id})
+  if(claims.length!==1)throw Error('VERIFY_HANDOFF_CLAIM_REQUIRED')
+  const claimSequence=plan.completedDesignRefusal?assertDesignRefusal(tx,plan,execution):claims[0]!.sequence
+  const collectorSpecs=ledger.eventEntries({controlledPlanKind:'collect',afterSequence:claimSequence}).map(({body}:any)=>body.controlled.spec)
   const collectorActions = collectorSpecs.filter((spec:any) => {
     // Native thread/list RPC also uses collect, but targets a worker in its engineering workspace.
     // Any action addressing the verifier domain is conservatively an issued collector, even if its launch is malformed.
@@ -177,5 +179,5 @@ export function handoffInterruptedVerification(tx: Transaction, plan: Interrupte
   })
   if (collectorActions.length) throw Error('VERIFY_HANDOFF_COLLECTOR_ALREADY_ISSUED')
   if(!plan.completedDesignRefusal) assertInterruptedNative(ledger, execution)
-  return [save('coordination_runtime_event', { event: 'verify_interrupted_handoff', payload: { after: { commitment: plan.commitment, acceptance: plan.acceptance, delivery: plan.delivery, assignments: plan.assignments }, operations: [plan.operation], candidateRoot: plan.candidateRoot, candidate: plan.candidate, unissuedSlots: ['collect:baseline','collect:candidate'], native: execution, ...(plan.completedDesignRefusal?{completedDesignRefusal:plan.completedDesignRefusal,claimSequence}:{}), status: plan.completedDesignRefusal?'QA design completed but coverage rejected before collectors; both slots never issued; original obligations pass to same-thread successor; no business completion':'QA interrupted and stopped; collectors never issued; same-thread successor required; no business completion' } as unknown as Json, evidence_refs: plan.evidenceRefs }, [], 'verify-handoff:' + operation.id + ':' + operation.revision)]
+  return [save('coordination_runtime_event', { event: 'verify_interrupted_handoff', payload: { after: { commitment: plan.commitment, acceptance: plan.acceptance, delivery: plan.delivery, assignments: plan.assignments }, operations: [plan.operation], candidateRoot: plan.candidateRoot, candidate: plan.candidate, unissuedSlots: ['collect:baseline','collect:candidate'], native: execution, claimSequence, ...(plan.completedDesignRefusal?{completedDesignRefusal:plan.completedDesignRefusal}:{}), status: plan.completedDesignRefusal?'QA design completed but coverage rejected before collectors; both slots never issued; original obligations pass to same-thread successor; no business completion':'QA interrupted and stopped; collectors never issued; same-thread successor required; no business completion' } as unknown as Json, evidence_refs: plan.evidenceRefs }, [], 'verify-handoff:' + operation.id + ':' + operation.revision)]
 }

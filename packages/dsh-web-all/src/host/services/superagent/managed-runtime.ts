@@ -1,4 +1,5 @@
 import { deliverTechnicalReply } from './executors/native/technical-reply.ts'
+import { NativeTurnQueue, NativeRequestScope, closeExactSession } from './executors/native/turn-lifecycle.ts'
 import { currentApiMaterial } from './context/api-material.ts'
 import { coordinationObjectView } from './coordination/look.ts'
 import { DELIVERY_EVIDENCE_POLICY, partitionHandoff, verifyPartitionCandidate, type ContractPartition, type InterruptedVerificationHandoff } from './kernel/contract-partition.ts'
@@ -124,6 +125,9 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   }
   const supplemental = loadManagedMaterials(config.readOnlyMaterials)
   const native = new Map<string, Awaited<ReturnType<typeof launchManagedCodex>>>()
+  type NativeSession = Awaited<ReturnType<typeof launchManagedCodex>>
+  const coordinatorTurns = new NativeTurnQueue(), coordinatorInputs = new Map<string, NativeSession>()
+  const requestScopes = new Map<NativeSession, { requests: NativeRequestScope; detach: () => void }>()
   const instructions = 'You are the accountable coordinating secretary across projects and professional agents. You have no business shell or tools. Produce only structured proposals; the host validates and executes them. Preserve the original user goal and constraints. Use independent quality before implementation. Technical questions stay inside the team. Never claim delivered or fulfilled while full project gates or delivery are missing. On intake propose one accept with requirement-derived criteria and all three responsibilities coordinator, implementation, quality. Criteria indexes are zero-based. Do not ask the user to relay technical matters.'
   const materials = new Map<string, ContextSource>()
   const compiler = createContextCompiler(ledger, coordination, ref => materials.get(ref.id))
@@ -144,7 +148,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     if (existing) coordination.host.resumeNativeSession(workers.get(role)!, fact.ref, priorDomainEvidenceRef); else coordination.host.bindNativeSession(workers.get(role)!, fact.ref)
   }
   const contextFor = (role: string, instruction: string) => {
-    instruction = JSON.stringify({ instruction, hostReadOnlyMaterials: supplemental, method: { id: method.id, description: method.description, instructions: method.instructions, responseSchema: method.qualitySchema(criteria), assets: method.assets }, hostExecution: 'During intake return purpose=intake and readiness; no candidate tests are claimed. After implementation the secretary proposes verify; host requests independent verification_design cases then runs the exact registered asynchronous method on baseline and candidate. Workers do not call a shell or invent a new tool. Fixed project gates and controlled local dev delivery follow only after business acceptance. Engineering gate/receipt obligations remain later prerequisites, never synthetic replay facts.' })
+    instruction = JSON.stringify({ instruction, hostReadOnlyMaterials: supplemental, method: { id: method.id, description: method.description, instructions: method.instructions, responseSchema: method.qualitySchema(criteria), assets: method.assets }, hostExecution: 'During intake return purpose=intake and readiness; no candidate tests are claimed. After implementation the secretary proposes verify; host requests independent verification_design cases then runs the exact registered asynchronous method on baseline and candidate. Workers do not call a shell or invent a new tool. Fixed project gates and controlled local dev delivery follow only after business acceptance. Engineering gate/receipt obligations remain later prerequisites, never synthetic replay facts. If canonical-api-evidence contains frozenCases, the full cases are already inline: return the exact original criterion/input/expected values in verification_design, preserving order, without inventing a filesystem path or digest-only tool. The host freezes the current candidate bytes/modes/allowed-path mapping and binds current method qualification after your design; prior API evidence remains historical, never a new-candidate pass.' })
     const material = record('role_input', { role, instruction }, coordination.semanticScopes(work!.id))
     materials.set(material.id, { ref: material, text: instruction, digest: createHash('sha256').update(instruction).digest('hex'), visibleTo: [workers.get(role)!.id], mandatory: true, purpose: 'Current controlled professional instruction and observed evidence' })
     const sourceRefs = [material], apiEvidence = currentApiMaterial(ledger, {id:work!.id,revision:ledger.get(work!.id)!.revision}, join(root,'verification'))
@@ -156,17 +160,17 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     const envelope = compiler.compile({ commitmentId: work!.id, assignment: assignment(role), worker: workers.get(role)!, audience: [workers.get(role)!.id], purpose: role, sourceRefs, failedMethods: [], nativeContextBlindSpots: ['Native automatic context loading is not fully observable'] })
     return { envelope, ref: coordination.host.recordContext(envelope) }
   }
-  const consumed = (role: string, context: ReturnType<typeof contextFor>, input: { request_id: string }) => {
-    const session = native.get(role)!, fact = kernel.host.nativeFacts(session.io.stream, 'input-consumed').filter(f => (f.observation as any).kind === 'input-consumed' && (f.observation as any).consumption.request_id === input.request_id).at(-1)
+  const consumed = (role: string, context: ReturnType<typeof contextFor>, input: { request_id: string }, session: NativeSession) => {
+    const fact = kernel.host.nativeFacts(session.io.stream, 'input-consumed').filter(f => (f.observation as any).kind === 'input-consumed' && (f.observation as any).consumption.request_id === input.request_id).at(-1)
     if (!fact) throw new Error('ACTUAL_NATIVE_CONSUMPTION_REQUIRED')
     const proof = (fact.observation as any).consumption
     return coordination.host.recordConsumedContext({ context: context.ref, requestId: input.request_id, assignmentRevision: assignment(role).revision, payloadDigest: context.envelope.digest, worker: workers.get(role)!, nativeSessionId: session.engine.identity.native_session_id, turnId: proof.turn_id, processingStartedEventRef: proof.processing_started_event_ref, nativeEvidenceRef: fact.ref })
   }
-  const closeRole = async (role: string) => {
-    const session = native.get(role); if (!session) return null
-    const receipt = await releaseManagedSession(ledger, session)
-    if (native.get(role) === session) native.delete(role)
-    return receipt
+  const closeRole = async (role: string, session = native.get(role)) => {
+    if (!session) return null
+    const callbacks = requestScopes.get(session)
+    if (callbacks) { await callbacks.requests.finish(callbacks.detach); requestScopes.delete(session) }
+    return closeExactSession(native, role, session, owned => releaseManagedSession(ledger, owned))
   }
   const liveRole = (role: string) => {
     const session = native.get(role); if (!session) return undefined
@@ -201,7 +205,8 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     const session = await launchManagedCodex(kernel, { ...config.engine, source, stateRoot: join(config.engine.stateRoot, role) }, workers.get(role)!, workspaces.get(role)!.workspace, scope(role), roleInstructions, nativeFileToolSchemas, schema ?? (role === 'quality' ? method.qualitySchema(criteria) : undefined), resume)
     native.set(role, session); attach(role, session, priorDomainEvidenceRef)
     const helpers = new ControlledFileTools(kernel, session.launch, process.execPath, { writePaths: role === 'implementation' ? [...config.implementationWritePaths] : [] })
-    session.engine.onRequest(request => { void (async () => {
+    const requests = new NativeRequestScope()
+    const detach = session.engine.onRequest(request => { requests.accept(async () => { try {
       const p = request.params as any
       if (request.method !== 'item/tool/call') { await session.engine.respondNativeRequest(request.ref, { error: { code: -32000, message: 'Unqualified native tool refused' } }, session.launch); return }
       let reply: { success: boolean; text: string }
@@ -219,7 +224,8 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       } else if (role === 'quality' && p.tool === 'write') reply = { success: false, text: 'INDEPENDENT_QUALITY_READ_ONLY' }
       else reply = await helpers.call(p.tool, p.arguments, request.ref.id)
       await session.engine.respondNativeRequest(request.ref, { result: { success: reply.success, contentItems: [{ type: 'inputText', text: reply.text }] } }, session.launch)
-    })().catch(error => { record('native_request_unknown', { role, request: request.ref.id, error: String(error) }); }) })
+    } catch (error) { record('native_request_unknown', { role, request: request.ref.id, error: String(error) }); } }) })
+    requestScopes.set(session, { requests, detach })
     return session
   }
   const assertRoleDispatchReady = (role: string) => {
@@ -230,25 +236,32 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   async function runRole(role: string, instruction: string, operationId: string) {
     assertRoleDispatchReady(role)
     const session = await getRole(role), context = contextFor(role, instruction)
+    try {
     const result = await runManagedOperationTurn(ledger,coordination,operationId,role,workers.get(role)!,context.ref,session,abort.signal)
-    const proof = consumed(role, context, result.input)
+    const proof = consumed(role, context, result.input, session)
     const evidence = record('professional_result', { operationId, role, answer: result.answer, nativeSessionId: session.engine.identity.native_session_id, turnId: result.receipt.consumption.turn_id }, scope(role), [proof.id])
     if (role === 'quality') {
       qaResult = JSON.parse(result.answer)
       if (qaResult.purpose === 'intake') coordination.host.recordTeamReview(work!.id, workers.get(role)!, team, [evidence.id, proof.id], intakeReadiness(qaResult))
     }
-    await closeRole(role)
     return { status: 'observed', role, evidence, answer: result.answer } as unknown as Json
+    } finally { await closeRole(role, session) }
   }
   async function askSecretary(text: string) {
+    return coordinatorTurns.run(async () => {
     const session = await getCoordinator()
+    try {
     const context = contextFor('coordinator', text), requestId = 'coordination:'+randomUUID()
-    const batch = await ports.coordinator({ request_id: requestId, assignment_revision: assignment('coordinator').revision, text: context.envelope.text }, abort.signal)
-    const proof = consumed('coordinator', context, { request_id: requestId })
+    coordinatorInputs.set(requestId, session)
+    let batch: { proposals: RuntimeProposal[] }
+    try { batch = await ports.coordinator({ request_id: requestId, assignment_revision: assignment('coordinator').revision, text: context.envelope.text }, abort.signal) }
+    finally { coordinatorInputs.delete(requestId) }
+    const proof = consumed('coordinator', context, { request_id: requestId }, session)
     record('coordinator_proposals', batch as unknown as Json, scope('coordinator'), [proof.id])
     const nativeEvidenceRefs = kernel.host.nativeFactRefs(session.io.stream).slice(-4)
-    await closeRole('coordinator')
     return { ...batch, nativeEvidenceRefs }
+    } finally { await closeRole('coordinator', session) }
+    })
   }
   const assertVerificationReady = () => {
     if (!work || !contract || !requirement || !coordination.dispatchReadiness(work.id).ready) throw new Error('QUALITY_INTAKE_REQUIRED')
@@ -364,7 +377,11 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   }
   const qualifications = ['coordinator','roles','context','executor','verifier','observer'].map(id => ({ plugin_id: 'builtin:'+id, version: '1.0.0', evidence_ref: id === 'verifier' ? 'P4a:independent-fix1-qualified-json-equality' : 'P5a:independent-canonical-and-ports-pass/P3:actual-native', expires_at: Date.now()+1800000 }))
   const ports = createManagedPorts<{ proposals: RuntimeProposal[] }>({
-    coordinator: { run: (input, signal) => new CodexCoordinatorRuntime(native.get('coordinator')!.engine, validateRuntimeProposals).run(input, signal) },
+    coordinator: { run: (input, signal) => {
+      const session = coordinatorInputs.get(input.request_id)
+      if (!session) throw Error('COORDINATOR_INPUT_SESSION_REQUIRED')
+      return new CodexCoordinatorRuntime(session.engine, validateRuntimeProposals).run(input, signal)
+    } },
     roles: { plan: coordination.planProfessionalTeam }, context: compiler,
     executor: { async operate(input) { const p = ledger.get(input.payloadRef.id)!.data.payload as any; lastResult = await runRole(p.role, p.instruction, p.operationId); return { status: 'requested', evidenceRefs: [(lastResult as any).evidence.id] } } },
     verifier: { methods: ['json-equality@1'], async request(input) { if (input.method !== 'json-equality@1') throw new Error('METHOD_NOT_QUALIFIED'); lastResult = await verifyCandidate(String((ledger.get(input.context.id)!.data.payload as any).instruction),String((ledger.get(input.context.id)!.data.payload as any).operationId)); return { status: 'requested', evidenceRefs: [(lastResult as any).evaluation.id] } } },
@@ -432,7 +449,10 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       native.set('coordinator', session)
       const requestId = 'bootstrap:' + randomUUID()
       coordination.host.recordRuntimeEvent(requestId, 'authenticated_intake', { text, projectRoot: config.projectRoot, manifest: workspaces.get('implementation')!.manifest }, [project], [source.id])
-      const proposals = await ports.coordinator({ request_id: requestId, assignment_revision: 1, text }, signal)
+      coordinatorInputs.set(requestId, session)
+      let proposals: { proposals: RuntimeProposal[] }
+      try { proposals = await ports.coordinator({ request_id: requestId, assignment_revision: 1, text }, signal) }
+      finally { coordinatorInputs.delete(requestId) }
       coordination.host.recordRuntimeEvent(requestId + ':proposals', 'coordinator_proposals', proposals as unknown as Json, [project], kernel.host.nativeFactRefs(session.io.stream))
       return { requestId, proposals, identity: session.engine.identity }
     },
@@ -489,7 +509,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
           const workspace = workspaces.get('quality')!.workspace
           coordination.host.claimOperation({ id: operationId, inputRef: 'host-contract-partition', proposal: json({ kind: 'contract_partition_review', plan: partition }), domainKeys: ['seat:' + workers.get('quality')!.id, ...workspace.resources.map(id => 'resource:' + id)], scopeRefs: scope('quality'), executionSlots: ['quality'] })
           const result = await runManagedOperationTurn(ledger, coordination, operationId, 'quality', workers.get('quality')!, context.ref, session, abort.signal)
-          const proof = consumed('quality', context, result.input)
+          const proof = consumed('quality', context, result.input, session)
           record('professional_result', { operationId, role: 'quality', purpose: 'contract_partition_review', answer: result.answer, nativeSessionId: session.engine.identity.native_session_id, turnId: result.receipt.consumption.turn_id }, scope('quality'), [proof.id])
           completeOperation(operationId, json({ status: 'partition-reviewed', answer: result.answer }))
           operation = ledger.get(operationId)!
@@ -542,6 +562,8 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     },
     async stopNative(): Promise<Json[]> {
       const results: Json[] = []
+      for (const callbacks of requestScopes.values()) await callbacks.requests.finish(callbacks.detach)
+      await coordinatorTurns.settled()
       for (const role of [...native.keys()]) { try { results.push({ role, receipt: await closeRole(role) }) } catch (error) { results.push({ role, error: String(error), stopped: false }) } }
       return results
     },
