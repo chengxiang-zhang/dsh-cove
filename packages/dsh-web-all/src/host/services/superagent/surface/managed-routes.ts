@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 interface AdmissionPort {
+  continue(requestId: string, continuationId: string, text: string): unknown
   projects(): unknown
   enqueue(input: { requestId: string; project?: string; text: string; origin: { kind: 'trusted-host' } }): unknown
   read(id: string): unknown
@@ -8,7 +9,7 @@ interface AdmissionPort {
 /** This is the same admission used by the existing authenticated Feishu channel. */
 export function managedWorkRoutes(port: AdmissionPort, isTrusted: (request: IncomingMessage) => boolean): WebRoute[] {
   const reply = (response: ServerResponse, status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)) }
-  return ['projects','intake','status'].map(operation => ({ kind: 'exact' as const, path: '/superagent/managed/' + operation,
+  return ['projects','intake','status','continue'].map(operation => ({ kind: 'exact' as const, path: '/superagent/managed/' + operation,
     async handler(request: IncomingMessage, response: ServerResponse) {
       if (!isTrusted(request)) { reply(response, 403, { error: 'forbidden' }); return }
       if (request.method !== (operation === 'projects' ? 'GET' : 'POST')) { reply(response, 405, { error: 'method-not-allowed' }); return }
@@ -17,7 +18,8 @@ export function managedWorkRoutes(port: AdmissionPort, isTrusted: (request: Inco
       for await (const chunk of request) { const buffer = Buffer.from(chunk); bytes += buffer.length; if (bytes > 65536) { reply(response, 413, { error: 'body-too-large' }); return }; chunks.push(buffer) }
       try {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        if (!body || typeof body.requestId !== 'string' || !body.requestId || Object.keys(body).some(k => !['requestId','project','text'].includes(k))) throw new Error('MANAGED_INTAKE_INVALID')
+        if (!body || typeof body.requestId !== 'string' || !body.requestId || Object.keys(body).some(k => !(operation === 'continue' ? ['requestId','continuationId','text'] : ['requestId','project','text']).includes(k))) throw new Error('MANAGED_INTAKE_INVALID')
+        if (operation === 'continue') { if (typeof body.continuationId !== 'string' || typeof body.text !== 'string') throw Error('MANAGED_CONTINUATION_INVALID'); reply(response, 202, port.continue(body.requestId, body.continuationId, body.text)); return }
         if (operation === 'status') { reply(response, 200, port.read(body.requestId)); return }
         if (typeof body.text !== 'string' || (body.project !== undefined && typeof body.project !== 'string')) throw new Error('MANAGED_INTAKE_INVALID')
         reply(response, 202, port.enqueue({ requestId: body.requestId, text: body.text, ...(body.project ? { project: body.project } : {}), origin: { kind: 'trusted-host' } }))

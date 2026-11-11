@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto'
+import { loadManagedMaterials } from '../src/host/services/superagent/executors/managed-materials.ts'
 import { afterEach, expect, it } from 'vitest'
 import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createManagedAdmission } from '../src/host/services/superagent/managed-runtime.ts'
@@ -31,6 +33,24 @@ it('durably admits once before native work, preserves failure evidence, and shar
   expect(duplicate.status).toBe(202); expect(await duplicate.json()).toMatchObject({ duplicate: true })
   const injection = await fetch(url + 'intake', { method: 'POST', headers: { 'x-test-owner': 'yes' }, body: JSON.stringify({ requestId: 'other', text: 'request', engine: { executable: '/bin/sh' } }) })
   expect(injection.status).toBe(400)
+  const continuation = { requestId: request.requestId, continuationId: 'material-v1', text: 'Continue the same work with host materials' }
+  const denied = await fetch(url + 'continue', { method: 'POST', body: JSON.stringify(continuation) })
+  expect(denied.status).toBe(403)
+  const forged = await fetch(url + 'continue', { method: 'POST', headers: { 'x-test-owner': 'yes' }, body: JSON.stringify({ ...continuation, trusted: true, materialPath: '/private/input' }) })
+  expect(forged.status).toBe(400)
+  const prior = port.read(request.requestId) as any
+  expect(port.continue(continuation.requestId, continuation.continuationId, continuation.text)).toMatchObject({ state: 'queued', duplicate: false })
+  expect(port.continue(continuation.requestId, continuation.continuationId, continuation.text)).toMatchObject({ duplicate: true })
+  expect(() => port.continue(continuation.requestId, continuation.continuationId, 'changed')).toThrow('MANAGED_CONTINUATION_CONFLICT')
+  expect(() => port.continue(continuation.requestId, 'second-version', continuation.text)).toThrow('MANAGED_CONTINUATION_NOT_READY')
+  await port.settle()
+  const resumed = port.read(request.requestId) as any
+  expect(resumed.request).toEqual(prior.request)
+  expect(resumed.runtimeRoot).toBe(prior.runtimeRoot)
+  expect(resumed.priorOutcome.error).toBe(prior.error)
+  expect(resumed.continuations).toHaveLength(1)
+  expect(resumed.state).toBe('needs-attention')
+  expect(readdirSync(join(root, 'jobs'))).toHaveLength(1)
   expect(readFileSync(bootstrap, 'utf8')).not.toContain('token')
 })
 
@@ -42,4 +62,17 @@ it('keeps unconfigured host bootstraps absent after the real web-all schema pars
   const configured = (Config as any)({ managedWork: { bootstrapFile: '/host/private.json' } })
   expect(configured.managedWork).toEqual({ bootstrapFile: '/host/private.json' })
   expect(configured.nativeExecutors).toBeUndefined()
+})
+
+
+it('binds read-only host materials to exact source hashes and rejects drift', () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'managed-materials-'))), path = join(dir, 'source.txt')
+  cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
+  writeFileSync(path, 'protocol evidence')
+  const entries = [{ id: 'protocol', path, sha256: createHash('sha256').update('protocol evidence').digest('hex'), source: 'official local schema@version' }]
+  const loaded = loadManagedMaterials(entries)
+  expect(loaded.materials).toEqual([{ id: 'protocol', source: entries[0]!.source, sha256: entries[0]!.sha256, text: 'protocol evidence' }])
+  expect(loadManagedMaterials(entries).digest).toBe(loaded.digest)
+  writeFileSync(path, 'changed evidence')
+  expect(() => loadManagedMaterials(entries)).toThrow('MANAGED_MATERIAL_CHANGED')
 })

@@ -1,3 +1,4 @@
+import { loadManagedMaterials, type ManagedMaterial } from './executors/managed-materials.ts'
 import { sealProjectInputs, verifyProjectSeal } from './executors/project-snapshot.ts'
 import { runProjectVerification, type ProjectGate } from './executors/project-verification.ts'
 import { verificationRuntimeDigest } from './executors/verification-run.ts'
@@ -28,6 +29,8 @@ import type { ContextSource } from './protocol/coordination.ts'
 const json = (value: unknown): Json => { assertJson(value); return value }
 
 export interface ManagedRuntimeConfig {
+  readOnlyMaterials?: ManagedMaterial[]
+  frameworkBaselineTransition?: { commitmentId: string; before: string; after: string; evidenceRefs: string[] }
   verification?: { methodId: string; qualification: { runtimeDigest: string; methodAssetsDigest: string; evidenceRefs: string[]; expiresAt: number } }
   projectVerification?: Omit<Parameters<typeof sealProjectInputs>[0], 'sourceRoot' | 'sourceFiles' | 'destination' | 'provenance'> & { authorizationVersion: string }
   initialMaterials?: string
@@ -97,13 +100,14 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     if (!savedWorkspace) kernel.host.registerWorkspace(prepared.workspace); workspaces.set(role, prepared)
     if (role !== 'collector') workers.set(role, known('worker:'+role, () => coordination.host.registerWorker({ id: 'worker:' + role, host, profile, projects: [project], engineRef: 'codex', runtimeNamespace: role === 'coordinator' && config.bootstrapResume ? config.bootstrapResume.home : join(config.engine.stateRoot, role) })))
   }
+  const supplemental = loadManagedMaterials(config.readOnlyMaterials)
   const native = new Map<string, Awaited<ReturnType<typeof launchManagedCodex>>>()
   const instructions = 'You are the accountable coordinating secretary across projects and professional agents. You have no business shell or tools. Produce only structured proposals; the host validates and executes them. Preserve the original user goal and constraints. Use independent quality before implementation. Technical questions stay inside the team. Never claim delivered or fulfilled while full project gates or delivery are missing. On intake propose one accept with requirement-derived criteria and all three responsibilities coordinator, implementation, quality. Criteria indexes are zero-based. Do not ask the user to relay technical matters.'
   const materials = new Map<string, ContextSource>()
   const compiler = createContextCompiler(ledger, coordination, ref => materials.get(ref.id))
   let work: Ref | undefined, contract: Ref | undefined, requirement: Ref | undefined, team: Ref[] = [], criteria: Ref[] = []
   const savedWork = ledger.snapshot('commitment').find(o => o.data.accountable === workers.get('coordinator')?.id)
-  if (savedWork) { work = { id: savedWork.id, revision: savedWork.revision }; requirement = (savedWork.data.requirement_refs as unknown as Ref[])[0]; contract = savedWork.data.acceptance_contract as unknown as Ref; team = ledger.snapshot('team_assignment').filter(o => o.data.commitment_id === work!.id).map(o => ({ id: o.id, revision: o.revision })); criteria = ledger.get(contract.id)!.data.criterion_refs as unknown as Ref[] }
+  if (savedWork) { initialParent = undefined; work = { id: savedWork.id, revision: savedWork.revision }; requirement = (savedWork.data.requirement_refs as unknown as Ref[])[0]; contract = savedWork.data.acceptance_contract as unknown as Ref; team = ledger.snapshot('team_assignment').filter(o => o.data.commitment_id === work!.id).map(o => ({ id: o.id, revision: o.revision })); criteria = ledger.get(contract.id)!.data.criterion_refs as unknown as Ref[] }
   let delivered: { step: DeliveryStep; receipt: DeliveryReceipt; binding: DeliveryAcceptanceBinding; operationId: string } | undefined
   const deliveryBindings = new Map<string, DeliveryAcceptanceBinding>()
   const delivery = createManagedLocalDelivery({ ledger, source, storageRoot: join(root, 'delivery'), host: kernel.host, binding: step => { const binding = deliveryBindings.get(step.ref.id); if (!binding) throw new Error('DELIVERY_BINDING_MISSING'); return binding } })
@@ -118,6 +122,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     if (existing) coordination.host.resumeNativeSession(workers.get(role)!, fact.ref); else coordination.host.bindNativeSession(workers.get(role)!, fact.ref)
   }
   const contextFor = (role: string, instruction: string) => {
+    instruction = JSON.stringify({ instruction, hostReadOnlyMaterials: supplemental, method: { id: method.id, description: method.description, instructions: method.instructions, responseSchema: method.qualitySchema(criteria), assets: method.assets }, hostExecution: 'During intake return purpose=intake and readiness; no candidate tests are claimed. After implementation the secretary proposes verify; host requests independent verification_design cases then runs the exact registered asynchronous method on baseline and candidate. Workers do not call a shell or invent a new tool. Fixed project gates and controlled local dev delivery follow only after business acceptance. Engineering gate/receipt obligations remain later prerequisites, never synthetic replay facts.' })
     const material = record('role_input', { role, instruction }, coordination.semanticScopes(work!.id))
     materials.set(material.id, { ref: material, text: instruction, digest: createHash('sha256').update(instruction).digest('hex'), visibleTo: [workers.get(role)!.id], mandatory: true, purpose: 'Current controlled professional instruction and observed evidence' })
     const envelope = compiler.compile({ commitmentId: work!.id, assignment: assignment(role), worker: workers.get(role)!, audience: [workers.get(role)!.id], purpose: role, sourceRefs: [material], failedMethods: [], nativeContextBlindSpots: ['Native automatic context loading is not fully observable'] })
@@ -365,8 +370,31 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       coordination.host.recordRuntimeEvent(requestId + ':proposals', 'coordinator_proposals', proposals as unknown as Json, [project], kernel.host.nativeFacts(session.io.stream).map(f => f.ref))
       return { requestId, proposals, identity: session.engine.identity }
     },
+    prepareContinuation() {
+      if (!work || native.size || ledger.snapshot('coordination_operation').some(o => o.data.state !== 'completed')) throw Error('MANAGED_CONTINUATION_NOT_QUIESCENT')
+      const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
+      if (!launches.length || launches.some(o => !(o.data.receipt as any)?.stopped)) throw Error('MANAGED_CONTINUATION_WRITER_UNKNOWN')
+      const transition = config.frameworkBaselineTransition, head = git(config.projectRoot, ['rev-parse', 'HEAD'])
+      const previous = ledger.snapshot('coordination_runtime_event').filter(o => o.data.event === 'framework_baseline_bound').at(-1)?.data.payload as any
+      if (!transition || transition.commitmentId !== work.id || !transition.evidenceRefs.length || transition.after !== head || (previous && previous.after !== transition.before && previous.after !== transition.after)) throw Error('MANAGED_BASELINE_TRANSITION_REQUIRED')
+      if (git(config.projectRoot, ['merge-base', transition.before, head]) !== transition.before) throw Error('MANAGED_BASELINE_NOT_DESCENDANT')
+      for (const role of ['coordinator','implementation','quality']) {
+        const prepared = workspaces.get(role)!
+        if (prepared.workspace.sourceStatus !== 'explicit-public-input:' + createHash('sha256').update(JSON.stringify(prepared.manifest)).digest('hex')) throw Error('MANAGED_PUBLIC_INPUT_CHANGED')
+      }
+      for (const path of config.publicFiles) {
+        const before = treeEntries(config.projectRoot, transition.before).get(path), after = treeEntries(config.projectRoot, head).get(path)
+        if (!before || !after || before.blob !== after.blob || before.mode !== after.mode) throw Error('MANAGED_BASELINE_BUSINESS_CHANGED')
+        for (const sourceRoot of [config.projectRoot, ...['coordinator','implementation','quality'].map(role => workspaces.get(role)!.workspace.root)]) { const entry = file(sourceRoot, path); if (!entry || entry.blob !== before.blob || entry.mode !== before.mode) throw Error('MANAGED_CANDIDATE_NOT_UNCHANGED') }
+      }
+      record('framework_baseline_bound', { ...transition, materialDigest: supplemental.digest, stoppedLaunches: launches.map(o => ({ id: o.id, revision: o.revision })) }, [project], transition.evidenceRefs)
+      coordination.host.renewProfileQualification(profile, transition.evidenceRefs, Date.now() + 30 * 60_000)
+      initialParent = head
+      return { head, materialDigest: supplemental.digest }
+    },
     async resume(text: string) {
       if (!work) throw new Error('MANAGED_WORK_MISSING')
+      if (!initialParent) throw Error('MANAGED_BASELINE_TRANSITION_REQUIRED')
       const binding = ledger.snapshot().find(o => o.kind === 'session_binding' && (o.data.worker_ref as any)?.id === workers.get('coordinator')!.id)!
       const session = await launchManagedCodex(kernel, { ...config.engine, source, stateRoot: String(binding.data.runtime_namespace) }, workers.get('coordinator')!, workspaces.get('coordinator')!.workspace, scope('coordinator'), instructions, [], managedCoordinatorSchema, { home: String(binding.data.runtime_namespace), nativeSessionId: String(binding.data.native_session_id) })
       native.set('coordinator', session); attach('coordinator', session)
@@ -517,6 +545,38 @@ export function createManagedAdmission(config: ManagedHostConfig, onResult: (req
         }
       }).catch(error => { const reason = error instanceof Error ? error.message : String(error); persist(path, { request: input, state: 'needs-attention', error: reason }); onResult(input, { state: 'needs-attention', reason, evaluate: () => ({ verdict: 'fail', reason, receipt: null }) }) })
       return { requestId: input.requestId, state: 'queued', duplicate: false }
+    },
+    continue(requestId: string, continuationId: string, text: string) {
+      if (disposed || !continuationId || !text.trim() || text.length > 64000) throw Error('MANAGED_CONTINUATION_INVALID')
+      const path = pathOf(requestId), prior = api.read(requestId) as any
+      const settings = raw.projects[prior.request.project]
+      if (!settings) throw Error('MANAGED_PROJECT_NOT_CONFIGURED')
+      const materialDigest = loadManagedMaterials(settings.readOnlyMaterials).digest
+      const continuations = prior.continuations ?? [], old = continuations.find((item: any) => item.id === continuationId)
+      if (old) { if (old.text !== text || old.materialDigest !== materialDigest) throw Error('MANAGED_CONTINUATION_CONFLICT'); return { requestId, continuationId, state: prior.state, duplicate: true } }
+      if (prior.state !== 'needs-attention' || !prior.runtimeRoot) throw Error('MANAGED_CONTINUATION_NOT_READY')
+      const item = { id: continuationId, text, materialDigest, state: 'queued', admittedAt: Date.now() }
+      const version = { ...prior, state: 'queued', continuations: [...continuations, item], priorOutcome: { state: prior.state, result: prior.result, error: prior.error, endedAt: prior.endedAt } }
+      persist(path, version)
+      queue = queue.then(async () => {
+        if (disposed) return
+        let runtime = running.get(requestId)
+        try {
+          if (!runtime) { runtime = createManagedRuntime({ ...settings, root: prior.runtimeRoot, engine: { ...settings.engine, stateRoot: join(prior.runtimeRoot, 'native') } }); running.set(requestId, runtime) }
+          const baseline = runtime.prepareContinuation()
+          persist(path, { ...version, state: 'running', continuationStartedAt: Date.now(), baseline })
+          runtime.coordination.host.recordRuntimeEvent('host-continuation:' + continuationId, 'authenticated_continuation', { requestId, continuationId, text, materialDigest, baseline }, [runtime.project], [runtime.source.id])
+          const batch = await runtime.resume(text), result = await runtime.advance(batch), evaluation = runtime.deliveryEvaluation()
+          const state = evaluation.verdict === 'pass' ? 'fulfilled-local' : 'needs-attention'
+          persist(path, { ...version, state, result, report: runtime.resultReport() ?? null, endedAt: Date.now(), continuations: [...continuations, { ...item, state: 'completed' }] })
+          onResult(prior.request, { state, evaluate: runtime.deliveryEvaluation })
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          persist(path, { ...version, state: 'needs-attention', error: reason, endedAt: Date.now(), continuations: [...continuations, { ...item, state: 'failed', error: reason }] })
+          onResult(prior.request, { state: 'needs-attention', reason, evaluate: runtime?.deliveryEvaluation ?? (() => ({ verdict: 'fail', reason, receipt: null })) })
+        } finally { await runtime?.stopNative() }
+      })
+      return { requestId, continuationId, state: 'queued', duplicate: false }
     },
     async settle() { await queue },
     async dispose() { disposed = true; for (const runtime of running.values()) await runtime.dispose(); running.clear() },
