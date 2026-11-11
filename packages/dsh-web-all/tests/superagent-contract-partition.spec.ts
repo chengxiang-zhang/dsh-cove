@@ -72,3 +72,18 @@ it.each(['approved','rejected','missing-slot','unknown-terminal'])('preserves ex
     expect(readFileSync(join(plan.candidateRoot,'asset'),'utf8')).toBe('baseline')
   } finally { await runtime.dispose(); rmSync(dir,{recursive:true,force:true}) }
 })
+
+it('reopens the sealed public baseline manifest while retaining the interrupted candidate postimage', async () => {
+  const dir=mkdtempSync(join(tmpdir(),'partition-reopen-')),project=join(dir,'source');mkdirSync(project);writeFileSync(join(project,'asset'),'baseline')
+  const config={root:join(dir,'managed'),projectRoot:project,publicFiles:['asset'],implementationWritePaths:['asset'],engine:{executable:'/never-started',authFile:'/absent',model:'fixture',stateRoot:join(dir,'native')}}
+  let runtime=createManagedRuntime(config)
+  try {
+    const before=runtime.workspaces.get('implementation')!, manifest=before.manifest, sourceStatus=before.workspace.sourceStatus
+    writeFileSync(join(before.workspace.root,'asset'),'retained unfinished candidate')
+    await runtime.dispose();runtime=createManagedRuntime(config)
+    const after=runtime.workspaces.get('implementation')!
+    expect(after.manifest).toEqual(manifest)
+    expect(after.workspace.sourceStatus).toBe(sourceStatus)
+    expect(readFileSync(join(after.workspace.root,'asset'),'utf8')).toBe('retained unfinished candidate')
+  } finally {await runtime.dispose();rmSync(dir,{recursive:true,force:true})}
+})

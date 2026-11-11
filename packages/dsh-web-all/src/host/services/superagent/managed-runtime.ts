@@ -98,7 +98,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   const workers = new Map<string, Ref>(), workspaces = new Map<string, ReturnType<typeof createManagedWorkspace>>()
   for (const role of ['coordinator','implementation','quality','collector']) {
     const savedWorkspace = ledger.events().map((event: any) => event.controlled?.command).find((c: any) => c?.kind === 'workspace' && c.workspace.root === join(root, role))?.workspace
-    const prepared = savedWorkspace ? { workspace: savedWorkspace, manifest: (role === 'collector' ? [] : config.publicFiles).map(path => ({ path, digest: createHash('sha256').update(readFileSync(join(savedWorkspace.root, path))).digest('hex') })) } : createManagedWorkspace(config.projectRoot, role === 'collector' ? [] : config.publicFiles, join(root, role), role === 'collector' ? 'collector' : 'engineering')
+    const prepared = savedWorkspace ? { workspace: savedWorkspace, manifest: (role === 'collector' ? [] : config.publicFiles).map(path => ({ path, digest: createHash('sha256').update(gitBytes(savedWorkspace.root, ['show', savedWorkspace.baseline + ':' + path])).digest('hex') })) } : createManagedWorkspace(config.projectRoot, role === 'collector' ? [] : config.publicFiles, join(root, role), role === 'collector' ? 'collector' : 'engineering')
     if (!savedWorkspace) kernel.host.registerWorkspace(prepared.workspace); workspaces.set(role, prepared)
     if (role !== 'collector') workers.set(role, known('worker:'+role, () => coordination.host.registerWorker({ id: 'worker:' + role, host, profile, projects: [project], engineRef: 'codex', runtimeNamespace: role === 'coordinator' && config.bootstrapResume ? config.bootstrapResume.home : join(config.engine.stateRoot, role) })))
   }
