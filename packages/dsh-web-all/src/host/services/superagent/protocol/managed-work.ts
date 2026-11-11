@@ -53,7 +53,7 @@ export function validateManagedObject(o: ManagedObject, legacy = false, extensio
   wish: { required: ['intent','source_refs','subject_ref','scope_refs'], optional: [] },
   requirement: { required: ['intent','source_refs','wish_refs','observable_results','constraints','criterion_sources'], optional: [] },
   acceptance_contract: { required: ['intent','requirement_refs','criterion_refs','source_refs'], optional: [] },
-  delivery_contract: { required: ['intent','requirement_refs','step_refs','source_refs'], optional: [] },
+  delivery_contract: { required: ['intent','requirement_refs','step_refs','source_refs'], optional: ['criterion_refs','evidence_policy'] },
   worker: { required: ['intent','capability_profile_refs','engine_ref','host_binding_ref','epoch'], optional: ['runtime_namespace'] },
   action: { required: ['state','action_kind','target_ref','expected_revision','expected_epoch','mandate_ref','payload_ref'], optional: ['execution_spec','receipt'] },
  }

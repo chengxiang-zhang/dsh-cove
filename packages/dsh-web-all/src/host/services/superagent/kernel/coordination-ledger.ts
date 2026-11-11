@@ -1,3 +1,4 @@
+import { partitionContracts, partitionHandoff, type ContractPartition, type PartitionApproval } from './contract-partition.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import type { ManagedLedger } from './managed-ledger.ts'
@@ -7,6 +8,7 @@ import { refOf, type HostSpec, type ProjectSpec, type PolicySpec, type ProfileSp
   type ContextConsumption, type OperationClaim, type OperationExecution } from '../protocol/coordination.ts'
 
 type Payload =
+  | { kind: 'partition_contract'; plan: ContractPartition; approval: PartitionApproval }
   | { kind: 'operation_claim'; input: OperationClaim }
   | { kind: 'operation_bind'; operation: Ref; execution: OperationExecution }
   | { kind: 'operation_complete'; operation: Ref; result: Json; evidenceRefs: string[] }
@@ -144,12 +146,14 @@ export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger,
     }
     const p = command.payload
     let result: ManagedObject[] = []
-    if (p.kind === 'operation_claim') {
+    if (p.kind === 'partition_contract') {
+      result = partitionContracts({ ledger, current, save, nativeFact }, p.plan, p.approval)
+    } else if (p.kind === 'operation_claim') {
       const input=p.input; requireText(input.id,input.inputRef); texts(input.domainKeys); texts(input.executionSlots,false); assertRefs(input.scopeRefs)
       input.scopeRefs.forEach(r=>current(r))
       const existing=ledger.get(input.id)
       if(existing) { if(existing.kind!=='coordination_operation'||JSON.stringify(existing.data.proposal)!==JSON.stringify(input.proposal)) throw new Error('OPERATION_IDENTITY_CONFLICT'); throw new OperationDomainBusy(refOf(existing)) }
-      const conflict=ledger.snapshot('coordination_operation').find(o=>o.data.state!=='completed' && (o.data.domain_keys as string[]).some(key=>input.domainKeys.includes(key)))
+      const conflict=ledger.snapshot('coordination_operation').find(o=>o.data.state!=='completed' && !partitionHandoff(ledger, o, input.scopeRefs) && (o.data.domain_keys as string[]).some(key=>input.domainKeys.includes(key)))
       if(conflict) throw new OperationDomainBusy(refOf(conflict))
       result=[save('coordination_operation',{input_ref:input.inputRef,proposal:input.proposal,domain_keys:input.domainKeys,semantic_refs:json(input.scopeRefs),execution_slots:input.executionSlots,state:'running',executions:[],result:null,evidence_refs:[]},[],input.id)]
     } else if (p.kind === 'operation_bind') {
@@ -161,6 +165,12 @@ export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger,
       if(previous) { if(JSON.stringify(previous)!==JSON.stringify(execution)) throw new Error('OPERATION_EXECUTION_CONFLICT'); result=[operation] }
       else {
         const domains=operation.data.domain_keys as string[]
+        for (const prior of ledger.snapshot('coordination_operation')) {
+          if (prior.id === operation.id || prior.data.state === 'completed' || !(prior.data.domain_keys as string[]).some(key => domains.includes(key))) continue
+          if (!partitionHandoff(ledger, prior, refs(operation.data.semantic_refs))) throw Error('OPERATION_DOMAIN_UNRESOLVED')
+          const inherited = (prior.data.executions as unknown as OperationExecution[]).find(e => e.kind === 'native' && execution.kind === 'native' && sameRef(e.worker, execution.worker))
+          if (execution.kind !== 'native' || !inherited || inherited.kind !== 'native' || inherited.nativeSessionId !== execution.nativeSessionId) throw Error('PARTITION_SAME_NATIVE_THREAD_REQUIRED')
+        }
         const launch=execution.kind==='native'?current(execution.launch,'action'):current(execution.action,'action')
         const spec=launch.data.execution_spec as any
         if(execution.kind==='controlled' && (launch.data.state!=='planned'||launch.data.receipt)) throw new Error('OPERATION_ACTION_ALREADY_STARTED')

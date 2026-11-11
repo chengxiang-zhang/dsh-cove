@@ -1,3 +1,4 @@
+import { DELIVERY_EVIDENCE_POLICY } from '../kernel/contract-partition.ts'
 import { execFileSync } from 'node:child_process'
 import { hostProgramAsset } from '../executors/host-program-assets.ts'
 import { readFileSync } from 'node:fs'
@@ -46,6 +47,11 @@ export function readDeliveryAcceptance(ledger: ManagedLedger, s: DeliveryStep, b
     const criteria = contract.data.criterion_refs as unknown as Ref[]
     if (requirements.some(r => !covered.some(x => same(r, x))) || !parentContract || (parentContract.data.criterion_refs as unknown as Ref[]).some(r => !criteria.some(x => same(r, x)))) throw new Error('DELIVERY_PARENT_COVERAGE_REQUIRED')
     parent = parent.data.parent_id ? ledger.get(String(parent.data.parent_id)) : undefined
+  }
+  const deliveryContract = current(c.data.delivery_contract as unknown as Ref, 'delivery_contract')
+  if (deliveryContract.data.criterion_refs !== undefined) {
+    if (deliveryContract.data.evidence_policy !== DELIVERY_EVIDENCE_POLICY) throw Error('DELIVERY_ENGINEERING_POLICY_REQUIRED')
+    for (const criterion of deliveryContract.data.criterion_refs as unknown as Ref[]) current(criterion, 'requirement')
   }
   const scopes = verificationScopes(ledger, c.id)
   if (!scopes.some(r => same(r, binding.evaluation)) || scopes.some(r => ledger.get(r.id)?.revision !== r.revision || ledger.applicability(r.id) !== 'usable')) throw new Error('DELIVERY_ACCEPTANCE_STALE')

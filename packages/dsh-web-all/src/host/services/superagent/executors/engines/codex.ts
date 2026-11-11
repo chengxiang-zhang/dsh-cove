@@ -131,7 +131,7 @@ export class CodexNativeExecutor implements NativeExecutor {
     const result = (await io.call(
       options.nativeSessionId ? 'thread/resume' : 'thread/start',
       options.nativeSessionId
-        ? { ...common, threadId: options.nativeSessionId }
+        ? { ...common, threadId: options.nativeSessionId, excludeTurns: true }
         : {
             ...common,
             ephemeral: false,

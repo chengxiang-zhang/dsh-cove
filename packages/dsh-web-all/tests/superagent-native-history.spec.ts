@@ -32,3 +32,22 @@ it('collects complete material-heavy history without requesting an oversized mul
   expect(observations).toHaveLength(recorded)
   expect(engine.identity.native_session_id).toBe('original-thread')
 })
+
+it('resumes the same thread without embedding aggregate history in its attach frame', async () => {
+  const io = {
+    launch: { epoch: 1, actionRef: { id: 'launch', revision: 1 } }, generation: 'generation', stream: 'stream',
+    kernel: { host: { nativeFacts: () => [] } }, onMessage: () => {}, observe: () => 'fact', notify: async () => {},
+    async call(method: string, params: any) {
+      if (method === 'config/read') return { config: { features: Object.fromEntries(['shell_tool','code_mode_host','apps','plugins','remote_plugin','multi_agent'].map(key => [key, false])) } }
+      if (method === 'mcpServerStatus/list') return { data: [] }
+      if (method === 'thread/resume') {
+        if (params.excludeTurns !== true) throw Error('JSONL_FRAME_TOO_LARGE')
+        expect(params.threadId).toBe('original-thread')
+        return { thread: { id: 'original-thread' } }
+      }
+      return {}
+    },
+  }
+  const engine = await CodexNativeExecutor.connect(io as any, { hostRef: 'host', engineRef: 'codex', runtimeNamespace: 'private', cwd: '/public', instructions: 'same work', nativeSessionId: 'original-thread' })
+  expect(engine.identity.native_session_id).toBe('original-thread')
+})

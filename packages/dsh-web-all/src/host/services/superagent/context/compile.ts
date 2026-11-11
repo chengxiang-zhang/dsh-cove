@@ -41,7 +41,9 @@ export function createContextCompiler(ledger: ManagedLedger, coordination: { sem
       const requiredFacts = requirements.map(o => ({ ref: refOf(o), intent: o.data.intent, observableResults: o.data.observable_results, criterionSources: o.data.criterion_sources }))
       const contract = current(work.data.acceptance_contract as unknown as Ref, 'acceptance_contract')
       const criteria = (contract.data.criterion_refs as unknown as Ref[]).map(ref => current(ref))
-      const domainText = JSON.stringify({ acceptance: { ref: refOf(contract), intent: contract.data.intent, criteria: criteria.map(o => ({ ref: refOf(o), definition: o.data })) }, originalIntent: work.data.intent, requirements: requiredFacts,
+      const delivery = current(work.data.delivery_contract as unknown as Ref, 'delivery_contract')
+      const deliveryCriteria = ((delivery.data.criterion_refs ?? []) as unknown as Ref[]).map(ref => current(ref))
+      const domainText = JSON.stringify({ delivery: { ref: refOf(delivery), intent: delivery.data.intent, evidencePolicy: delivery.data.evidence_policy ?? 'exact-tree-all7-local-dev@1', criteria: deliveryCriteria.map(o => ({ ref: refOf(o), definition: o.data })) }, acceptance: { ref: refOf(contract), intent: contract.data.intent, criteria: criteria.map(o => ({ ref: refOf(o), definition: o.data })) }, originalIntent: work.data.intent, requirements: requiredFacts,
         assignment: a.data, pendingQuestions: coordination.pendingQuestions(request.commitmentId).map(o => ({ ref: refOf(o), question: o.data.question, state: o.data.state, nativeState: o.data.native_state })) })
       sources.unshift({ ref: request.assignment, text: domainText, digest: contextDigest(domainText), visibleTo: [...request.audience], mandatory: true, purpose: 'Canonical goal, assignment and unresolved questions' })
       const envelope: Omit<ContextEnvelope, 'text' | 'digest'> = {
