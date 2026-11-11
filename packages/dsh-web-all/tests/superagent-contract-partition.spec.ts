@@ -46,16 +46,19 @@ it.each(['approved','rejected','missing-slot','unknown-terminal','mismatched-exi
       return {operation:ref(id),evidenceRefs:[evidence]}
     }
     if(scenario.startsWith('verify-')) {
-      const qa=launch('quality'),old=execute(qa,'old-verify',{kind:'verify'},scenario==='verify-unknown'?'inProgress':'interrupted','');qa.stop()
+      const qa=launch('quality');qa.domains.push(...workspaces.get('collector')!.workspace.resources.map(id=>'resource:'+id));const old=execute(qa,'old-verify',{kind:'verify'},scenario==='verify-unknown'?'inProgress':'interrupted','');qa.stop()
       const handoff={commitment:work,acceptance:ref('acceptance'),delivery:ref('delivery'),assignments:team().map(o=>ref(o.id)),operation:old.operation,candidateRoot:plan.candidateRoot,candidate:plan.candidate,evidenceRefs:['host:exact-interruption']}
       const nextInput={id:'next-verify',inputRef:'same-business',proposal:{kind:'verify'},domainKeys:qa.domains,scopeRefs:qa.scopes,executionSlots:['quality','collect:baseline','collect:candidate']}
       expect(()=>c.host.claimOperation(nextInput)).toThrow('OPERATION_DOMAIN_UNRESOLVED')
       const collect=()=>{
         const launchObject=ledger.get(qa.launch.id)!,spec=launchObject.data.execution_spec as any,id='unissued-collector'
-        return k.actions.planAction({...spec,id,idempotencyKey:id,kind:'collect'})
+        const collector=workspaces.get('collector')!.workspace
+        return k.actions.planAction({...spec,id,idempotencyKey:id,kind:'collect',workspaceId:collector.id,resourceIds:collector.resources,purpose:'collector'})
       }
       if(scenario==='verify-issued'){collect();expect(()=>c.host.handoffInterruptedVerification(handoff)).toThrow('VERIFY_HANDOFF_COLLECTOR_ALREADY_ISSUED');return}
       if(scenario==='verify-unknown'){expect(()=>c.host.handoffInterruptedVerification(handoff)).toThrow('PARTITION_NATIVE_OUTCOME_UNKNOWN');return}
+      const rpcSpec=ledger.get(qa.launch.id)!.data.execution_spec as any
+      k.actions.planAction({...rpcSpec,id:'thread-list-rpc',idempotencyKey:'thread-list-rpc',kind:'collect',nativeRequestId:'6',payloadDigest:'30ac012c9e9c5515cc479d71a3233b4a7f7582a5f0597a0e11c756719828ec99'})
       c.host.handoffInterruptedVerification(handoff)
       expect(ledger.get(old.operation.id)?.data.state).toBe('running')
       expect(()=>c.host.completeOperation(old.operation,{status:'pretend'},old.evidenceRefs)).toThrow('OPERATION_COMPLETION_PROOF_REQUIRED')

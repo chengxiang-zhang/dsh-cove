@@ -122,7 +122,14 @@ export function handoffInterruptedVerification(tx: Transaction, plan: Interrupte
   const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
   if (launches.some(o => (o.data.receipt as any)?.stopped !== true)) throw Error('PARTITION_LIVE_WRITER')
   // No collector may have been planned outside this operation's binding. Such effects need their own reconciliation.
-  const collectorActions = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'collect' && refs((o.data.execution_spec as any)?.scopeRefs ?? []).some(r => same(r, plan.acceptance)))
+  const collectorWorkspaces = ledger.events().flatMap((event: any) => { const c = event.controlled?.command; return c?.kind === 'workspace' && c.workspace.role === 'collector' ? [c.workspace] : [] })
+  if (!collectorWorkspaces.some(w => w.resources.every((id: string) => (operation.data.domain_keys as string[]).includes('resource:' + id)))) throw Error('VERIFY_HANDOFF_COLLECTOR_DOMAIN_REQUIRED')
+  const collectorActions = ledger.snapshot('action').filter(o => {
+    const spec = o.data.execution_spec as any
+    // Native thread/list RPC also uses collect, but targets a worker in its engineering workspace.
+    // Any action addressing the verifier domain is conservatively an issued collector, even if its launch is malformed.
+    return spec?.kind === 'collect' && refs(spec.scopeRefs ?? []).some(r => same(r, plan.acceptance)) && (ledger.get(spec.target?.id)?.kind === 'verification_context' || spec.purpose === 'collector' || collectorWorkspaces.some(w => w.id === spec.workspaceId || w.resources.some((id: string) => spec.resourceIds?.includes(id))))
+  })
   if (collectorActions.length) throw Error('VERIFY_HANDOFF_COLLECTOR_ALREADY_ISSUED')
   assertInterruptedNative(ledger, execution)
   return [save('coordination_runtime_event', { event: 'verify_interrupted_handoff', payload: { after: { commitment: plan.commitment, acceptance: plan.acceptance, delivery: plan.delivery, assignments: plan.assignments }, operations: [plan.operation], candidateRoot: plan.candidateRoot, candidate: plan.candidate, unissuedSlots: ['collect:baseline','collect:candidate'], native: execution, status: 'QA interrupted and stopped; collectors never issued; same-thread successor required; no business completion' } as unknown as Json, evidence_refs: plan.evidenceRefs }, [], 'verify-handoff:' + operation.id + ':' + operation.revision)]
