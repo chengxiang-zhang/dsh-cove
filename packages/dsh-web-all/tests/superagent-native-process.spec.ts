@@ -335,12 +335,14 @@ it('reconciles a true single-process exit after an untrusted unknown revision wi
 })
 it('accepts a full 1MiB line and multiple Unicode lines without counting delimiters as payload', async () => {
   const f = setup(),
-    { spec, action } = prepare(f),
+    { spec, action } = prepare(f, ['-e', 'process.stdin.pipe(process.stdout)'], globalThis.process.execPath),
     launch = f.k.host.beginDispatch(action.ref) as ExecutionEnvelope,
     process = f.k.host.openProcess(launch.actionRef)
   const lines = [JSON.stringify('x'.repeat(1048574)), JSON.stringify('中文'), JSON.stringify('tail')],
     received: string[] = []
-  process.onLine((line) => received.push(line))
+  let receivedAll!:()=>void
+  const complete=new Promise<void>(resolve=>{receivedAll=resolve})
+  process.onLine((line) => { received.push(line); if(received.length===lines.length)receivedAll() })
   try {
     for (const [i, line] of lines.entries()) {
       const a = f.k.actions.planAction({
@@ -354,7 +356,7 @@ it('accepts a full 1MiB line and multiple Unicode lines without counting delimit
       const e = f.k.host.beginDispatch(a.ref) as ExecutionEnvelope
       await process.writeLine(e.actionRef, line)
     }
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await Promise.race([complete, process.closed.then(()=>{throw Error('PROCESS_CLOSED_BEFORE_ALL_LINES')})])
     expect(received.map((line) => createHash('sha256').update(line).digest('hex'))).toEqual(
       lines.map((line) => createHash('sha256').update(line).digest('hex'))
     )

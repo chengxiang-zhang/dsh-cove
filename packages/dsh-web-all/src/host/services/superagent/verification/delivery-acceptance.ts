@@ -92,7 +92,7 @@ export function readDeliveryAcceptance(ledger: ManagedLedger, s: DeliveryStep, b
     }
   }
   try {
-    const result = execFileSync(process.execPath, ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', hostProgramAsset('delivery')], { input: JSON.stringify(keeperRefs), encoding: 'utf8', timeout: 15000, maxBuffer: 1024, env: { PATH: '/usr/bin:/bin', LANG: 'C' }, stdio: ['pipe','pipe','pipe'] })
+    const result = execFileSync(process.execPath, ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', hostProgramAsset('delivery')], { input: JSON.stringify(keeperRefs), encoding: 'utf8', timeout: 15000, maxBuffer: 1024, env: { PATH: '/usr/bin:/bin', LANG: 'C', ...(process.env.DSH_P7_KEEPER_FIXTURE ? { DSH_P7_KEEPER_FIXTURE: process.env.DSH_P7_KEEPER_FIXTURE } : {}) }, stdio: ['pipe','pipe','pipe'] })
     if (result !== 'current') throw Error('not current')
   } catch { throw new Error('DELIVERY_GATE_KEEPER_NOT_CURRENT') }
   return { ref: binding.ref, candidateRef: binding.candidate, evaluationRef: binding.evaluation, finalTree: s.finalTree, manifestDigest: manifestDigest(s), gateRefs: binding.gates.map(x => x.ref) }

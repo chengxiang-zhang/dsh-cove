@@ -571,6 +571,11 @@ export function createManagedLocalDelivery(input: {
   })
 }
 
+export function continuationVersion(prior: Record<string, any>, item: Record<string, any>) {
+  const { error, endedAt, report, result, continuationStartedAt, baseline, ...retained } = prior
+  return { ...retained, state: 'queued', continuations: [...(prior.continuations ?? []), item], priorOutcome: { state: prior.state, error, endedAt, report, result, continuationStartedAt, baseline, priorOutcome: prior.priorOutcome } }
+}
+
 export interface ManagedHostConfig { bootstrapFile: string }
 interface HostProjects {
   root: string
@@ -636,7 +641,7 @@ export function createManagedAdmission(config: ManagedHostConfig, onResult: (req
       if (old) { if (old.text !== text || old.materialDigest !== materialDigest) throw Error('MANAGED_CONTINUATION_CONFLICT'); return { requestId, continuationId, state: prior.state, duplicate: true } }
       if (prior.state !== 'needs-attention' || !prior.runtimeRoot) throw Error('MANAGED_CONTINUATION_NOT_READY')
       const item = { id: continuationId, text, materialDigest, state: 'queued', admittedAt: Date.now() }
-      const version = { ...prior, state: 'queued', continuations: [...continuations, item], priorOutcome: { state: prior.state, result: prior.result, error: prior.error, endedAt: prior.endedAt } }
+      const version = continuationVersion(prior, item)
       persist(path, version)
       queue = queue.then(async () => {
         if (disposed) return

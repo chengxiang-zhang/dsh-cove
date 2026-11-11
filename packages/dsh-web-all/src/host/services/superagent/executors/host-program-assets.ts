@@ -6,7 +6,8 @@ import { createHash } from 'node:crypto'
 
 // These two closed bundles are host programs, never candidate-selected modules.
 const bundles = {
-  delivery: ['verification/delivery-keeper-check.ts', 'executors/project-keeper.ts'],
+  delivery: ['verification/delivery-keeper-check.ts', 'executors/project-keeper.ts', 'executors/project-keeper-fixture-client.ts'],
+  keeperFixture: ['executors/project-keeper-fixture-server.ts', 'executors/project-keeper.ts'],
   broker: ['kernel/sandbox-launch-port.ts', 'kernel/sandbox-wire.ts', 'kernel/sandbox-policy.ts'],
 } as const
 const cache = new Map<keyof typeof bundles, { entry: string; files: { path: string; digest: string }[] }>()

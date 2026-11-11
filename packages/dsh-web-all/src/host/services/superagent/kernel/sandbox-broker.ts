@@ -58,7 +58,7 @@ export async function createSandboxBroker(input: SandboxBrokerGrant) {
   if (directoryEnvironmentNames.length > 8 || directoryEnvironmentNames.some(k => !/^[A-Z][A-Z0-9_]{0,63}$/.test(k) || /^(?:NODE|LD|DYLD|PATH|HOME|TMPDIR|LANG)/.test(k))) throw new Error('SANDBOX_DIRECTORY_ENV_REGISTRATION')
   const launchEnvironment = Object.freeze({ ...(input.launchEnvironment ?? {}) })
   for (const [key, value] of Object.entries(launchEnvironment)) {
-    if (!['PATH', 'COREPACK_ENABLE_NETWORK', 'pnpm_config_verify_deps_before_run', 'DSH_QA_SANDBOX_BROKER', 'DSH_QA_SANDBOX_PROFILE', 'DSH_QA_SANDBOX_ROUTES', 'DSH_VERIFICATION_BROKER', 'GIT_CONFIG_NOSYSTEM', 'GIT_EXEC_PATH', 'OPENSSL_CONF', 'CURL_SSL_BACKEND'].includes(key) || typeof value !== 'string' || value.length > 65536 || value.includes('\0')) throw new Error('SANDBOX_TRUSTED_ENV_SCHEMA')
+    if (!['PATH', 'COREPACK_ENABLE_NETWORK', 'pnpm_config_verify_deps_before_run', 'DSH_QA_SANDBOX_BROKER', 'DSH_QA_SANDBOX_PROFILE', 'DSH_QA_SANDBOX_ROUTES', 'DSH_VERIFICATION_BROKER', 'GIT_CONFIG_NOSYSTEM', 'GIT_EXEC_PATH', 'OPENSSL_CONF', 'CURL_SSL_BACKEND', 'DSH_P7_KEEPER_FIXTURE'].includes(key) || typeof value !== 'string' || value.length > 65536 || value.includes('\0')) throw new Error('SANDBOX_TRUSTED_ENV_SCHEMA')
     if (key === 'PATH' && value.split(':').some(path => !within(canonical(path), domain.executableRoots))) throw new Error('SANDBOX_TRUSTED_PATH_DOMAIN')
     if (key === 'GIT_EXEC_PATH' && !domain.executableRoots.includes(value)) throw new Error('SANDBOX_TRUSTED_ENV_PATH');
     if (key === 'CURL_SSL_BACKEND' && value !== 'Secure-Transport') throw new Error('SANDBOX_TRUSTED_ENV_VALUE');

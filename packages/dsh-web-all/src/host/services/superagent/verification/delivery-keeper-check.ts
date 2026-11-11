@@ -1,3 +1,4 @@
+import { keeperFixtureRequest } from '../executors/project-keeper-fixture-client.ts'
 import { readFileSync, lstatSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { inspectProjectKeeper, type ProjectKeeperRef } from '../executors/project-keeper.ts'
@@ -7,6 +8,11 @@ try {
   const refs = JSON.parse(readFileSync(0, 'utf8')) as Omit<ProjectKeeperRef, 'version' | 'managementToken'>[]
   if (!Array.isArray(refs) || !refs.length || refs.length > 7) throw Error('KEEPER_REFS_INVALID')
   for (const ref of refs) {
+    if (process.env.DSH_P7_KEEPER_FIXTURE) {
+      const observed = await keeperFixtureRequest(process.env.DSH_P7_KEEPER_FIXTURE, 'current', ref)
+      if (!observed.current) throw Error('KEEPER_NOT_CURRENT')
+      continue
+    }
     const root = lstatSync(ref.root), path = join(ref.root, 'owner-ref.json'), info = lstatSync(path)
     if (!root.isDirectory() || root.mode & 0o077 || !info.isFile() || info.mode & 0o077 || info.uid !== process.getuid?.() || realpathSync(ref.root) !== ref.root) throw Error('KEEPER_OWNER_NOT_PRIVATE')
     const owner = JSON.parse(readFileSync(path, 'utf8')) as ProjectKeeperRef

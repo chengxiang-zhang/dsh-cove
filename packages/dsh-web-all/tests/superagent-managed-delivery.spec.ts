@@ -1,3 +1,5 @@
+import { createProjectKeeperFixture } from '../src/host/services/superagent/executors/project-keeper-fixture.ts'
+import { readKeeperFixtureCapability, keeperFixtureRequest } from '../src/host/services/superagent/executors/project-keeper-fixture-client.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, chmodSync, readdirSync, lstatSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -10,9 +12,9 @@ import type { ExecutionEnvelope } from '../src/host/services/superagent/kernel/a
 import { inspectDeliveryReceipt } from '../src/host/services/superagent/verification/delivery.ts'
 const createLocalGitDelivery = (deps: Omit<Parameters<typeof createGitPort>[0], 'verifyReceipt'>) => createGitPort({ ...deps, verifyReceipt: inspectDeliveryReceipt })
 const roots: string[] = []
-const keeperPids: number[] = []
-afterEach(() => {
-  for (const pid of keeperPids.splice(0)) { try { process.kill(pid, 'SIGTERM') } catch {} }
+const keeperClosers: (()=>Promise<void>)[] = []
+afterEach(async () => {
+  for (const close of keeperClosers.splice(0)) await close()
   const unlock = (path: string) => { if (!lstatSync(path).isDirectory()) return; chmodSync(path, 0o700); for (const name of readdirSync(path)) unlock(join(path, name)) }
   for (const root of roots.splice(0)) { unlock(root); rmSync(root, { recursive: true, force: true }) }
 })
@@ -162,12 +164,24 @@ it('real controlled host delivery requires complete canonical acceptance, then f
   const step = planLocalGitDelivery({ ...f.step, manifest, action: { ...f.step.action, target, epoch: control.epoch, workspaceId: workspace.id, scopeRefs: v.service.requiredActionScopes(target.id) }, requiredGateRefs: names.map(id => ({ id: 'gate:' + id, revision: 1 })) }, f.storage)
   const seal = sealProjectInputs({ sourceRoot: f.candidate, sourceFiles: ['fix.txt', 'candidate.mjs', 'package.json', 'user.txt', 'flags.txt'], dependencyRoots: [], tools: [], destination: join(f.storage, 'source-seal'), provenance: { source: 'isolated-real-git-fixture', revision: step.expectedParent } })
   const binding: DeliveryAcceptanceBinding = { ref: step.acceptanceRef, candidate, evaluation, seal, authorizationVersion: 'fixture-v1', gates: [] }
-  const { startProjectKeeper, retireProjectKeeper } = await import('../src/host/services/superagent/executors/project-keeper.ts')
-  const collectorRoot = mkdtempSync('/private/tmp/p7k-'); roots.push(collectorRoot)
-  const keeper = await startProjectKeeper({ collectorRoot, runId: 'fixture-holder-only-no-candidate-launch', epoch: 1, capacity: 1, expiresAt: Date.now() + 60000, commands: [{ id: 'unused', executable: '/usr/bin/true', args: [], cwd: f.root }], domain: { readRoots: [f.root], writeRoots: [f.root], executableRoots: ['/usr/bin'], metadataPaths: [], fixturePorts: [], unixSockets: [] } })
-  keeperPids.push(keeper.pid)
-  await retireProjectKeeper(keeper)
-  const keeperRef = { instance: keeper.instance, root: keeper.root, pid: keeper.pid, artifactDigest: keeper.artifactDigest }
+  const fixtureCapability = process.env.DSH_P7_KEEPER_FIXTURE
+  const ownedFixture = fixtureCapability ? undefined : await createProjectKeeperFixture({runId:'p7-direct-'+Date.now(),epoch:1,expiresAt:Date.now()+60000})
+  const capabilityPath = fixtureCapability ?? ownedFixture!.capabilityPath
+  if(ownedFixture)keeperClosers.push(ownedFixture.close)
+  const keeper=readKeeperFixtureCapability(capabilityPath).ref,keeperRef={instance:keeper.instance,root:keeper.root,pid:keeper.pid,artifactDigest:keeper.artifactDigest}
+  for (const wrong of ['runId','epoch','assetSha','pid'] as const) {
+    const cap=readKeeperFixtureCapability(capabilityPath), altered=structuredClone(cap)
+    if(wrong==='pid')altered.ref={...altered.ref,pid:altered.ref.pid+1}
+    else if(wrong==='epoch')altered.epoch+=1
+    else if(wrong==='assetSha'){altered.assetSha='0'.repeat(64);altered.ref={...altered.ref,artifactDigest:altered.assetSha}}
+    else altered.runId+='-foreign'
+    const path=join(f.storage,'wrong-'+wrong+'.json');writeFileSync(path,JSON.stringify(altered),{mode:0o400})
+    await expect(keeperFixtureRequest(path,'pause',altered.ref)).rejects.toThrow('P7_FIXTURE_SCOPE')
+    expect((await keeperFixtureRequest(capabilityPath,'current',keeperRef)).current).toBe(true)
+  }
+  const priorCapability=process.env.DSH_P7_KEEPER_FIXTURE
+  process.env.DSH_P7_KEEPER_FIXTURE=capabilityPath
+  keeperClosers.push(async()=>{if(priorCapability)process.env.DSH_P7_KEEPER_FIXTURE=priorCapability;else delete process.env.DSH_P7_KEEPER_FIXTURE})
   for (const [index, gate] of names.entries()) {
     const stdout = execFileSync('pnpm', [gate], { cwd: f.candidate, encoding: 'utf8', env: process.env }), outPath = join(f.storage, gate.replace(':', '-') + '.out'), errPath = outPath + '.err'
     writeFileSync(outPath, stdout); writeFileSync(errPath, '')
@@ -200,13 +214,13 @@ it('real controlled host delivery requires complete canonical acceptance, then f
   expect(service.fulfill(step, receipt)).toEqual(fulfilled)
   expect(await service.execute(step, receipt.actionRef)).toEqual(receipt)
   // A formerly passing gate cannot outlive its retained isolation holder.
-  process.kill(keeper.pid, 'SIGSTOP')
+  await keeperFixtureRequest(capabilityPath,'pause',keeperRef)
   try {
     expect(service.verifyDeliveryReceipt(step.ref, receipt).verdict).toBe('fail')
     expect(() => service.report(step.ref, receipt)).toThrow()
     expect(() => service.fulfill(step, receipt)).toThrow('DELIVERY_GATE_KEEPER_NOT_CURRENT')
     await expect(service.execute(step, receipt.actionRef)).rejects.toThrow('DELIVERY_GATE_KEEPER_NOT_CURRENT')
-  } finally { process.kill(keeper.pid, 'SIGCONT') }
+  } finally { await keeperFixtureRequest(capabilityPath,'resume',keeperRef) }
   await new Promise(resolve => setTimeout(resolve, 100))
   expect(service.verifyDeliveryReceipt(step.ref, receipt).verdict).toBe('pass')
   const parentReq = { ...v.ledger.get('requirement')!, id: 'parent-requirement', data: { ...v.ledger.get('requirement')!.data, intent: 'full M1 outcome', observable_results: ['full M1 outcome'] } }

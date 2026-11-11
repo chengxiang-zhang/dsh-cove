@@ -1,21 +1,24 @@
 import { expect, it, vi } from 'vitest'
 import { rmSync } from 'node:fs'
 import { fixture } from './fixtures/superagent/controlled.ts'
-import { directSandboxLaunchPort } from '../src/host/services/superagent/kernel/sandbox-launch-port.ts'
+import * as launchPorts from '../src/host/services/superagent/kernel/sandbox-launch-port.ts'
+import { configuredSandboxLaunchPort } from '../src/host/services/superagent/kernel/sandbox-launch-port.ts'
 import type { ExecutionEnvelope } from '../src/host/services/superagent/kernel/actions.ts'
 
 it('reconciles the same owned process when its exit arrives after the bounded drain result', async () => {
-  const f=fixture(),open=directSandboxLaunchPort.open.bind(directSandboxLaunchPort)
-  const spy=vi.spyOn(directSandboxLaunchPort,'open').mockImplementation(request=>{
-    const child=open(request),once=child.once.bind(child)
-    child.once=((name:string,listener:(...args:any[])=>void)=>once(name,name==='exit'?(...args:any[])=>setTimeout(()=>listener(...args),350):listener)) as typeof child.once
+  const f=fixture(),port=configuredSandboxLaunchPort()
+  let deliverOwnedExit:(()=>void)|undefined
+  const spy=vi.spyOn(launchPorts,'configuredSandboxLaunchPort').mockReturnValue({open(request){
+    const child=port.open(request),once=child.once.bind(child)
+    child.once=((name:string,listener:(...args:any[])=>void)=>once(name,name==='exit'?(...args:any[])=>{deliverOwnedExit=()=>listener(...args)}:listener)) as typeof child.once
     return child
-  })
+  }})
   try {
     const action=f.k.actions.planAction(f.spec('late-exit'));f.k.actions.claimResources(action.ref,f.workspace.resources)
     const launch=f.k.host.beginDispatch(action.ref) as ExecutionEnvelope,process=f.k.host.openProcess(launch.actionRef)
     expect((await process.closed).receipt?.stopped).toBe(false)
-    await new Promise(resolve=>setTimeout(resolve,500))
+    expect(deliverOwnedExit).toBeTypeOf('function')
+    deliverOwnedExit!()
     expect(f.ledger.get(action.ref.id)?.data.receipt).toMatchObject({stopped:true})
     const exits=f.k.host.nativeFacts('execution:'+action.ref.id).filter(f=>(f.observation as any).kind==='process_exit')
     expect(exits).toHaveLength(2)
@@ -56,4 +59,14 @@ it.each(['absent','present','unowned','children'])('only reconciles a proven his
       try{f.k.host.reconcileSingleProcessAbsence(ref);expect(f.ledger.get(ref.id)?.data.receipt).toMatchObject({status:'failed',stopped:true,reason:'OWNED_SINGLE_PROCESS_ABSENT'});expect(kill).toHaveBeenCalledTimes(1)}finally{kill.mockRestore()}
     }
   }finally{f.ledger.close();rmSync(f.dir,{recursive:true,force:true})}
+})
+
+it('keeps prior failure evidence without contaminating the next continuation state', async()=>{
+  const {continuationVersion}=await import('../src/host/services/superagent/managed-runtime.ts')
+  const prior={request:{requestId:'same'},state:'needs-attention',error:'old failure',endedAt:1,report:'old report',result:{status:'old'},continuationStartedAt:0,baseline:{head:'old'},continuations:[{id:'failed',state:'failed'}]}
+  const next=continuationVersion(prior,{id:'new',state:'queued'})
+  expect(next).toMatchObject({state:'queued',request:prior.request,continuations:[...prior.continuations,{id:'new',state:'queued'}]})
+  for(const key of ['error','endedAt','report','result','continuationStartedAt','baseline']){expect(next).not.toHaveProperty(key);expect(next.priorOutcome[key as keyof typeof next.priorOutcome]).toEqual((prior as any)[key])}
+  expect({...next,state:'running'}).not.toHaveProperty('error')
+  expect({...next,state:'needs-attention',result:{status:'project-gate-failed'}}).not.toHaveProperty('error')
 })
