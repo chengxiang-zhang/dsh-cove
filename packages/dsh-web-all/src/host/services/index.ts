@@ -19,6 +19,8 @@ import * as externalSession from './external-session/index.ts'
 import { createServiceLifecycleOwner, type ServiceRegistrationDiagnostic } from './lifecycle.ts'
 
 export interface ServiceAssemblyDeps {
+  managedWork?: superagent.ManagedHostConfig
+  nativeExecutors?: superagent.DshNativeHostConfig
   dshHome?: string
   agentsHome?: string
   noBrowserAuth?: boolean
@@ -82,7 +84,7 @@ export function assembleServices(ctx: Context, deps: ServiceAssemblyDeps = {}): 
   // The superagent domain owns the Feishu channel (the former standalone inbox
   // domain) and will own the secretary modules beside it, so the assembly keeps
   // one row per capability while the inside stays modular.
-  mount('superagent', () => superagent.register(ctx))
+  mount('superagent', () => deps.managedWork ? superagent.register(ctx, deps.nativeExecutors, deps.managedWork) : deps.nativeExecutors ? superagent.register(ctx, deps.nativeExecutors) : superagent.register(ctx))
   // Mounted straight after the inbox because it is the same integration's
   // outbound half and borrows its credentials when it has none of its own.
   // It only subscribes and serves one read route, so it consults the fence

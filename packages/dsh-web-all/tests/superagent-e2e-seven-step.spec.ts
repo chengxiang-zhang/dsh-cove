@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite'
 /**
  * The seven-step acceptance chain (01 §E, T30) end to end on one ledger.
  *
@@ -200,7 +201,7 @@ describe('seven-step chain', () => {
     expect(one(`SELECT tool_calls FROM sa_attempt WHERE attempt_id = 'C-1:A1'`).tool_calls).toBe(2)
   })
 
-  it('3. delivery: fulfilled on evidence the session events confirm, the delivery is at most 100 words', async () => {
+  it('3. legacy ready remains unverified and its scripted false delivery is blocked by the real outlet', async () => {
     await step(5 * MIN)
     W.agent.desk([{ tool: 'say', input: () => ({ commitment_id: 'C-1', moment: 'deliver',
       text: 'C-1 做完了：超时已改成 X；pnpm vitest run tests/lark-inbox-responder.spec.ts 退出码 0。' }) }])
@@ -212,11 +213,10 @@ describe('seven-step chain', () => {
     ])
     await step(2000)
     await step(1000)
-    expect(one(`SELECT state, evidence_json IS NOT NULL AS ev FROM sa_commitment WHERE commitment_id = 'C-1'`)).toEqual({ state: 'fulfilled', ev: 1 })
+    expect(one(`SELECT state, evidence_json IS NOT NULL AS ev FROM sa_commitment WHERE commitment_id = 'C-1'`)).toEqual({ state: 'unverified', ev: 0 })
     const delivery = W.rows(`SELECT words, state FROM sa_outbox WHERE commitment_id = 'C-1' AND moment = 'deliver'`)
-    expect(delivery).toHaveLength(1)
-    expect(Number(delivery[0].words)).toBeLessThanOrEqual(100)
-    expect(W.sent.at(-1)?.text).toContain('C-1 做完了')
+    expect(delivery).toHaveLength(0)
+    expect(W.sent.some(message => message.text.includes('C-1 做完了'))).toBe(false)
   })
 
   it('4. "顺便把 Z 也改了": (a) while running it joins the commitment and is consumed; (b) after delivery it is a child; one top-level each', async () => {
@@ -295,7 +295,7 @@ describe('seven-step chain', () => {
     expect(openSet()).toEqual([{ commitment_id: 'C-2', state: 'open' }, { commitment_id: 'C-3', state: 'open' }])
   })
 
-  it('7. the whole run: superagent-check over this ledger exits 0 (I1-I4, E1-E7)', async () => {
+  it('7. the actual outlet leaves E3 clean; an independently injected violating record still fails E3', async () => {
     let out = ''
     let code = 0
     try {
@@ -305,9 +305,22 @@ describe('seven-step chain', () => {
       code = e.status ?? 1
       out = e.stdout ?? ''
     }
-    expect(out).not.toMatch(/FAIL/)
-    for (const id of ['I1', 'I2', 'I3', 'I4', 'E1', 'E2', 'E3', 'E4', 'E5', 'E7']) expect(out).toMatch(new RegExp(`^${id} ok`, 'm'))
+    // The unchanged checker now observes that the real outlet suppressed the claim.
+    expect(out.split('\n').filter(line => /\bFAIL\b/u.test(line))).toEqual([])
+    for (const id of ['I1', 'I2', 'I3', 'I4', 'E1', 'E2', 'E4', 'E5', 'E7']) expect(out).toMatch(new RegExp(`^${id} ok`, 'm'))
     expect(out).toMatch(/^E6 (ok|nodata)/m)
     expect(code).toBe(0)
+    expect(out).toMatch(/^E3 ok/m)
+    const live = new DatabaseSync(W.path)
+    live.exec('PRAGMA wal_checkpoint(TRUNCATE)'); live.close()
+    const negativePath = join(W.root, 'deliberate-E3-violation.sqlite')
+    copyFileSync(W.path, negativePath)
+    const negative = new DatabaseSync(negativePath)
+    negative.prepare("UPDATE sa_outbox SET moment='deliver',body='C-1 做完了：全部测试通过',created_at=? WHERE outbox_id=(SELECT outbox_id FROM sa_outbox WHERE commitment_id='C-1' LIMIT 1)").run(Date.now())
+    negative.close()
+    let rejected = ''
+    try { execFileSync(process.execPath, [CHECK, '--db', negativePath], { encoding: 'utf8', stdio: 'pipe' }) }
+    catch (error) { rejected = String((error as { stdout?: string }).stdout ?? '') }
+    expect(rejected).toMatch(/^E3 FAIL 1/m)
   })
 })

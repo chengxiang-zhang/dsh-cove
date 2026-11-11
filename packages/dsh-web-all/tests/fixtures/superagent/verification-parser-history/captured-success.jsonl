@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a1c89a-f4da-77f0-aa25-93460a297087"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"HTTP status 401 means authentication is required or the provided credentials are invalid."}}
+{"type":"turn.completed","usage":{"input_tokens":22279,"cached_input_tokens":13440,"cache_write_input_tokens":0,"output_tokens":19,"reasoning_output_tokens":0}}

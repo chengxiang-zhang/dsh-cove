@@ -38,7 +38,7 @@ export const OUTLET_AUDIT_STREAM = 'outlet'
 const O = PHYSICAL.outbox
 const backoff = (attempts: number): number => Math.min(RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1), RETRY_CAP_MS)
 
-export function createOutlet(ledger: Ledger, lease: Lease, holder: string): Outlet {
+export function createOutlet(ledger: Ledger, lease: Lease, holder: string, revalidate?: (row: OutboxRow) => boolean): Outlet {
   const notes = new Map<string, string>()
   const fail = (code: SubmitCode, message: string): SubmitResult => ({ ok: false, code, message })
 
@@ -121,6 +121,12 @@ export function createOutlet(ledger: Ledger, lease: Lease, holder: string): Outl
     const due = ledger.read.all<{ outbox_id: string }>(`SELECT outbox_id FROM ${O} WHERE state = 'queued' AND lease_epoch = ?
       AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at, outbox_id`, current.epoch, now)
     for (const { outbox_id: id } of due) {
+      const queued = ledger.read.get<OutboxRow>(`SELECT * FROM ${O} WHERE outbox_id = ?`, id)
+      if (queued && revalidate && !revalidate(queued)) {
+        ledger.open(tx => tx.run(`UPDATE ${O} SET state='suppressed',error='outlet evidence changed',updated_at=? WHERE outbox_id=? AND state='queued'`, now, id), { module: 'kernel' })
+        result.suppressed += 1
+        continue
+      }
       const row = claimSend(id, now, current.epoch)
       if (!row) continue
       if (row.attempts > 1) result.retried += 1

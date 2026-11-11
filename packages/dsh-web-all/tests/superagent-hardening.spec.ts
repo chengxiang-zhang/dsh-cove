@@ -221,7 +221,7 @@ describe('R1 hardening: attacks that must not land', () => {
     // The named command with the named exit code, really run: fulfilled.
     const real = closureRig('`pytest` 期望退出码 0')
     real.facts.call(real.a.attempt_id, 'bash', { command: 'pytest' }, 0)
-    expect(real.closure.close(real.a.attempt_id, { reason: 'completed' }, { state: 'ready', summary: 'ok', evidence: [{ command: 'pytest', exit: 0, reading: '12 passed' }] }).state).toBe('fulfilled')
+    expect(real.closure.close(real.a.attempt_id, { reason: 'completed' }, { state: 'ready', summary: 'ok', evidence: [{ command: 'pytest', exit: 0, reading: '12 passed' }] }).state).toBe('unverified')
   })
 
   it('A12: the pending sweep judges a waiting row once; a second round adds nothing', () => {

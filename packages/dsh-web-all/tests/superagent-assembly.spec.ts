@@ -16,7 +16,7 @@ import { createFeishuChannel } from '../src/host/services/superagent/channels/fe
 import { InboxStore } from '../src/host/services/superagent/channels/feishu/inbox-store.ts'
 import { DEFAULT_SUPERAGENT_CONFIG, type SuperagentConfig } from '../src/host/services/superagent/config.ts'
 import type { AgentScopeLike, DeskTool, ToolFacePort } from '../src/host/services/superagent/desk/toolface.ts'
-import { createSuperagent, overrideModel, type Assembly } from '../src/host/services/superagent/index.ts'
+import { createSuperagent, overrideModel, type Assembly, type AssemblyDeps } from '../src/host/services/superagent/index.ts'
 import type { SenderPort } from '../src/host/services/superagent/kernel/ports.ts'
 import { openLedgerDb } from '../src/host/services/superagent/protocol/db.ts'
 import { createBriefNow } from '../src/host/services/superagent/timing/brief.ts'
@@ -49,7 +49,7 @@ interface Rig {
   rows(sql: string, ...p: Array<string | number>): Array<Record<string, unknown>>
 }
 
-function rig(opts: { mode?: SuperagentConfig['superagentMode']; openDb?: (path: string) => DatabaseSync; start?: boolean } = {}): Rig {
+function rig(opts: { managedAdmission?: AssemblyDeps['managedAdmission']; mode?: SuperagentConfig['superagentMode']; openDb?: (path: string) => DatabaseSync; start?: boolean } = {}): Rig {
   const root = mkdtempSync(join(tmpdir(), 'sa-asm-'))
   dirs.push(root)
   const store = InboxStore.open({ rootDir: root })
@@ -77,6 +77,7 @@ function rig(opts: { mode?: SuperagentConfig['superagentMode']; openDb?: (path: 
   const dbs: DatabaseSync[] = []
   const asm = createSuperagent({
     openDb: p => { const db = (opts.openDb ?? openLedgerDb)(p); dbs.push(db); return db },
+    managedAdmission: opts.managedAdmission,
     config: () => cfg, controller: () => controller, clock, log: { info: () => undefined, warn: () => undefined, error: () => undefined },
     sender, holder: 'proc-test', seatRoot: join(root, 'seat'), seatDir: join(root, 'desk'), toolface, diagnostic: m => diagnostics.push(m), tz: 'UTC',
   })
@@ -182,6 +183,27 @@ describe('superagent assembly', () => {
     expect(r.rows('SELECT moment, tier, state FROM sa_outbox')).toEqual([{ moment: 'ack', tier: 'reply', state: 'sent' }])
     expect(r.sent).toHaveLength(1)
     expect(r.sent[0].text).toContain('接了 C-1')
+    const statusEvent = r.deliver('这项工作进展怎样')
+    const statusSession = await runDesk(r)
+    expect(await call(r, statusSession, 'judge', { event_id: statusEvent, disposition: 'answer', class: 'lookup', confidence: 0.9, reason: 'status requested' })).toEqual({ ok: true })
+    expect(await call(r, statusSession, 'say', { event_id: statusEvent, moment: 'answer', text: 'Everything completed; all tests passed.' })).toMatchObject({ ok: true })
+    await endTurn(r, statusSession)
+    r.clock.advance(1000); await settle()
+    expect(r.sent.at(-1)?.text).not.toContain('Everything completed')
+    expect(r.sent.at(-1)?.text).toContain('尚无完整验收')
+  })
+
+  it('managed admission owns the existing Feishu message exactly once without a legacy desk execution', async () => {
+    const accepted: string[] = [], r = rig({ mode: 'superagent', managedAdmission: event => { accepted.push(event.event_id) } })
+    await r.asm.start(r.path)
+    const id = r.deliver('修复当前项目的接口行为')
+    await settle()
+    expect(accepted).toEqual([id])
+    expect(r.rows('SELECT owner FROM inbox_events')).toEqual([{ owner: 'superagent' }])
+    expect(r.rows('SELECT state FROM sa_intake')).toEqual([{ state: 'disposed' }])
+    expect(r.rows('SELECT count(*) AS n FROM sa_deliberation')).toEqual([{ n: 0 }])
+    expect(r.asm.admit({ event_id: id, chat: { id: 'oc_dm', type: 'p2p' }, sender: { open_id: 'ou_owner', union_id: OWNER }, thread: '', text: 'same message', message_id: 'om_' + id, received_at: r.clock.now() })).toBe('already_claimed')
+    expect(accepted).toHaveLength(1)
   })
 
   it('4. switching the mode takes effect on the next inbound; switching back keeps the ledger', async () => {

@@ -15,6 +15,7 @@
  */
 
 import { DatabaseSync } from 'node:sqlite'
+import { managedGeneration } from './migrations/managed-work.ts'
 import {
   ASSUMPTION_MODES, ASSUMPTION_STATUSES, ATTEMPT_STATES, AUDIENCE_CLASSES, AUDIENCES, AUTHORITIES,
   CANCEL_ORIGINS, CAPABILITIES, CHECK_KINDS, COMMITMENT_KINDS, COMMITMENT_STATES, DELIBERATION_STATES,
@@ -523,6 +524,7 @@ function migrateBody(db: Db): string[] {
 
 /** One transaction, idempotent: a second run on a migrated database returns `added: []`. */
 export function migrate(db: Db): { added: string[] } {
+  if (managedGeneration(db) !== undefined) throw new Error('PROTOCOL_GENERATION: legacy writer refuses managed-work database')
   db.exec('BEGIN IMMEDIATE')
   try {
     const added = migrateBody(db)

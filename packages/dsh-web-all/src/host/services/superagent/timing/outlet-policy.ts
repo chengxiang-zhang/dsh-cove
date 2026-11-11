@@ -29,10 +29,13 @@ import { tier } from './attention.ts'
 import type { MomentFacts } from '../surface/moment.ts'
 import { momentAllowed } from '../surface/moment.ts'
 import { promiseHits } from '../surface/promise-scan.ts'
+import { renderWorkReport } from '../surface/templates.ts'
 import { MAX_WORDS, countWords } from '../surface/words.ts'
 
 /** The facts and lookups the policy needs, injected by the composition root. */
 export interface OutletPolicyDeps {
+  /** Resolve work by conversation as well as explicit id, so omitting an id cannot bypass the report boundary. */
+  workReport?(proposal: SpeechProposal): { state: string; commitmentId?: string; facts?: import('../surface/templates.ts').WorkReportFacts; delivery?: import('../protocol/delivery.ts').DeliveryEvaluation } | undefined
   /** Everything the tier decision may see for this proposal. */
   attentionCtx(proposal: SpeechProposal, now: number): AttentionContext
   /** What the turn actually did, for the moment check. */
@@ -63,8 +66,11 @@ export function identityPrefix(ownerLabel: string): string {
  */
 export function createOutletPolicy(deps: OutletPolicyDeps): OutletPolicy {
   return {
-    check(proposal: SpeechProposal, now: number): OutletVerdict {
-      if (!momentAllowed(proposal.moment, deps.momentFacts(proposal))) {
+    check(input: SpeechProposal, now: number): OutletVerdict {
+      const report = deps.workReport?.(input)
+      const proposal = report && input.payload === 'text'
+        ? { ...input, text: renderWorkReport(input.moment, report.state, report.delivery, report.commitmentId, report.facts) } : input
+      if (!momentAllowed(proposal.moment, deps.momentFacts(input))) {
         return { ok: false, code: 'MOMENT_FORBIDDEN', message: `moment ${proposal.moment} does not match this turn` }
       }
       const words = countWords(proposal.text)

@@ -1,0 +1,27 @@
+{
+  "origin": "Unmodified historical production source frozen before M1 implementation; not a proposed repair",
+  "baseCommit": "ffdf44c58024470f2027e9a5bed81ef165fd6a89",
+  "capturedFromWorkingTree": true,
+  "nativeCapture": "real local Codex CLI process, successful exit 0, native thread 01a1c89a-f4da-77f0-aa25-93460a297087",
+  "captureSha256": "7dc5f25aaec913ced9f8079fd7340617615197587af19d128c4995e13b5d498d",
+  "sourceFiles": [
+    {
+      "path": "src/host/services/external-session/providers/codex.ts",
+      "sha256": "43838ffe7c0cbb3eeba4b4ad8039e1812cc3c61ef5262146982229b7fbafdca2"
+    },
+    {
+      "path": "src/core/external-session/adapters.ts",
+      "sha256": "45f1496f86fdbb71f542cf1f9183a270ac66b93197d7558cb224b36e1f5bb336"
+    },
+    {
+      "path": "src/core/external-session/errors.ts",
+      "sha256": "55dac32ee39849ad550b1331933fdb297b31a6b72f435bd28b40df2f1674cf1f"
+    },
+    {
+      "path": "src/core/external-session/types.ts",
+      "sha256": "b7edd245acb1cd220f1124fd9418ec4fa357562a26a0767211143d7098d1a7fb"
+    }
+  ],
+  "sourceWorkingTreeStatus": "",
+  "attributedToCurrentNativeThread": false
+}

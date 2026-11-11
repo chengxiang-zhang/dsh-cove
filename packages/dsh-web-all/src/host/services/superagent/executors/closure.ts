@@ -1,21 +1,6 @@
-/**
- * Closure: judging an executor's turn end without believing its self-report (10).
- *
- * The table in `10 "结案：不信自述"` is implemented row by row. Two properties drive
- * the shape of this file:
- *
- * 1. A report is a claim, evidence is a fact. For `command` criteria the claim is
- *    checked against the session's tool log — same command, same exit code — and a
- *    report that does not match is only ever `unverified`, never `fulfilled`.
- *    Exit codes come from the `[exit code: N]` marker (no marker means 0); a
- *    `tool/result` that never arrived cannot verify anything.
- * 2. Not judging is a valid outcome. Unconsumed input means the next turn still has
- *    to eat it (`pending_close`, R23); a `ready` report that arrives before its
- *    `turn/end` is a "pending close" that the sweep judges after ten minutes with
- *    the same table. Both are recorded in the journal so the wait has a reason.
- *
- * Closure writes the ledger (`transition`, `journal`, attempt end) but never talks:
- * `cannot` and the asked assumption belong to escalate/judgment.
+/** Legacy turn closure retains ready claims for canonical candidate collection.
+ * Independent verification and delivery own fulfillment; a report, path, tool
+ * exit or timeout can never promote this legacy observation into acceptance.
  */
 
 import type { KernelTx, Ledger } from '../kernel/ledger.ts'
@@ -138,7 +123,7 @@ export function elementsOf(doneWhen: string): string[] {
 }
 
 export function createClosure(deps: ClosureDeps): Closure {
-  const { ledger, facts, artifacts } = deps
+  const { ledger, facts } = deps
   const write = <T>(fn: (tx: KernelTx) => T): T => ledger.open(fn, { module: 'executors' })
 
   const attemptById = (id: string): AttemptRow | undefined =>
@@ -160,39 +145,11 @@ export function createClosure(deps: ClosureDeps): Closure {
   }
 
   function readyOutcome(attempt: AttemptRow, commitment: CommitmentRow, report: ReportInput): Outcome {
-    const evidence = report.evidence ?? []
-    if (commitment.check_kind === 'command') {
-      if (evidence.length === 0) return outcome('unverified', 'ready without evidence')
-      // B1: the evidence must be the command done_when names, with the exit it expects.
-      const wanted = expectedCommand(commitment.done_when)
-      if (wanted === undefined) return outcome('unverified', 'done_when names no command to check')
-      const wantedExit = expectedExit(commitment.done_when)
-      const calls = facts.toolLog(attempt.attempt_id)
-      for (const item of evidence) {
-        if (normalized(item.command) !== normalized(wanted) || item.exit !== wantedExit) continue
-        // A11: only a real command-running tool call counts - never the report call itself.
-        const matched = calls.find(call => commandOf(call) !== undefined
-          && normalized(commandOf(call) as string) === normalized(wanted)
-          && call.exit !== undefined && call.exit === wantedExit)
-        if (matched !== undefined) return outcome('fulfilled', 'command matched done_when and the tool log', { evidence: item })
-      }
-      return outcome('unverified', 'no tool call runs the done_when command with the expected exit code')
-    }
-    if (commitment.check_kind === 'artifact') {
-      const branch = `sa/${commitment.commitment_id}`
-      const commits = artifacts.branchCommits(branch)
-      if (artifacts.pathExists(commitment.done_when) || commits > 0) {
-        return outcome('fulfilled', 'artifact present', { evidence: { artifact: commitment.done_when, branch, commits } })
-      }
-      return outcome('unverified', 'neither the path nor the branch shows the artifact')
-    }
-    // answer | observation: every element of done_when has to appear in the summary.
-    const elements = elementsOf(commitment.done_when)
-    const summary = normalized(report.summary)
-    if (elements.length > 0 && elements.every(element => summary.includes(element))) {
-      return outcome('fulfilled', 'summary covers done_when', { evidence: { done_when: commitment.done_when, elements } })
-    }
-    return outcome('unverified', 'summary does not cover done_when')
+    // Ready is a candidate claim. P5 collects it into the canonical verification
+    // flow; legacy path/summary/tool observations cannot authorize fulfillment.
+    return outcome('unverified', 'candidate awaiting independent verification', {
+      evidence: { candidateClaim: report, attemptId: attempt.attempt_id, commitmentId: commitment.commitment_id },
+    })
   }
 
   function blockedOutcome(commitment: CommitmentRow, report: ReportInput): Outcome {

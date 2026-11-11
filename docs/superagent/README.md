@@ -75,7 +75,7 @@ Superagent 是统一面向老板、跨项目承担结果责任的秘书。它从
 
 ## 依赖与代码归属
 
-全部宿主行为仍属于 `packages/dsh-web-all/src/host/services/superagent/`，不增加运行时实体，不修改 DSH 源码。保留 `channels/feishu`、`executors/transport/{http,inproc}`、账本与恢复的归属。专业角色通过版本化分工和执行 profile 组织，不按人类岗位复制宿主模块。新增目标模块 `coordination/` 与 `verification/`；这些目录名称是拟议实现位置，不代表已存在。
+全部宿主行为仍属于 `packages/dsh-web-all/src/host/services/superagent/`，不增加运行时实体，不修改 DSH 源码。保留 `channels/feishu`、`executors/transport/{http,inproc}`、账本与恢复的归属。专业角色通过版本化分工和执行 profile 组织，不按人类岗位复制宿主模块。`coordination/`、`context/` 与 `verification/` 提供领域协调、上下文编译与独立验证模块；完整托管入口和生命周期仍须按 [实施路线](15-实施路线.md) 接线和验证，目录存在不代表无人交付已经完成。
 
 逻辑依赖方向（箭头表示通过契约调用；实现由组合根注入，不直接 import 对方插件私有实现）：
 

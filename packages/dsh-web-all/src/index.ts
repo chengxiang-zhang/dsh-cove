@@ -41,6 +41,9 @@ export const inject = [
  * 命名空间键（lark-inbox / notify / dsh-ssh / …）即各能力域的设置命名空间。
  */
 export interface Config extends Record<string, unknown> {
+  /** Host-owned managed native session bootstrap. Never a model permission grant. */
+  managedWork?: import('./host/services/superagent/index.ts').ManagedHostConfig
+  nativeExecutors?: import('./host/services/superagent/index.ts').DshNativeHostConfig
   /** 用户 dsh 配置根（默认 $DSH_HOME 或 ~/.dsh）。 */
   dshHome?: string
   /** 用户 agents 配置根（默认 $DSH_AGENTS_HOME 或 ~/.agents）。 */
@@ -83,5 +86,7 @@ export function apply(ctx: Context, config?: Config): void {
     worktree: config?.worktree,
     playwright: config?.playwright,
     externalSession: config?.externalSession,
+    nativeExecutors: config?.nativeExecutors,
+    managedWork: config?.managedWork,
   }), 'web-all: host services')
 }

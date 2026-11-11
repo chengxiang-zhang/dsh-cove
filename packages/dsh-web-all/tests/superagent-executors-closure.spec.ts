@@ -121,7 +121,7 @@ describe('superagent executors closure', () => {
     expect(attemptOf(r.t, a.attempt_id).state).not.toBe('ended')
   })
 
-  it('2. a command report is verified against the session tool log, not believed', () => {
+  it('2. a command report and real tool exit remain a candidate requiring independent verification', () => {
     const r = rig()
     const c = seedCommitment(r.t, { check_kind: 'command', done_when: '`pnpm test` 期望退出码 0' })
     const a = seedAttempt(r.t, c.commitment_id)
@@ -129,13 +129,12 @@ describe('superagent executors closure', () => {
 
     const result = r.closure.close(a.attempt_id, { reason: 'completed' },
       ready({ evidence: [{ command: 'pnpm test', exit: 0, reading: 'Tests 12 passed' }] }))
-    expect(result.state).toBe('fulfilled')
-    expect(result.evidenceOk).toBe(true)
+    expect(result.state).toBe('unverified')
+    expect(result.evidenceOk).toBe(false)
 
     const closed = commitmentOf(r.t, c.commitment_id)
-    expect(closed.state).toBe('fulfilled')
-    expect(closed.evidence_json).not.toBeNull()
-    expect(JSON.parse(closed.evidence_json as string)).toMatchObject({ command: 'pnpm test', exit: 0 })
+    expect(closed.state).toBe('unverified')
+    expect(closed.evidence_json).toBeNull()
     // The reading 10 asks for: nothing is fulfilled without evidence.
     const bare = r.t.ledger.read.get<{ n: number }>(`SELECT count(*) AS n FROM sa_commitment WHERE state = 'fulfilled' AND evidence_json IS NULL`)
     expect(bare?.n).toBe(0)
@@ -168,12 +167,12 @@ describe('superagent executors closure', () => {
     expect(r.closure.close(b.attempt_id, { reason: 'completed' })).toEqual({ state: 'unverified', evidenceOk: false })
   })
 
-  it('5. artifact evidence is the path or the branch, not the summary', () => {
+  it('5. artifact existence is a candidate claim, never independent acceptance', () => {
     const r = rig()
     const withCommits = seedCommitment(r.t, { check_kind: 'artifact', done_when: '/tmp/sa/out/report.md' })
     const a = seedAttempt(r.t, withCommits.commitment_id)
     r.artifacts.setCommits(2)
-    expect(r.closure.close(a.attempt_id, { reason: 'completed' }, ready()).state).toBe('fulfilled')
+    expect(r.closure.close(a.attempt_id, { reason: 'completed' }, ready()).state).toBe('unverified')
 
     const empty = seedCommitment(r.t, { check_kind: 'artifact', done_when: '/tmp/sa/out/none.md' })
     const b = seedAttempt(r.t, empty.commitment_id)
@@ -233,8 +232,8 @@ describe('superagent executors closure', () => {
 
     r.t.clock.advance(PENDING_CLOSE_MS + 60_000)
     expect(r.closure.pendingSweep(T0 + PENDING_CLOSE_MS + 60_000)).toBe(1)
-    // Missing `turn/end` is not failure: the report said ready and the log agrees.
-    expect(commitmentOf(r.t, c.commitment_id).state).toBe('fulfilled')
+    // A timed-out ready claim still cannot substitute for independent acceptance.
+    expect(commitmentOf(r.t, c.commitment_id).state).toBe('unverified')
   })
 
   it('9. escalation walks retry then upgrade then broken, without any interrupt', () => {

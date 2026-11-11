@@ -23,6 +23,8 @@ export interface MomentFacts {
   committedInThisTurn: boolean
   /** The commitment the message is about is in a terminal state. */
   commitmentTerminal: boolean
+  /** Independently verified delivery supplied by the host; terminal state alone is insufficient. */
+  deliveryEvidence?: import('../protocol/delivery.ts').DeliveryEvaluation
   /**
    * The bath's disposition is one that answers the inbound message: `answer` or
    * `check` (work being asked about), but also `decline` (R4 identity notice) and
@@ -62,7 +64,7 @@ export function momentAllowed(moment: OutboxMoment, facts: MomentFacts): boolean
       // turn has not committed yet (`10`).
       return facts.committedInThisTurn || facts.byHost
     case 'deliver':
-      return facts.commitmentTerminal
+      return facts.commitmentTerminal && facts.deliveryEvidence?.verdict === 'pass' && !!facts.deliveryEvidence.receipt
     case 'answer':
       return facts.dispositionAnswersInbound
     case 'ask':

@@ -63,7 +63,7 @@ function facts(overrides: Partial<MomentFacts> = {}): MomentFacts {
 function proposal(overrides: Partial<SpeechProposal> = {}): SpeechProposal {
   return {
     chat_id: 'oc_owner',
-    moment: 'deliver',
+    moment: 'answer',
     audience: 'owner',
     payload: 'text',
     text: '改完了；跑了 vitest；退出码 0；读数 13 passed。',
@@ -284,11 +284,11 @@ describe('timing and wording', () => {
     expect(momentAllowed('answer', facts({ dispositionAnswersInbound: true }))).toBe(true)
   })
 
-  it('18. a successful commit in this turn allows moment deliver', () => {
+  it('18. a terminal commitment without independent delivery evidence cannot report delivery', () => {
     expect(momentAllowed('deliver', facts({
       committedInThisTurn: true,
       commitmentTerminal: true,
-    }))).toBe(true)
+    }))).toBe(false)
   })
 
   it('19. with no commit and none of the answer/ask gates, outlet refuses MOMENT_FORBIDDEN', () => {

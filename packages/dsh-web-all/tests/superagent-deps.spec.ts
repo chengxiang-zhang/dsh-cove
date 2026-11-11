@@ -2,7 +2,7 @@
  * Superagent dependency fence (T01).
  *
  * Reads every relative import under SA and checks it against the exact edge
- * table from docs/superagent/README (spec T-01). The same checker is run on a
+ * table from docs/superagent/README and 16-架构与扩展 (spec T-01). The same checker is run on a
  * synthetic bad edge so the fence is proven able to fail.
  */
 
@@ -16,12 +16,18 @@ const SRC = join(PKG, 'src')
 const SA = join(SRC, 'host', 'services', 'superagent')
 
 const DIR_MODULES = ['protocol', 'kernel', 'world', 'memory', 'rules', 'desk', 'judgment', 'timing', 'surface',
-  'executors', 'recovery', 'channels', 'capabilities'] as const
-type Module = (typeof DIR_MODULES)[number] | 'host-ports' | 'root' | 'unmapped' | 'outside'
+  'executors', 'recovery', 'channels', 'capabilities', 'plugins', 'adapters', 'verification', 'coordination', 'context'] as const
+type Module = (typeof DIR_MODULES)[number] | 'host-ports' | 'composition' | 'root' | 'unmapped' | 'outside'
 
 const ALLOWED: Readonly<Record<Exclude<Module, 'root' | 'unmapped' | 'outside'>, readonly Module[]>> = {
+  composition: ['protocol', 'kernel', 'coordination', 'world', 'executors', 'context', 'verification'],
   protocol: [],
+  plugins: [],
+  adapters: ['plugins', 'protocol', 'kernel'],
   kernel: ['protocol'],
+  verification: ['protocol', 'kernel', 'executors'],
+  coordination: ['protocol', 'kernel', 'plugins'],
+  context: ['protocol', 'kernel'],
   world: ['protocol'],
   memory: ['protocol', 'world'],
   rules: ['protocol', 'world'],
@@ -58,6 +64,7 @@ export function moduleOf(absPath: string, saRoot: string = SA): Module {
   const first = rel.split('/')[0] ?? ''
   if ((DIR_MODULES as readonly string[]).includes(first) && rel.includes('/')) return first as Module
   if (rel === 'host-ports.ts' || rel === 'host-ports') return 'host-ports'
+  if (rel === 'managed-runtime.ts' || rel === 'managed-runtime') return 'composition'
   if (rel === 'index.ts' || rel === 'index') return 'root'
   return 'unmapped'
 }
@@ -67,7 +74,11 @@ export function violations(edges: readonly Edge[], srcRoot: string = SRC): strin
   const out: string[] = []
   for (const e of edges) {
     const where = `${e.file}: '${e.spec}' (${e.from} -> ${e.to})`
+    if ((e.from === 'kernel' || e.from === 'plugins') && e.spec.startsWith('@deepseek-ai/')) {
+      out.push(`${where}: host SDK is forbidden in host-independent modules`); continue
+    }
     if (e.from === 'unmapped') { out.push(`${where}: file is not in any SA module`); continue }
+    if (e.from === 'outside' && e.to === 'composition') { out.push(`${where}: callers must use index.ts`); continue }
     if (e.from === 'root' || e.from === 'outside') continue
     if (e.to === e.from) continue
     if (e.to === 'outside') {
@@ -118,7 +129,10 @@ function edgesOf(files: readonly string[]): Edge[] {
   const edges: Edge[] = []
   for (const file of files) {
     for (const spec of importSpecs(readFileSync(file, 'utf8'))) {
-      if (!spec.startsWith('.')) continue
+      if (!spec.startsWith('.')) {
+        if (spec.startsWith('@deepseek-ai/') && ['kernel', 'plugins'].includes(moduleOf(file))) edges.push({ file: toPosix(relative(PKG, file)), spec, from: moduleOf(file), to: 'outside', target: spec })
+        continue
+      }
       const target = resolve(dirname(file), spec)
       edges.push({ file: toPosix(relative(PKG, file)), spec, from: moduleOf(file), to: moduleOf(target), target })
     }
@@ -156,6 +170,41 @@ describe('superagent dependency fence', () => {
     const found = violations(synthetic)
     expect(found).toHaveLength(1)
     expect(found[0]).toContain('kernel -> desk')
+  })
+
+  it('7. target domains are explicit and accept only declared directions', () => {
+    const edge = (from: string, to: string): Edge => ({
+      file: `${from}/a.ts`, spec: `../${to}/x.ts`,
+      from: moduleOf(join(SA, from, 'a.ts')), to: moduleOf(join(SA, to, 'x.ts')),
+      target: join(SA, to, 'x.ts'),
+    })
+    expect(moduleOf(join(SA, 'plugins/contracts.ts'))).toBe('plugins')
+    expect(moduleOf(join(SA, 'adapters/host/dsh.ts'))).toBe('adapters')
+    expect(violations([edge('adapters', 'plugins'), edge('adapters', 'protocol'), edge('adapters', 'kernel')])).toEqual([])
+    for (const [from, to] of [['kernel', 'adapters'], ['kernel', 'plugins'], ['plugins', 'adapters'],
+      ['plugins', 'host-ports'], ['adapters', 'desk'], ['undeclared', 'protocol'], ['kernel', 'undeclared']] as const) {
+      expect(violations([edge(from, to)])).toHaveLength(1)
+    }
+    expect(violations([{ ...edge('kernel', 'adapters'), spec: '../host-ports.ts', to: 'host-ports' }])).toHaveLength(1)
+    for (const from of ['kernel', 'plugins'] as const) {
+      expect(violations([{ ...edge(from, 'adapters'), spec: '@deepseek-ai/dsh', to: 'outside' }])[0]).toContain('host SDK is forbidden')
+    }
+  })
+
+  it('the exact host composition is closed to domain and external callers', () => {
+    const target = join(SA, 'managed-runtime.ts')
+    expect(moduleOf(target)).toBe('composition')
+    expect(moduleOf(join(SA, 'another-runtime.ts'))).toBe('unmapped')
+    const edge = (from: Module, to: Module): Edge => ({
+      file: 'synthetic.ts', spec: './managed-runtime.ts', from, to, target,
+    })
+    expect(violations([edge('root', 'composition'), edge('composition', 'coordination')])).toEqual([])
+    for (const from of [...DIR_MODULES, 'host-ports', 'outside'] as const) {
+      expect(violations([edge(from, 'composition')])).toHaveLength(1)
+    }
+    for (const to of ['desk', 'root', 'unmapped', 'outside'] as const) {
+      expect(violations([edge('composition', to)])).toHaveLength(1)
+    }
   })
 
   // The four assertions above are all of the form "no violation among the edges

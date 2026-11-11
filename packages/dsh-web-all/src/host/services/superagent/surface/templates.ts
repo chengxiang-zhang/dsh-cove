@@ -165,3 +165,21 @@ export function render(moment: OutboxMoment, data: TemplateData): RenderedTempla
   }
   return { text: built.text, words, expectsReply: built.expectsReply }
 }
+export interface WorkReportFacts {
+  question?: { ref: string; text: string }
+  progress?: { ref: string; state: string; toolCalls: number }
+}
+
+/** Work reports are rendered from host state. Model prose cannot carry achievement claims. */
+export function renderWorkReport(moment: OutboxMoment, state: string, delivery?: import('../protocol/delivery.ts').DeliveryEvaluation, commitmentId?: string, facts?: WorkReportFacts): string {
+  if (delivery?.verdict === 'pass' && delivery.receipt) {
+    const r = delivery.receipt
+    return `已核对本地 dev 提交 ${r.commit}，交付范围、文件模式、工作树及暂存区与验收版本一致。未推送，未上线。`
+  }
+  if (moment === 'ack' && commitmentId) return `接了 ${commitmentId}，正在处理；尚未完成验收与交付。`
+  if (moment === 'ask' && facts?.question) return `待确认的问题（${facts.question.ref}）：${JSON.stringify(facts.question.text)}。这是一项待决问题，尚未完成验收与交付。`
+  if (moment !== 'ask' && facts?.progress) return `执行 ${facts.progress.ref} 当前状态：${facts.progress.state}；已观察到 ${facts.progress.toolCalls} 次工具调用。尚无完整验收与本地交付证据。`
+  if (moment === 'ask') return '需要你确认此事项下一步的目标或约束；当前尚无完整验收与本地交付证据。'
+  if (['broken', 'at_risk', 'released', 'withdrawn'].includes(state)) return '此事项当前未完成验收与交付，需要调整下一步安排。'
+  return '此事项仍在处理中；尚无完整验收与本地交付证据，不能报告完成或测试通过。'
+}

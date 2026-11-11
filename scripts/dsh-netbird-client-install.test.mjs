@@ -23,9 +23,9 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -134,6 +134,22 @@ exit 0
 const root = mkdtempSync(join(tmpdir(), 'aw-install-test-'))
 process.on('exit', () => rmSync(root, { recursive: true, force: true }))
 
+// Only named platform utilities are exposed. Host clients and service managers
+// must be explicit fixture shims, even when present in /usr/bin.
+const utilityDir = join(root, 'utilities')
+mkdirSync(utilityDir)
+for (const name of ['sh', 'uname', 'id', 'curl', 'tar', 'gzip', 'awk', 'shasum', 'sha256sum',
+  'mktemp', 'rm', 'head', 'tr', 'sed', 'grep', 'mkdir', 'install', 'chmod', 'dirname',
+  'basename', 'cat', 'nohup', 'sleep', 'readlink']) {
+  const source = ['/usr/bin', '/bin'].map(dir => join(dir, name)).find(existsSync)
+  if (source) symlinkSync(source, join(utilityDir, name))
+}
+
+function fixtureEnv(extra = {}, prefix = '') {
+  const { PATH: fixturePath, ...rest } = extra
+  return { ...rest, PATH: [prefix, fixturePath, utilityDir].filter(Boolean).join(':'), HOME: root, TMPDIR: root }
+}
+
 function sha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
@@ -172,11 +188,9 @@ function run(args, { shims = [], channel = null, extraEnv = {} } = {}) {
   // This file covers the private-network client; the DSH phase that rides along
   // on the same one-liner is exercised in dsh-netbird-client-dsh.test.mjs.
   const full = channel ? [...args, '--no-dsh', '--channel', `file://${channel}`] : [...args, '--no-dsh']
-  const { PATH: extraPath, ...rest } = extraEnv
-  const basePath = extraPath ? `${extraPath}:${process.env.PATH}` : process.env.PATH
-  const env = { ...rest, PATH: `${shimDir}:${basePath}`, HOME: root, TMPDIR: root }
+  const env = fixtureEnv(extraEnv, shimDir)
   try {
-    const stdout = execFileSync('sh', [SCRIPT, ...full], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const stdout = execFileSync('/bin/sh', [SCRIPT, ...full], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] })
     return { status: 0, stdout, stderr: '' }
   } catch (error) {
     return { status: error.status ?? 1, stdout: error.stdout?.toString() ?? '', stderr: error.stderr?.toString() ?? '' }
@@ -198,9 +212,9 @@ function installClient(name, { vendor = FAKE_NETBIRD } = {}) {
 function runAnywhere(bin, args = [], { env = {} } = {}) {
   const wrapper = join(bin, 'anywhere')
   try {
-    const stdout = execFileSync('sh', [wrapper, ...args], {
+    const stdout = execFileSync('/bin/sh', [wrapper, ...args], {
       encoding: 'utf8',
-      env: { ...process.env, ...env },
+      env: fixtureEnv(env),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     return { status: 0, stdout, stderr: '' }
@@ -448,4 +462,28 @@ test('refuses a platform it cannot install on', () => {
   })
   assert.equal(result.status, 1)
   assert.match(result.stderr, /supports macOS and Linux/)
+})
+// Spawn the probe with a hostile ambient PATH instead of mutating this process.
+test('host PATH clients and service managers never enter fixture subprocesses', () => {
+  if (process.env.AW_ISOLATION_PROBE) return
+  const hostile = mkdtempSync(join(root, 'host-path-'))
+  const sentinel = join(hostile, 'invocations')
+  for (const name of ['netbird', 'anywhere', 'sudo', 'launchctl', 'systemctl']) {
+    writeFileSync(join(hostile, name), `#!/bin/sh\nprintf '%s\\n' '${name}' >> '${sentinel}'\nexit 0\n`)
+    chmodSync(join(hostile, name), 0o755)
+  }
+  const child = spawnSync(process.execPath, ['--test', '--test-name-pattern=fixture-only isolation probe', fileURLToPath(import.meta.url)], {
+    encoding: 'utf8', env: { PATH: `${hostile}:${utilityDir}`, AW_ISOLATION_PROBE: '1' },
+  })
+  assert.equal(existsSync(sentinel), false, 'host PATH sentinel was invoked')
+  assert.equal(child.status, 0, child.stdout + child.stderr)
+})
+
+test('fixture-only isolation probe', { skip: !process.env.AW_ISOLATION_PROBE }, () => {
+  const { bin } = installClient('isolation-probe')
+  assert.match(runAnywhere(bin, ['status']).stdout, /fake-machine\.vpn/)
+  rmSync(join(bin, 'netbird'))
+  const missing = runAnywhere(bin, ['status'])
+  assert.equal(missing.status, 127)
+  assert.match(missing.stderr, /client binary is missing/)
 })

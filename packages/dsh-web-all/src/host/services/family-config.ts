@@ -49,6 +49,8 @@ export const FAMILY_NAMESPACES = [
 
 /** 非设置类装配参数（非 volatile：变更即重挂，语义与 0.1 的普通配置一致）。 */
 const CORE_FIELDS = {
+  managedWork: z.object({ bootstrapFile: z.string() }),
+  nativeExecutors: z.object({ bootstrapFile: z.string() }),
   dshHome: z.string(),
   agentsHome: z.string(),
   noBrowserAuth: z.boolean().default(false),
