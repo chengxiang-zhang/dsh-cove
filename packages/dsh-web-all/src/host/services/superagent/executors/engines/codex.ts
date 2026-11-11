@@ -10,7 +10,7 @@ import type {
   RequestResponse
 } from '../native/adapter.ts'
 import { bindingKey, encodeInput, consumptionProof } from '../native/bindings.ts'
-import { ControlledJsonl, type RpcMessage } from '../native/jsonl.ts'
+import { ControlledJsonl, NativeInputRejected, type RpcMessage } from '../native/jsonl.ts'
 import { NativeRequests, type ExecutorRequest } from '../native/requests.ts'
 const disabled = [
   'shell_tool',
@@ -72,6 +72,7 @@ export class CodexNativeExecutor implements NativeExecutor {
   #pageFacts = new Map<string, string>()
   #activeTurn?: string
   #listeners = new Set<(request: ExecutorRequest) => void>()
+  #rejectedInputs = new Map<string, NativeInputRejected>()
   #inputs = new Map<string, { input: InputRecord; turnId?: string; status: 'accepted' | 'unknown' }>()
   private constructor(
     readonly io: ControlledJsonl,
@@ -99,6 +100,7 @@ export class CodexNativeExecutor implements NativeExecutor {
       if (v.kind === 'request') restored.set(v.request.ref.id, v.request)
       if (v.kind === 'input-intent' && v.binding === this.binding.ref.id)
         this.#inputs.set(v.input.request_id, { input: v.input, status: 'unknown' })
+      if (v.kind === 'input-rejected' && v.binding === this.binding.ref.id && v.reason === 'NATIVE_INPUT_FRAME_TOO_LARGE' && Number.isSafeInteger(v.bytes) && v.bytes > 1048576) this.#rejectedInputs.set(v.input.request_id, new NativeInputRejected(v.bytes))
       if (v.kind === 'rpc' && v.message.method === 'turn/started' && v.message.params?.threadId === threadId)
         this.#turnStarts.set(v.message.params.turn.id, fact.ref)
     }
@@ -192,11 +194,14 @@ export class CodexNativeExecutor implements NativeExecutor {
       old = this.#inputs.get(input.request_id)
     if (old) {
       if (encodeInput(old.input) !== text) throw new Error('INPUT_IDEMPOTENCY_CONFLICT')
+      const rejected = this.#rejectedInputs.get(input.request_id)
+      if (rejected) throw rejected
       return this.receiptFor(input)
     }
     if (input.mode === 'steer' && !input.expectedTurnId) throw new Error('EXPECTED_TURN_REQUIRED')
     this.#inputs.set(input.request_id, { input: structuredClone(input), status: 'unknown' })
     this.io.observe({ kind: 'input-intent', binding: binding.id, input: input as unknown as Json })
+    let accepted = false
     try {
       const parameters: Record<string, Json> = {
         threadId: this.identity.native_session_id,
@@ -211,6 +216,7 @@ export class CodexNativeExecutor implements NativeExecutor {
         input.mode === 'steer' ? 'steer' : 'send_input',
         10000
       )) as any
+      accepted = true
       const turnId = result?.turn?.id ?? result?.turnId ?? input.expectedTurnId
       this.#inputs.set(input.request_id, {
         input: structuredClone(input),
@@ -224,7 +230,12 @@ export class CodexNativeExecutor implements NativeExecutor {
         turnId: turnId ?? null
       })
       return await this.receiptFor(input)
-    } catch {
+    } catch (error) {
+      if (!accepted && error instanceof NativeInputRejected) {
+        this.#rejectedInputs.set(input.request_id, error)
+        this.io.observe({ kind: 'input-rejected', binding: binding.id, input: input as unknown as Json, reason: error.message, bytes: error.bytes, limit: error.limit })
+        throw error
+      }
       return { request_id: input.request_id, status: 'unknown' }
     }
   }

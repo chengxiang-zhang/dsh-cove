@@ -927,7 +927,7 @@ export function createControlledKernel(ledger: ManagedLedger, trustedSource: Ref
       },
       observeNative: (actionRef: Ref, stream: string, observation: Json) =>
         hostCommand({ kind: 'native', actionRef, stream, observation }) as { nativeRef: string },
-      nativeRecoveryFacts: (stream: string): { ref: string; observation: Json }[] => ledger.eventEntries({ nativeStream: stream, nativeKinds: ['request', 'input-intent'], nativeRpcMethod: 'turn/started' }).map(({ sequence, body }: any) => ({ ref: 'native-event:' + sequence, observation: body.controlled.command.observation })),
+      nativeRecoveryFacts: (stream: string): { ref: string; observation: Json }[] => ledger.eventEntries({ nativeStream: stream, nativeKinds: ['request', 'input-intent', 'input-rejected'], nativeRpcMethod: 'turn/started' }).map(({ sequence, body }: any) => ({ ref: 'native-event:' + sequence, observation: body.controlled.command.observation })),
       observeNativeDomainAbsence: (actionRef: Ref) => hostCommand({kind:'native_domain_absence',actionRef}) as {nativeRef:string},
       nativeFactRefs: (stream: string, nativeKind?: string): string[] => ledger.eventRefs({ nativeStream: stream, ...(nativeKind ? { nativeKind } : {}) }),
       nativeFacts: (stream: string, nativeKind?: string, afterSequence?: number): { ref: string; observation: Json }[] =>

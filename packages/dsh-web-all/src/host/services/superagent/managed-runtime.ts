@@ -1,3 +1,4 @@
+import { coordinationObjectView } from './coordination/look.ts'
 import { DELIVERY_EVIDENCE_POLICY, partitionHandoff, verifyPartitionCandidate, type ContractPartition, type InterruptedVerificationHandoff } from './kernel/contract-partition.ts'
 import { loadManagedMaterials, type ManagedMaterial } from './executors/managed-materials.ts'
 import { sealProjectInputs, verifyProjectSeal } from './executors/project-snapshot.ts'
@@ -394,7 +395,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       completeOperation(key,lastResult)
       return lastResult
     }
-    if (p.kind === 'look') return { status: 'observed', reconciledOperations:reconcileOperations() as unknown as Json, objects: ledger.snapshot().filter(o => !['action','coordination_runtime_event','context_envelope','context_input'].includes(o.kind)) as unknown as Json, runtimeEvents: ledger.snapshot('coordination_runtime_event').filter(o => ['proposal_unknown','independent_api_verification'].includes(String(o.data.event))).map(o => ({ ref: { id:o.id,revision:o.revision },event:o.data.event,payload:o.data.payload })).slice(-20) as unknown as Json }
+    if (p.kind === 'look') return { status: 'observed', reconciledOperations:reconcileOperations() as unknown as Json, objects: ledger.snapshot().filter(o => !['action','coordination_runtime_event','context_envelope','context_input'].includes(o.kind)).map(coordinationObjectView) as unknown as Json, runtimeEvents: ledger.snapshot('coordination_runtime_event').filter(o => ['proposal_unknown','independent_api_verification'].includes(String(o.data.event))).map(o => ({ ref: { id:o.id,revision:o.revision },event:o.data.event,payload:o.data.payload })).slice(-20) as unknown as Json }
     if (p.kind === 'wait') return { status: 'waiting', reason: p.reason, nextReviewAt: Date.now()+60000 }
     if (p.kind === 'verify') { const request=record('verification_instruction',{operationId:key,instruction:p.instruction},coordination.semanticScopes(work!.id)); await ports.verify({ method: 'json-equality@1', context: request }); completeOperation(key,lastResult); return lastResult }
     throw new Error('PROPOSAL_NOT_EXECUTABLE_IN_THIS_CONTEXT')

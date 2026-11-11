@@ -64,3 +64,22 @@ it('collects only events after an exact same-stream cursor and keeps empty-page 
  expect(await engine.collectNativeEvents(engine.binding.ref,'native-event:2')).toMatchObject({events:[],completeness:'gap'})
  expect(read).toHaveBeenCalledTimes(2)
 })
+
+it.each(['local-before-write','remote-same-message','history-after-ack'])('only propagates a trustworthy local zero-write rejection: %s', async scenario => {
+ const {vi}=await import('vitest'),{NativeInputRejected}=await import('../src/host/services/superagent/executors/native/jsonl.ts'),{createHash}=await import('node:crypto')
+ const facts:any[]=[],call=vi.fn(async()=>{if(scenario==='local-before-write')throw new NativeInputRejected(1100000);if(scenario==='remote-same-message')throw Error('NATIVE_INPUT_FRAME_TOO_LARGE');return {turn:{id:'accepted-turn'}}})
+ const io={launch:{epoch:1,actionRef:{id:'launch',revision:1}},generation:'g',stream:'s',kernel:{host:{fenceDispatch:()=>({kind:'envelope'}),nativeRecoveryFacts:()=>facts}},onMessage:()=>{},observe:(observation:any)=>{facts.push({ref:'native-event:'+facts.length,observation});return 'native-event:'+facts.length},call}
+ const options={hostRef:'h',engineRef:'codex',runtimeNamespace:'r'},engine=new (CodexNativeExecutor as any)(io,options,'same-thread'),input={request_id:'request',assignment_revision:1,text:'input',payload_ref:'context',payload_digest:createHash('sha256').update('input').digest('hex')}
+ if(scenario==='history-after-ack')vi.spyOn(engine,'receiptFor').mockRejectedValue(new NativeInputRejected(1100000))
+ if(scenario==='local-before-write'){
+  await expect(engine.sendNativeInput(engine.binding.ref,input)).rejects.toBeInstanceOf(NativeInputRejected)
+  expect(facts.some(f=>f.observation.kind==='input-rejected')).toBe(true)
+  const restored=new (CodexNativeExecutor as any)(io,options,'same-thread')
+  await expect(restored.sendNativeInput(restored.binding.ref,input)).rejects.toBeInstanceOf(NativeInputRejected)
+  expect(call).toHaveBeenCalledTimes(1)
+ }else{
+  expect(await engine.sendNativeInput(engine.binding.ref,input)).toMatchObject({status:'unknown'})
+  expect(facts.some(f=>f.observation.kind==='input-rejected')).toBe(false)
+  expect(facts.some(f=>f.observation.kind==='input-accepted')).toBe(scenario==='history-after-ack')
+ }
+})

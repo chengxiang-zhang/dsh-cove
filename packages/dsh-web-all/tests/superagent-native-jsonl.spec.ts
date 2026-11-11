@@ -126,3 +126,12 @@ it('uses a caller remaining-history deadline without admitting invalid timeout r
   expect(s.f.k.host.nativeFacts('http-deadline')).toEqual([])
   s.close()
 })
+
+it('rejects an oversized local RPC before planning or writing any frame', async () => {
+ const {NativeInputRejected}=await import('../src/host/services/superagent/executors/native/jsonl.ts')
+ const s=setup(),before=s.f.ledger.snapshot('action').length
+ await expect(s.io.call('turn/start',{input:'x'.repeat(1048576)})).rejects.toBeInstanceOf(NativeInputRejected)
+ expect(s.lines).toEqual([])
+ expect(s.f.ledger.snapshot('action')).toHaveLength(before)
+ s.close()
+})

@@ -8,6 +8,10 @@ import type {
 import type { SandboxProcess } from '../../kernel/sandbox-process.ts'
 import type { Json, Ref } from '../../protocol/managed-work.ts'
 type Kernel = ReturnType<typeof createControlledKernel>
+export class NativeInputRejected extends Error {
+  readonly limit = 1048576
+  constructor(readonly bytes: number) { super('NATIVE_INPUT_FRAME_TOO_LARGE') }
+}
 export interface RpcMessage {
   id?: number | string
   method?: string
@@ -64,6 +68,9 @@ export class ControlledJsonl {
       message = { jsonrpc: '2.0', id, method, params },
       line = JSON.stringify(message),
       digest = createHash('sha256').update(line).digest('hex')
+    // This typed error is created only before any action/frame admission or stdin write.
+    const bytes = Buffer.byteLength(line)
+    if (bytes > 1048576) throw new NativeInputRejected(bytes)
     const action = this.prepare(line, kind, String(id))
     const answer = new Promise<Json>((resolve, reject) => {
       const timer = setTimeout(() => {
