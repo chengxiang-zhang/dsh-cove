@@ -33,3 +33,13 @@ it('durably admits once before native work, preserves failure evidence, and shar
   expect(injection.status).toBe(400)
   expect(readFileSync(bootstrap, 'utf8')).not.toContain('token')
 })
+
+it('keeps unconfigured host bootstraps absent after the real web-all schema parses config', async () => {
+  const { Config } = await import('../src/index.ts')
+  const empty = (Config as any)({})
+  expect(empty.managedWork).toBeUndefined()
+  expect(empty.nativeExecutors).toBeUndefined()
+  const configured = (Config as any)({ managedWork: { bootstrapFile: '/host/private.json' } })
+  expect(configured.managedWork).toEqual({ bootstrapFile: '/host/private.json' })
+  expect(configured.nativeExecutors).toBeUndefined()
+})
