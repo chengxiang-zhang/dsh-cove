@@ -64,7 +64,7 @@ export function moduleOf(absPath: string, saRoot: string = SA): Module {
   const first = rel.split('/')[0] ?? ''
   if ((DIR_MODULES as readonly string[]).includes(first) && rel.includes('/')) return first as Module
   if (rel === 'host-ports.ts' || rel === 'host-ports') return 'host-ports'
-  if (rel === 'managed-runtime.ts' || rel === 'managed-runtime') return 'composition'
+  if (['managed-runtime.ts', 'managed-runtime', 'managed-readiness.ts', 'managed-readiness'].includes(rel)) return 'composition'
   if (rel === 'index.ts' || rel === 'index') return 'root'
   return 'unmapped'
 }

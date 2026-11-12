@@ -9,6 +9,7 @@ import { DELIVERY_EVIDENCE_POLICY, partitionHandoff, verifyPartitionCandidate, t
 import { loadManagedMaterials, type ManagedMaterial } from './executors/managed-materials.ts'
 import { sealProjectInputs, verifyProjectSeal } from './executors/project-snapshot.ts'
 import { runProjectVerification, type ProjectGate } from './executors/project-verification.ts'
+import { calibrateManagedMethod, managedLoadedIdentity } from './managed-readiness.ts'
 import { verificationRuntimeDigest } from './executors/verification-run.ts'
 import { planLocalGitDelivery } from './executors/delivery/local-git.ts'
 import { git, gitBytes, file, treeEntries, manifestDigest } from './executors/delivery/git.ts'
@@ -937,14 +938,42 @@ export function createManagedAdmission(config: ManagedHostConfig, onResult: (req
   const raw = JSON.parse(readFileSync(config.bootstrapFile, 'utf8')) as HostProjects
   if (!raw.root || !raw.defaultProject || !Object.hasOwn(raw.projects ?? {}, raw.defaultProject)) throw new Error('MANAGED_HOST_PROJECT_REQUIRED')
   mkdirSync(raw.root, { recursive: true, mode: 0o700 })
-  return createAdmissions({
+  const identity = managedLoadedIdentity()
+  const calibrations = new Map<string, { state: string; evidence?: Awaited<ReturnType<typeof calibrateManagedMethod>>; error?: string; done: Promise<void> }>()
+  for (const project of Object.values(raw.projects)) {
+    const entry = project.verification?.methodId === 'javascript-module@1' ? project.verification.settings?.entryPath : undefined
+    if (!entry || calibrations.has(entry)) continue
+    const item: { state: string; evidence?: Awaited<ReturnType<typeof calibrateManagedMethod>>; error?: string; done: Promise<void> } = { state: 'pending', done: Promise.resolve() }
+    item.done = calibrateManagedMethod(entry).then(evidence => {
+      item.evidence = evidence; item.state = 'pass'
+      const path = join(raw.root, 'readiness-' + identity.generation + '-' + methodAssetDigest(entry) + '.json'), bytes = JSON.stringify(evidence)
+      if (!existsSync(path)) writeFileSync(path, bytes, { flag: 'wx', mode: 0o400 })
+      else if (readFileSync(path, 'utf8') !== bytes) throw Error('MANAGED_CALIBRATION_EVIDENCE_CHANGED')
+    }).catch(error => { item.state = 'fail'; item.error = error instanceof Error ? error.message.split(':')[0] : 'CALIBRATION_FAILED' })
+    calibrations.set(entry, item)
+  }
+  const projectReadiness = (id: string) => {
+    const verification = raw.projects[id]!.verification, entry = verification?.settings?.entryPath, calibration = entry ? calibrations.get(entry) : undefined
+    const qualification = verification?.qualification
+    const matches = !!qualification && calibration?.state === 'pass' && qualification.runtimeDigest === identity.runtimeDigest && qualification.methodAssetsDigest === calibration.evidence?.methodAssetsDigest && qualification.expiresAt > Date.now() && qualification.evidenceRefs.length > 0
+    return { id, ready: matches, methodId: verification?.methodId ?? null, calibration: calibration?.state ?? 'unconfigured', methodAssetsDigest: calibration?.evidence?.methodAssetsDigest ?? null, qualificationMatches: matches, expiresAt: qualification?.expiresAt ?? null, controls: calibration?.evidence?.results ?? [], error: calibration?.error ?? null }
+  }
+  const admission = createAdmissions({
     root: realpathSync(raw.root), projects: Object.keys(raw.projects), defaultProject: raw.defaultProject, onResult, onNotice: ports?.notice,
     projectsView: () => Object.entries(raw.projects).map(([id, project]) => ({ id, default: id === raw.defaultProject, verificationMethod: project.verification?.methodId ?? null })),
     materialDigest: project => loadManagedMaterials(raw.projects[project]!.readOnlyMaterials).digest,
     runtime: ports?.runtime ?? ((project, root) => {
       const settings = raw.projects[project]!
       const runtime = createManagedRuntime({ ...settings, root, engine: { ...settings.engine, stateRoot: join(root, 'native') } })
-      return managedAdmissionRuntime(runtime, settings)
+      const port = managedAdmissionRuntime(runtime, settings)
+      const waitReady = async () => {
+        if (!settings.verification) return
+        const item = calibrations.get(settings.verification.settings?.entryPath ?? '')
+        if (item) await item.done
+        if (!projectReadiness(project).ready) throw Error('MANAGED_VERIFICATION_NOT_READY')
+      }
+      return { ...port, start: async text => { await waitReady(); return port.start(text) }, wake: async text => { await waitReady(); return port.wake(text) }, amend: async text => { await waitReady(); return port.amend(text) } }
     }),
   })
+  return { ...admission, readiness: () => ({ ...identity, ready: Object.keys(raw.projects).every(id => projectReadiness(id).ready), projects: Object.keys(raw.projects).map(projectReadiness) }), dispose: async () => { await admission.dispose(); await Promise.all([...calibrations.values()].map(item => item.done)) } }
 }

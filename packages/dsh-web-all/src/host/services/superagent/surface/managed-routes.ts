@@ -3,16 +3,18 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 interface AdmissionPort {
   continue(requestId: string, continuationId: string, text: string): unknown
   projects(): unknown
+  readiness?(): unknown
   enqueue(input: { requestId: string; project?: string; text: string; origin: { kind: 'trusted-host' } }): unknown
   read(id: string): unknown
 }
 /** This is the same admission used by the existing authenticated Feishu channel. */
 export function managedWorkRoutes(port: AdmissionPort, isTrusted: (request: IncomingMessage) => boolean): WebRoute[] {
   const reply = (response: ServerResponse, status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)) }
-  return ['projects','intake','status','continue'].map(operation => ({ kind: 'exact' as const, path: '/superagent/managed/' + operation,
+  return ['projects','readiness','intake','status','continue'].map(operation => ({ kind: 'exact' as const, path: '/superagent/managed/' + operation,
     async handler(request: IncomingMessage, response: ServerResponse) {
       if (!isTrusted(request)) { reply(response, 403, { error: 'forbidden' }); return }
-      if (request.method !== (operation === 'projects' ? 'GET' : 'POST')) { reply(response, 405, { error: 'method-not-allowed' }); return }
+      if (request.method !== (['projects','readiness'].includes(operation) ? 'GET' : 'POST')) { reply(response, 405, { error: 'method-not-allowed' }); return }
+      if (operation === 'readiness') { reply(response, 200, port.readiness?.() ?? { ready: false }); return }
       if (operation === 'projects') { reply(response, 200, port.projects()); return }
       let bytes = 0; const chunks: Buffer[] = []
       for await (const chunk of request) { const buffer = Buffer.from(chunk); bytes += buffer.length; if (bytes > 65536) { reply(response, 413, { error: 'body-too-large' }); return }; chunks.push(buffer) }
