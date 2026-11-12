@@ -138,7 +138,7 @@ function calibrationFixture(code = 'export function inspect(value) { return valu
   mkdirSync(repo)
   mkdirSync(provision)
   const git = (...args: string[]) =>
-    execFileSync('/usr/bin/git', ['-C', repo, ...args], { encoding: 'utf8' }).trim()
+    execFileSync('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false', '-C', repo, ...args], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: repo, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }).trim()
   git('init')
   git('config', 'user.email', 'test@example.invalid')
   git('config', 'user.name', 'test')

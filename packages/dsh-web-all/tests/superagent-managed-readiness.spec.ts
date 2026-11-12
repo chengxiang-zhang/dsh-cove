@@ -117,3 +117,13 @@ it('disposal prevents all qualified pending entries from launching', async () =>
   expect((await results).map(r=>r.status)).toEqual(['rejected','rejected','rejected'])
   expect(calls).toEqual([])
 })
+
+it('does not execute user Git hooks while preparing fixed calibration', async () => {
+  const {mkdtempSync,mkdirSync,writeFileSync,existsSync,rmSync}=await import('node:fs'),{tmpdir}=await import('node:os'),{join}=await import('node:path')
+  const {calibrateManagedMethod}=await import('../src/host/services/superagent/managed-readiness.ts')
+  const root=mkdtempSync(join(tmpdir(),'calibration-git-policy-')),hooks=join(root,'hooks'),config=join(root,'gitconfig'),marker=join(root,'hook-ran'),prior=process.env.GIT_CONFIG_GLOBAL
+  mkdirSync(hooks);writeFileSync(join(hooks,'pre-commit'),`#!/bin/sh\nprintf invoked > '${marker}'\n`,{mode:0o700});writeFileSync(config,`[core]\n hooksPath = ${hooks}\n`)
+  process.env.GIT_CONFIG_GLOBAL=config
+  try {await calibrateManagedMethod('git-isolation-control.mjs');expect(existsSync(marker)).toBe(false)}
+  finally {if(prior===undefined)delete process.env.GIT_CONFIG_GLOBAL;else process.env.GIT_CONFIG_GLOBAL=prior;rmSync(root,{recursive:true,force:true})}
+},30000)

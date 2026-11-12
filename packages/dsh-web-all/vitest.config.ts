@@ -10,6 +10,7 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.{ts,tsx}', 'tests/**/*.spec.{ts,tsx}'],
     pool: 'forks',
+    maxWorkers: 4,
     server: {
       deps: {
         inline: ['@deepseek-ai/dsh-client-ui-primitives'],
