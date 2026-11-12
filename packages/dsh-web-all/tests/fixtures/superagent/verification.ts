@@ -8,12 +8,12 @@ import { join } from 'node:path'
 import { createVerificationService } from '../../../src/host/services/superagent/verification/index.ts'
 import { ManagedLedger } from '../../../src/host/services/superagent/kernel/managed-ledger.ts'
 export const verificationCleanup: (() => void)[] = []
-export function verificationFixture(code = 'export function inspect(value) { return value }') {
+export function verificationFixture(code = 'export function inspect(value) { return value }', database = 'ledger.sqlite') {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'p4-')))
   const source = join(root, 'source')
   mkdirSync(source)
   writeFileSync(join(source, 'candidate.mjs'), code)
-  const ledger = new ManagedLedger(join(root, 'ledger.sqlite'))
+  const ledger = new ManagedLedger(join(root, database))
   verificationCleanup.push(() => {
     ledger.close()
     rmSync(root, { recursive: true, force: true })

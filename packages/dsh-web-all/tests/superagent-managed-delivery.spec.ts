@@ -13,9 +13,9 @@ import { inspectDeliveryReceipt } from '../src/host/services/superagent/verifica
 const createLocalGitDelivery = (deps: Omit<Parameters<typeof createGitPort>[0], 'verifyReceipt'>) => createGitPort({ ...deps, verifyReceipt: inspectDeliveryReceipt })
 const roots: string[] = []
 const keeperClosers: (()=>Promise<void>)[] = []
+const unlock = (path: string) => { if (!lstatSync(path).isDirectory()) return; chmodSync(path, 0o700); for (const name of readdirSync(path)) unlock(join(path, name)) }
 afterEach(async () => {
   for (const close of keeperClosers.splice(0)) await close()
-  const unlock = (path: string) => { if (!lstatSync(path).isDirectory()) return; chmodSync(path, 0o700); for (const name of readdirSync(path)) unlock(join(path, name)) }
   for (const root of roots.splice(0)) { unlock(root); rmSync(root, { recursive: true, force: true }) }
 })
 function fixture() {
@@ -155,14 +155,22 @@ import { createManagedLocalDelivery } from '../src/host/services/superagent/inde
 import { verifyWorkspace } from '../src/host/services/superagent/kernel/resources.ts'
 const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
 afterEach(() => { for (const clean of verificationCleanup.splice(0)) clean() })
-it('real controlled host delivery requires complete canonical acceptance, then fulfills once; stale gates and revocation refuse', async () => {
-  const f = fixture(), v = verificationFixture()
+it.each(['service', 'runtime-crash'])('real controlled host delivery requires complete canonical acceptance and recovers exactly once: %s', async scenario => {
+  const f = fixture(), v = verificationFixture(undefined, scenario === 'runtime-crash' ? 'managed.sqlite' : 'ledger.sqlite')
+  if (scenario === 'runtime-crash') { f.storage = join(v.root, 'delivery'); mkdirSync(f.storage) }
   const object = (id: string, kind: string, data: Record<string, unknown>, scope_revision_refs: { id: string; revision: number }[] = []) => ({ id, kind, revision: 1, data, scope_revision_refs, extensions: {} })
   const contractRef = { id: 'delivery-contract', revision: 1 }
   v.ledger.transact([], [{ kind: 'create', object: object(contractRef.id, 'delivery_contract', { intent: 'exact local dev commit', requirement_refs: [{ id: 'requirement', revision: 1 }], step_refs: [f.step.ref], source_refs: [{ id: 'human', revision: 1 }] }, [{ id: 'requirement', revision: 1 }]) as never }])
   const original = v.ledger.get('commitment')!
   delete original.data.state_reason
-  v.ledger.transact([], [{ kind: 'create', object: { ...original, id: 'delivery-work', revision: 1, data: { ...original.data, state: 'proposed', delivery_contract: contractRef }, scope_revision_refs: [...original.scope_revision_refs, contractRef] } }])
+  if (scenario === 'runtime-crash') {
+    const { createManagedRuntime } = await import('../src/host/services/superagent/managed-runtime.ts')
+    const bootstrap = createManagedRuntime({ root: v.root, projectRoot: f.root, publicFiles: ['fix.txt', 'user.txt', 'flags.txt'], implementationWritePaths: ['fix.txt'], engine: { executable: '/never-execute', authFile: '/absent', model: 'fixture', stateRoot: join(v.root, 'native') } })
+    try { bootstrap.coordination.acceptManagedIntent(bootstrap.source, { id: 'delivery-work', intent: 'exact local delivery', requirements: [{ id: 'requirement', revision: 1 }], acceptanceContract: { id: 'contract', revision: 1 }, deliveryContract: contractRef, projects: [bootstrap.project], boundary: 'fixture local Git only', accountable: 'worker:coordinator', policy: bootstrap.policy, nextReviewAt: Date.now() + 60000 }) }
+    finally { await bootstrap.dispose() }
+  } else {
+    v.ledger.transact([], [{ kind: 'create', object: { ...original, id: 'delivery-work', revision: 1, data: { ...original.data, state: 'proposed', delivery_contract: contractRef }, scope_revision_refs: [...original.scope_revision_refs, contractRef] } }])
+  }
   for (const state of ['ready', 'working'] as const) { const c = v.ledger.get('delivery-work')!; v.ledger.transact([{ id: c.id, revision: c.revision }], [{ kind: 'transition', id: c.id, state, reason: 'fixture authorization' }]) }
   const assignment = v.service.registerAssignment({ commitmentId: 'delivery-work', contract: { id: 'contract', revision: 1 }, requirements: [{ id: 'requirement', revision: 1 }], generators: ['engineer'], reviewer: 'qa' })
   const candidate = v.service.collectCandidate(assignment, { sourceRoot: v.source, entry: 'candidate.mjs', exportName: 'inspect', environment: 'fixture' })
@@ -221,6 +229,48 @@ it('real controlled host delivery requires complete canonical acceptance, then f
   v.kernel.host.grantMandate({ id: step.action.mandateRef.id, revision: 1, requester: 'owner', subject: 'host-delivery', target, workspaceId: workspace.id, resourceIds: workspace.resources, actions: ['deliver'], scopeRefs: step.action.scopeRefs, expiresAt: expiry, revoked: false })
   const action = v.kernel.actions.planAction(launch); v.kernel.actions.claimResources(action.ref, workspace.resources)
   const service = createManagedLocalDelivery({ ledger: v.ledger, source: { id: 'host', revision: 1 }, storageRoot: f.storage, host: v.kernel.host, binding: () => binding })
+  if (scenario === 'runtime-crash') {
+    const { createCoordinationService } = await import('../src/host/services/superagent/coordination/intake.ts')
+    const { createManagedRuntime, persistManagedDeliveryResult } = await import('../src/host/services/superagent/managed-runtime.ts')
+    const coordination = createCoordinationService(v.ledger, { id: 'host', revision: 1 })
+    const operationId = 'proposal:runtime-crash:operation'
+    const operation = coordination.host.claimOperation({ id: operationId, inputRef: 'runtime-crash', proposal: { kind: 'verify' }, domainKeys: step.action.resourceIds.map(id => 'resource:' + id), scopeRefs: [], executionSlots: ['delivery'] })
+    coordination.host.bindOperationExecution(operation, { kind: 'controlled', slot: 'delivery', action: action.ref })
+    const apiResult = { candidate, evaluation, verdict: 'pass' }, baseline = { verdict: 'fail' }
+    writeFileSync(join(v.root, 'delivery-intent.json'), JSON.stringify({ step, binding, apiResult, baseline, operationId }))
+    let receipt: Awaited<ReturnType<typeof service.execute>> | undefined
+    await expect((async () => {
+      receipt = await service.execute(step, action.ref)
+      persistManagedDeliveryResult(v.root, { step, receipt, binding })
+      throw Error('FAULT_AFTER_NORMAL_RESULT_WRITE_BEFORE_PROPOSAL_COMPLETION')
+    })()).rejects.toThrow('FAULT_AFTER_NORMAL_RESULT_WRITE_BEFORE_PROPOSAL_COMPLETION')
+    expect(v.ledger.get('delivery-work')!.data.state).toBe('delivering')
+    expect(v.ledger.get(operationId)!.data.state).toBe('running')
+    const commit = git(f.root, ['rev-parse', 'HEAD']), count = git(f.root, ['rev-list', '--count', 'HEAD'])
+    const resultPath = join(v.root, 'delivery-result.json'), originalResult = JSON.parse(readFileSync(resultPath, 'utf8'))
+    const config = { root: v.root, projectRoot: f.root, publicFiles: ['fix.txt', 'user.txt', 'flags.txt'], implementationWritePaths: ['fix.txt'], engine: { executable: '/never-execute', authFile: '/absent', model: 'fixture', stateRoot: join(v.root, 'native') } }
+    let runtime = createManagedRuntime(config)
+    try {
+      writeFileSync(resultPath, JSON.stringify({ ...originalResult, receipt: { ...originalResult.receipt, commit: '0'.repeat(40) } }))
+      const conflicting = readFileSync(resultPath, 'utf8')
+      await expect(runtime.reconcile()).rejects.toThrow('DELIVERY_RECOVERY_RESULT_CONFLICT')
+      expect(readFileSync(resultPath, 'utf8')).toBe(conflicting)
+      expect(runtime.ledger.get('delivery-work')!.data.state).toBe('delivering')
+      await runtime.dispose(); runtime = createManagedRuntime(config)
+      // Formatting and object key order do not change the exact receipt semantics.
+      writeFileSync(resultPath, JSON.stringify({ binding: originalResult.binding, receipt: originalResult.receipt, step: originalResult.step }, null, 2))
+      expect(await runtime.reconcile()).toEqual({ state: 'delivered' })
+      expect(runtime.ledger.get('delivery-work')!.data.state).toBe('fulfilled')
+      expect(runtime.deliveryEvaluation()).toMatchObject({ verdict: 'pass', receipt: { commit: receipt!.commit } })
+      expect(runtime.resultReport()).toContain(receipt!.commit)
+      await runtime.dispose(); runtime = createManagedRuntime(config)
+      expect(await runtime.reconcile()).toEqual({ state: 'delivered' })
+      expect(runtime.deliveryEvaluation().verdict).toBe('pass')
+      expect(git(f.root, ['rev-parse', 'HEAD'])).toBe(commit)
+      expect(git(f.root, ['rev-list', '--count', 'HEAD'])).toBe(count)
+    } finally { await runtime.dispose(); unlock(v.root) }
+    return
+  }
   const originalStep=step, fence=v.kernel.host.fenceDispatch.bind(v.kernel.host)
   const spy=vi.spyOn(v.kernel.host,'fenceDispatch').mockImplementation(ref=>git(f.root,['rev-parse','HEAD'])===step.plannedCommit?{kind:'denial',code:'CONTROL_FENCE',subject:'expired after publication'} as any:fence(ref))
   await expect(service.execute(step,action.ref)).rejects.toThrow('DELIVERY_EXECUTION_FENCED');spy.mockRestore()

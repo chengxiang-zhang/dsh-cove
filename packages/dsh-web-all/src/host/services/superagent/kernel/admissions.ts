@@ -133,7 +133,7 @@ export function createAdmissions(options: AdmissionOptions) {
       const result = await runtime.routeMessage(request.text)
       const latest = read(id), messages = (latest.messages ?? []).map(m => m.request.requestId === request.requestId ? { ...m, state: result.kind, answer: result.answer } : m)
       if (result.kind === 'discussion') { persist({ ...latest, messages }); options.onNotice?.(request, result.answer); return }
-      if (latest.state === 'paused' && (latest.inputs ?? []).length !== (current.inputs ?? []).length) { persist({ ...latest, messages }); options.onNotice?.(request, '事项已暂停，补充尚未执行；请明确继续后应用。'); return }
+      if (latest.state === 'paused') { persist({ ...latest, messages, inputs: [...(latest.inputs ?? []), request] }); options.onNotice?.(request, '事项已暂停，补充尚未执行；请明确继续后应用。'); return }
       persist({ ...latest, state: 'queued', messages, inputs: [...(latest.inputs ?? []), request], nextReviewAt: undefined })
       clearTimer(id); runtime.interrupt(request.text, 'amendment'); schedule(id)
       options.onNotice?.(request, '补充已归入原事项，将按新要求重新验收。')

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import { OwnerInputGate } from './kernel/owner-input.ts'
 import { createAdmissions, type AdmissionRequest, type AdmissionRuntime } from './kernel/admissions.ts'
 import { deliverTechnicalReply } from './executors/native/technical-reply.ts'
@@ -107,6 +108,12 @@ export async function releaseManagedSession(ledger: Pick<ManagedLedger, 'get'>, 
 export function latestFrameworkBaseline(ledger: ManagedLedger): any {
   const event = ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound', latest: true })[0]?.body as any
   return event?.coordination.payload.payload
+}
+
+/** The normal publication boundary: receipt persisted, proposal completion still pending. */
+export function persistManagedDeliveryResult(root: string, result: { step: DeliveryStep; receipt: DeliveryReceipt; binding: DeliveryAcceptanceBinding }) {
+  const { step, receipt, binding } = result
+  writeFileSync(join(root, 'delivery-result.json'), JSON.stringify({ step, receipt, binding }), { flag: 'wx', mode: 0o600 })
 }
 
 /** Only the trusted web-all host creates this runtime. JSON intake material cannot construct a grant. */
@@ -401,7 +408,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     const action = kernel.actions.planAction(spec); kernel.actions.claimResources(action.ref, workspace.resources)
     const receipt = await delivery.execute(step, action.ref)
     delivered = { step, receipt, binding, operationId }
-    writeFileSync(join(root, 'delivery-result.json'), JSON.stringify({ step, receipt, binding }), { flag: 'wx', mode: 0o600 })
+    persistManagedDeliveryResult(root, delivered)
     return json({ status: 'delivered-local', ...apiResult, commitment: work, receipt, priorPlatformGoal: 'unchanged' })
   }
   const qualifications = ['coordinator','roles','context','executor','verifier','observer'].map(id => ({ plugin_id: 'builtin:'+id, version: '1.0.0', evidence_ref: id === 'verifier' ? 'P4a:independent-fix1-qualified-json-equality' : 'P5a:independent-canonical-and-ports-pass/P3:actual-native', expires_at: Date.now()+1800000 }))
@@ -608,9 +615,12 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       const recovered=await delivery.recoverPublished(intent.step.ref)
       delivered={...recovered,binding:intent.binding,operationId:intent.operationId}
       const result=json({status:'delivered-local',...intent.apiResult,commitment:recovered.step.action.target,receipt:recovered.receipt,priorPlatformGoal:'unchanged'})
-      const resultPath=join(root,'delivery-result.json'), stored=JSON.stringify(delivered)
-      if(existsSync(resultPath)){if(readFileSync(resultPath,'utf8')!==stored)throw Error('DELIVERY_RECOVERY_RESULT_CONFLICT')}
-      else writeFileSync(resultPath,stored,{flag:'wx',mode:0o600})
+      const resultPath=join(root,'delivery-result.json')
+      if(existsSync(resultPath)){
+        let stored: unknown
+        try { stored=JSON.parse(readFileSync(resultPath,'utf8')) } catch { throw Error('DELIVERY_RECOVERY_RESULT_CONFLICT') }
+        if(!isDeepStrictEqual(stored,{step:delivered.step,receipt:delivered.receipt,binding:delivered.binding}))throw Error('DELIVERY_RECOVERY_RESULT_CONFLICT')
+      } else persistManagedDeliveryResult(root,delivered)
       const currentOperation=ledger.get(intent.operationId)!
       if(currentOperation.data.state==='completed' && (currentOperation.data.result as any)?.status==='reconciled') {
         const prior=currentOperation.data.result as any
