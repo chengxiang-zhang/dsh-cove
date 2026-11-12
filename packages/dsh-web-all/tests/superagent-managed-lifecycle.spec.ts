@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -534,12 +534,13 @@ it.each(['proof-id', 'proof-revision', 'commitment', 'commitment-revision', 'sou
   expect(runtime.ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound' })).toHaveLength(1)
 })
 
-async function borrowedContinuationFixture() {
+async function borrowedContinuationFixture(orphan = false) {
   const f = await continuationFixture(), { runtime } = f, kernel = runtime.kernel
   vi.mocked(runtime.ledger.snapshot).mockImplementation(f.originalSnapshot)
   const workspace = runtime.workspaces.get('coordinator')!.workspace, target = { id: 'requirement', revision: 1 }, expiresAt = Date.now() + 60000
+  if (orphan) mkdirSync(f.config.engine.stateRoot,{recursive:true})
   const executable = f.config.engine.executable, args = ['app-server', '--stdio'], control = kernel.host.grantControl(target, 'fixture-worker', expiresAt)
-  kernel.host.grantCapability({ id: 'rpc-fixture-cap', revision: 1, expiresAt, scopeRefs: [], evidenceRefs: ['fixture-authorized-native'], externalTools: 'blocked', revoked: false, launch: { executable, args, processPolicy: 'single' } })
+  kernel.host.grantCapability({ id: 'rpc-fixture-cap', revision: 1, expiresAt, scopeRefs: [], evidenceRefs: ['fixture-authorized-native'], externalTools: 'blocked', revoked: false, launch: { executable, args, processPolicy: 'single' }, ...(orphan ? {nativeRuntime:{root:realpathSync(f.config.engine.stateRoot),stateDirectoryVariable:'CODEX_HOME',network:'engine-transport' as const,evidenceRefs:['fixture-native-only']}} : {}) })
   kernel.host.grantMandate({ id: 'rpc-fixture-mandate', revision: 1, requester: 'fixture-owner', subject: 'fixture-worker', target, actions: ['dispatch','attach','respond_request','collect','inspect'], workspaceId: workspace.id, resourceIds: workspace.resources, scopeRefs: [], expiresAt, revoked: false })
   const spec = { id: 'native-parent', idempotencyKey: 'native-parent', requester: 'fixture-owner', subject: 'fixture-worker', target, epoch: control.epoch, mandateRef: { id: 'rpc-fixture-mandate', revision: 1 }, capabilityRef: { id: 'rpc-fixture-cap', revision: 1 }, kind: 'dispatch' as const, workspaceId: workspace.id, resourceIds: workspace.resources, scopeRefs: [], purpose: 'engineering' as const, executable, args, timeoutMs: 30000, processPolicy: 'single' as const }
   const planned = kernel.actions.planAction(spec); kernel.actions.claimResources(planned.ref, spec.resourceIds)
@@ -553,7 +554,13 @@ async function borrowedContinuationFixture() {
     if (name === 'confirmed-attach') kernel.host.completeOperation(sent.actionRef, { ownerRef: parent.actionRef, payloadDigest, nativeRequestId, responseDigest: createHash('sha256').update('response').digest('hex') }, ['native-response'])
     else kernel.actions.recordActionResult(sent.actionRef, { status: 'unknown', stopped: false, evidenceRefs: [], reason })
   }
-  kernel.host.reconcileAction(parent.actionRef, { status: 'failed', stopped: true, evidenceRefs: ['native-cessation'], reason: 'TIMEOUT' })
+  const receipt = { status: 'failed' as const, stopped: true, evidenceRefs: ['native-cessation'], reason: 'LIVE_FENCE_REVOKED' }
+  if (orphan) {
+    kernel.actions.planAction({ ...spec, id: 'orphan-rpc', idempotencyKey: 'orphan-rpc', kind: 'collect', payloadDigest: createHash('sha256').update('pending-rpc').digest('hex') })
+    kernel.host.observeNative(parent.actionRef, 'execution:' + parent.actionRef.id, { kind: 'process_exit', launchRef: parent.actionRef, executionDigest: createHash('sha256').update(JSON.stringify(spec)).digest('hex'), receipt } as never)
+  }
+  kernel.host.reconcileAction(parent.actionRef, receipt)
+  // Parent finality is the fence even while control/capability leases remain current.
   await runtime.reconcile()
   return { ...f, parent, spec }
 }
@@ -600,4 +607,109 @@ it.each(['unowned', 'missing-borrow-event', 'forged-owner', 'parent-live', 'diff
   expect(runtime.ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound' })).toHaveLength(0)
   expect(runtime.ledger.eventEntries({ runtimeEvent: 'job_baseline' })).toHaveLength(1)
   expect(runtime.ledger.snapshot('profile_qualification')).toHaveLength(0)
+})
+
+
+it('continues after an exact canonical RPC plan lost its parent before borrowing without fabricating a receipt', async () => {
+  const f = await borrowedContinuationFixture(true), original = f.runtime.ledger.get('orphan-rpc')
+  await expect(f.runtime.prepareContinuation(true)).resolves.toMatchObject({ head: f.after })
+  expect(f.runtime.ledger.get('orphan-rpc')).toEqual(original)
+  expect(original).toMatchObject({ revision: 1, data: { state: 'planned' } })
+  expect(original!.data.receipt).toBeUndefined()
+  expect(()=>f.runtime.kernel.host.borrowSessionResources({id:'orphan-rpc',revision:1},f.parent.actionRef)).toThrow('SESSION_OWNER_FENCED')
+  expect(f.runtime.kernel.host.reserveNativeExchange({id:'orphan-rpc',revision:1},f.parent.actionRef,'pending-rpc')).toMatchObject({kind:'denial'})
+  expect(f.runtime.ledger.get('orphan-rpc')).toEqual(original)
+})
+
+async function retainedContinuationFixture() {
+  const f = await continuationFixture(), { runtime } = f
+  await runtime.reconcile()
+  const contract = runtime.ledger.get('work')!.data.acceptance_contract as any
+  const evidence = runtime.coordination.host.recordRuntimeEvent('implementation-input','fixture-input',{original:true},[contract])
+  const op = runtime.coordination.host.claimOperation({id:'implemented',inputRef:'original-input',proposal:{kind:'look'},domainKeys:['seat:worker:implementation'],scopeRefs:runtime.coordination.semanticScopes('work'),executionSlots:[]})
+  const professionalResultRef = runtime.coordination.host.recordRuntimeEvent('professional:original','professional_result',{operationId:op.id,role:'implementation',nativeSessionId:'original-thread',turnId:'original-turn'},[contract,runtime.workers.get('implementation')!],[evidence.id])
+  const completed = {...runtime.ledger.get(op.id)!,data:{...runtime.ledger.get(op.id)!.data,state:'completed',result:{status:'observed',role:'implementation',evidence:professionalResultRef}}}
+  const originalGet=runtime.ledger.get.bind(runtime.ledger)
+  const fixtureContext = {id:'implementation-context',revision:1,kind:'context_envelope',data:{envelope:{commitmentId:'work',assignment:{id:'implementation-team',revision:1},semanticRefs:[contract]}}}
+  const fixtureTeam = {id:'implementation-team',revision:1,kind:'team_assignment',data:{commitment_id:'work',worker_ref:runtime.workers.get('implementation')}}
+  vi.spyOn(runtime.ledger,'get').mockImplementation(id=>id===op.id?completed:id===evidence.id?{...originalGet(id)!,kind:'context_input',data:{context_ref:{id:fixtureContext.id,revision:1},worker_ref:runtime.workers.get('implementation')!,native_session_id:'original-thread',turn_id:'original-turn'}}:id===fixtureContext.id?fixtureContext as any:id===fixtureTeam.id?fixtureTeam as any:originalGet(id))
+  const binding = {id:'fixture-binding',kind:'session_binding',revision:1,data:{worker_ref:runtime.workers.get('implementation'),host_ref:{id:'host:local',revision:1},engine_ref:'codex',runtime_namespace:f.config.engine.stateRoot+'/implementation',native_session_id:'original-thread'}}
+  const snapshot = vi.mocked(runtime.ledger.snapshot).getMockImplementation()!
+  vi.mocked(runtime.ledger.snapshot).mockImplementation(kind => kind==='session_binding'?[binding] as any:snapshot(kind).map(o=>o.id===op.id?completed:o))
+  for (const state of ['ready','working'] as const) { const work=runtime.ledger.get('work')!; runtime.ledger.transact([{id:work.id,revision:work.revision}],[{kind:'transition',id:work.id,state,reason:'fixture implementation'}]) }
+  const { createVerificationService } = await import('../src/host/services/superagent/verification/index.ts'), { managedVerificationMethod } = await import('../src/host/services/superagent/executors/managed-verification-method.ts')
+  const service=createVerificationService(runtime.ledger,runtime.source,join(f.config.root,'verification'))
+  const assignment=service.registerAssignment({commitmentId:'work',contract,requirements:[{id:'requirement',revision:1}],generators:[JSON.stringify([binding.data.host_ref,binding.data.engine_ref,binding.data.runtime_namespace,binding.data.native_session_id])],reviewer:'independent-quality'})
+  const prepared=join(f.config.root,'prepared-candidate');mkdirSync(prepared)
+  writeFileSync(join(prepared,'input.ts'),'export const value = 2\n')
+  for (const [path,bytes] of Object.entries(managedVerificationMethod('codex-runTurn-replay@1').assets)) writeFileSync(join(prepared,path),bytes)
+  const candidateRef=service.collectCandidate(assignment,{sourceRoot:prepared,entry:'candidate.mjs',exportName:'inspect',environment:'node-local:codex-runTurn-replay@1'})
+  service.assessCandidate(contract,candidateRef,[])
+  writeFileSync(join(f.config.root,'implementation','input.ts'),'export const value = 2\n')
+  writeFileSync(join(f.config.root,'quality','input.ts'),'export const value = 2\n')
+  const proof={candidateRef,manifestDigest:String(runtime.ledger.get(candidateRef.id)!.data.digest),professionalResultRef,evidenceRefs:[professionalResultRef.id]}
+  ;(f.config.frameworkBaselineTransition as any).retainedCandidate=proof
+  return {...f,proof,assignment,candidate:runtime.ledger.get(candidateRef.id)!,binding}
+}
+
+it('retains only the exact host-frozen candidate during first framework adoption and preserves failed evidence', async () => {
+  const f=await retainedContinuationFixture(), work=f.runtime.ledger.get('work'), evaluations=f.runtime.ledger.snapshot('evaluation'), candidate=f.candidate
+  await expect(f.runtime.prepareContinuation(true)).resolves.toMatchObject({head:f.after})
+  expect(f.runtime.ledger.get('work')).toEqual(work);expect(f.runtime.ledger.get(candidate.id)).toEqual(candidate);expect(f.runtime.ledger.snapshot('evaluation')).toEqual(evaluations)
+  writeFileSync(join(f.config.root,'implementation','input.ts'),'export const value = 3\n')
+  await expect(f.runtime.prepareContinuation(true)).resolves.toMatchObject({head:f.after})
+  expect(f.runtime.ledger.eventEntries({runtimeEvent:'framework_baseline_bound'})).toHaveLength(1)
+})
+
+it.each(['generic-cap','missing-cap','borrowed','framed','opened','leased','parent-leased','missing-exit','bad-exit','changed-plan','sent','unknown','ambiguous-parent','live-parent'])('rejects never-started RPC proof with %s', async failure => {
+  const f=await borrowedContinuationFixture(true), {runtime}=f
+  if (['generic-cap','missing-cap','borrowed','framed','opened','leased','parent-leased'].includes(failure)) {
+    const {DatabaseSync}=await import('node:sqlite'),db=new DatabaseSync(join(f.config.root,'managed.sqlite'))
+    try { const state=JSON.parse(String(db.prepare('SELECT body_json FROM sa_managed_control WHERE singleton=1').get()!.body_json))
+      if(failure==='generic-cap')delete state.capabilities.find((c:any)=>c.id==='rpc-fixture-cap').nativeRuntime
+      if(failure==='missing-cap')state.capabilities=state.capabilities.filter((c:any)=>c.id!=='rpc-fixture-cap')
+      if(failure==='borrowed')state.borrowed.push({actionId:'orphan-rpc',ownerRef:f.parent.actionRef})
+      if(failure==='framed')(state.frames??=[]).push({actionId:'orphan-rpc',digest:'frame'})
+      if(failure==='opened')(state.opened??=[]).push('orphan-rpc')
+      if(failure==='leased')state.resources.push({...state.resources[0],actionRef:{id:'orphan-rpc',revision:1}})
+      if(failure==='parent-leased')state.resources[0].status='held'
+      db.prepare('UPDATE sa_managed_control SET body_json=? WHERE singleton=1').run(JSON.stringify(state))
+    }finally{db.close()}
+  }
+  if(failure==='missing-exit'||failure==='bad-exit'){const entries=runtime.ledger.eventEntries.bind(runtime.ledger);vi.spyOn(runtime.ledger,'eventEntries').mockImplementation(filter=>filter.nativeKind==='process_exit'?failure==='missing-exit'?[]:entries(filter).map(e=>{const body=JSON.parse(JSON.stringify(e.body));body.controlled.command.observation.executionDigest='forged';return{...e,body}}):entries(filter))}
+  if(['changed-plan','sent','unknown','ambiguous-parent','live-parent'].includes(failure))vi.mocked(runtime.ledger.snapshot).mockImplementation(kind=>{
+    const objects=f.originalSnapshot(kind).map(o=>o.id==='orphan-rpc'&&['changed-plan','sent','unknown'].includes(failure)?{...o,revision:failure==='changed-plan'?1:2,data:{...o.data,state:failure==='changed-plan'?'planned':failure,execution_spec:{...(o.data.execution_spec as any),...(failure==='changed-plan'?{nativeRequestId:'forged'}:{})}}}:o.id==='native-parent'&&failure==='live-parent'?{...o,data:{...o.data,receipt:{stopped:false}}}:o)
+    if(kind==='action'&&failure==='ambiguous-parent')objects.push({...objects.find(o=>o.id==='native-parent')!,id:'ambiguous-parent'})
+    return objects
+  })
+  await expect(runtime.prepareContinuation(true)).rejects.toThrow('MANAGED_CONTINUATION_NOT_QUIESCENT')
+  expect(runtime.ledger.eventEntries({runtimeEvent:'framework_baseline_bound'})).toHaveLength(0)
+  expect(runtime.ledger.snapshot('profile_qualification')).toHaveLength(0)
+})
+
+it.each(['manifest','candidate-revision','professional-revision','wrong-work','wrong-contract','unfrozen','changed-file','extra-file','asset','quality-dirty','unauthorized-path','stale-result','accepted','gate','publish'])('rejects retained candidate with %s without new baseline or qualification', async failure => {
+  const f=await retainedContinuationFixture(),{runtime}=f
+  if(failure==='manifest')f.proof.manifestDigest='forged'
+  if(failure==='candidate-revision')f.proof.candidateRef={...f.proof.candidateRef,revision:2}
+  if(failure==='professional-revision')f.proof.professionalResultRef={...f.proof.professionalResultRef,revision:2}
+  if(failure==='unfrozen')chmodSync(join(String(f.candidate.data.root),'input.ts'),0o600)
+  if(failure==='changed-file')writeFileSync(join(f.config.root,'implementation','input.ts'),'unfrozen change')
+  if(failure==='extra-file')writeFileSync(join(f.config.root,'implementation','extra.ts'),'unauthorized')
+  if(failure==='asset'){chmodSync(join(String(f.candidate.data.root),'candidate.mjs'),0o600);writeFileSync(join(String(f.candidate.data.root),'candidate.mjs'),'forged');chmodSync(join(String(f.candidate.data.root),'candidate.mjs'),0o400)}
+  if(failure==='quality-dirty')writeFileSync(join(f.config.root,'quality','input.ts'),'arbitrary mix')
+  if(failure==='unauthorized-path')f.config.implementationWritePaths=[]
+  if(failure==='gate')mkdirSync(join(f.config.root,'gate-work-started'))
+  if(failure==='publish')writeFileSync(join(f.config.root,'delivery-intent.json'),'{}')
+  if(failure==='stale-result')runtime.coordination.host.recordRuntimeEvent('professional:new','professional_result',{operationId:'new',role:'implementation',nativeSessionId:'original-thread'},[{id:'acceptance',revision:1}],['implementation-input'])
+  if(failure==='wrong-work'||failure==='wrong-contract'){const get=vi.mocked(runtime.ledger.get).getMockImplementation()!;vi.spyOn(runtime.ledger,'get').mockImplementation(id=>{const o=get(id);return id===f.assignment.id&&o?{...o,data:{...o.data,...(failure==='wrong-work'?{commitment_id:'other-work'}:{contract_ref:{id:'acceptance',revision:2}})}}:o})}
+  if(failure==='accepted'){const snapshot=vi.mocked(runtime.ledger.snapshot).getMockImplementation()!;vi.mocked(runtime.ledger.snapshot).mockImplementation(kind=>kind==='evaluation'?snapshot(kind).map(o=>({...o,data:{...o.data,verdict:'pass'}})):snapshot(kind))}
+  await expect(runtime.prepareContinuation(true)).rejects.toThrow()
+  expect(runtime.ledger.eventEntries({runtimeEvent:'framework_baseline_bound'})).toHaveLength(0)
+  expect(runtime.ledger.snapshot('profile_qualification')).toHaveLength(0)
+})
+
+it('retains a frozen implementation while quality still has the complete original baseline', async () => {
+  const f=await retainedContinuationFixture()
+  writeFileSync(join(f.config.root,'quality','input.ts'),'export const value = 1\n')
+  await expect(f.runtime.prepareContinuation(true)).resolves.toMatchObject({head:f.after})
 })

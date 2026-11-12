@@ -19,7 +19,7 @@ export interface ManagedEventFilter {
  nativeStream?: string; nativeKind?: string; nativeThreadId?: string; workerRegistration?: Ref
  profileRegistration?: Ref; workspaceRoot?: string; workspaceRole?: string; runtimeEvent?: string; deliveryStep?: Ref
  latest?: boolean; afterSequence?: number; nativeKinds?: string[]; nativeRpcMethod?: string
- operationRetirement?: Ref; operationClaim?: string; controlledPlanKind?: string; controlledPlans?: boolean; nativeTurnId?: string; nativeInputText?: string
+ verificationObject?: Ref; operationRetirement?: Ref; operationClaim?: string; controlledPlanKind?: string; controlledPlans?: boolean; nativeTurnId?: string; nativeInputText?: string
 }
 export class ManagedLedger {
  readonly #db: DatabaseSync
@@ -67,6 +67,7 @@ export class ManagedLedger {
   if (filter.profileRegistration) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='profile' AND json_extract(body_json,'$.coordination.payload.input.id')=? AND EXISTS(SELECT 1 FROM json_each(body_json,'$.refs') WHERE json_extract(value,'$.id')=? AND json_extract(value,'$.revision')=?)"); values.push(filter.profileRegistration.id, filter.profileRegistration.id, filter.profileRegistration.revision) }
   for (const [key, value] of [['root', filter.workspaceRoot], ['role', filter.workspaceRole]] as const) if (value !== undefined) { clauses.push("json_extract(body_json,'$.controlled.kind')='host' AND json_extract(body_json,'$.controlled.command.kind')='workspace' AND json_extract(body_json,'$.controlled.command.workspace."+key+"')=?"); values.push(value) }
   if (filter.runtimeEvent !== undefined) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='runtime_event' AND json_extract(body_json,'$.coordination.payload.event')=?"); values.push(filter.runtimeEvent) }
+  if (filter.verificationObject) { clauses.push("EXISTS(SELECT 1 FROM json_each(body_json,'$.objects') WHERE json_extract(value,'$.id')=? AND json_extract(value,'$.revision')=?)"); values.push(filter.verificationObject.id, filter.verificationObject.revision) }
   if (filter.operationRetirement) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='retire_interrupted' AND EXISTS(SELECT 1 FROM json_each(body_json,'$.refs') WHERE json_extract(value,'$.id')=? AND json_extract(value,'$.revision')=?)"); values.push(filter.operationRetirement.id, filter.operationRetirement.revision) }
   if (filter.operationClaim !== undefined) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='operation_claim' AND json_extract(body_json,'$.coordination.payload.input.id')=?"); values.push(filter.operationClaim) }
   if (filter.controlledPlanKind !== undefined) { clauses.push("json_extract(body_json,'$.controlled.kind')='plan' AND json_extract(body_json,'$.controlled.spec.kind')=?"); values.push(filter.controlledPlanKind) }
@@ -96,6 +97,34 @@ export class ManagedLedger {
    const operation = (action.data.receipt as any)?.operation
    if (operation && (!isDeepStrictEqual(operation.ownerRef, ownerRef) || operation.payloadDigest !== spec.payloadDigest || operation.nativeRequestId !== spec.nativeRequestId)) continue
    ceased.add(action.id)
+  }
+  // A plan can survive a native revocation race before borrowing ever succeeds.
+  // A stopped terminal parent cannot satisfy ownerValid (exact revision + sent), even
+  // when its control lease is not revoked. Native-runtime capabilities exclude helper/run escape.
+  const planned = actions.filter(action => action.revision === 1 && action.data.state === 'planned' && !action.data.receipt && (action.data.execution_spec as any)?.kind !== 'dispatch' && /^[a-f0-9]{64}$/.test((action.data.execution_spec as any)?.payloadDigest ?? ''))
+  if (planned.length) {
+   const ids = planned.map(action => action.id), placeholders = ids.map(() => '?').join(',')
+   const plans = this.#db.prepare("SELECT sequence,body_json FROM sa_managed_event WHERE json_extract(body_json,'$.controlled.kind')='plan' AND json_extract(body_json,'$.controlled.spec.id') IN ("+placeholders+")").all(...ids).map(row => ({sequence:Number(row.sequence),body:JSON.parse(String(row.body_json))}))
+   const started = new Set(this.#db.prepare("SELECT body_json FROM sa_managed_event WHERE json_extract(body_json,'$.controlled.kind') IN ('borrow','frame','helper','process_open')").all().map(row => JSON.parse(String(row.body_json)).controlled.ref?.id))
+   const exits = this.eventEntries({nativeKind:'process_exit'}).map(event => ({sequence:event.sequence,source:(event.body as any).controlled.source,command:(event.body as any).controlled.command}))
+   const results = this.#db.prepare("SELECT sequence,body_json FROM sa_managed_event WHERE json_extract(body_json,'$.controlled.kind')='result' AND json_extract(body_json,'$.controlled.receipt.stopped')=1").all().map(row=>({sequence:Number(row.sequence),body:JSON.parse(String(row.body_json))}))
+   for (const action of planned) {
+    if (borrowed.has(action.id) || opened.has(action.id) || started.has(action.id) || state.frames?.some((frame:any)=>frame.actionId===action.id) || state.resources.some((lease:any)=>lease.actionRef.id===action.id)) continue
+    const spec = action.data.execution_spec as any, plan = plans.filter(event => event.body.controlled.spec.id === action.id)
+    if (plan.length !== 1 || !isDeepStrictEqual(plan[0]!.body.controlled.spec,spec) || !isDeepStrictEqual(plan[0]!.body.refs,[{id:action.id,revision:1}])) continue
+    const fields = ['subject','requester','target','epoch','workspaceId','resourceIds','scopeRefs','mandateRef','capabilityRef','executable','args','processPolicy']
+    const parents = actions.filter(owner => (owner.data.execution_spec as any)?.kind === 'dispatch' && fields.every(key => isDeepStrictEqual(spec[key],(owner.data.execution_spec as any)[key])))
+    if (parents.length !== 1) continue
+    const owner=parents[0]!, parent=owner.data.execution_spec as any, receipt=owner.data.receipt as any
+    const capability=state.capabilities.find((cap:any)=>isDeepStrictEqual({id:cap.id,revision:cap.revision},parent.capabilityRef))
+    if (!capability?.nativeRuntime || capability.externalTools!=='blocked' || !isDeepStrictEqual(capability.launch,{executable:parent.executable,args:parent.args,processPolicy:parent.processPolicy}) || !['confirmed','failed'].includes(String(owner.data.state)) || receipt?.stopped !== true || state.resources.some((lease:any)=>lease.actionRef.id===owner.id && lease.status==='held')) continue
+    const digest=createHash('sha256').update(JSON.stringify(parent)).digest('hex')
+    if (!exits.some(({sequence,source,command})=>{
+     const {observation: _observation,...observedReceipt}=command.observation.receipt ?? {}
+     return sequence>plan[0]!.sequence && command.stream==='execution:'+owner.id && command.actionRef.id===owner.id && command.actionRef.revision+1===owner.revision && isDeepStrictEqual(command.actionRef,command.observation.launchRef) && command.observation.executionDigest===digest && isDeepStrictEqual(observedReceipt,receipt) && results.some(result=>result.sequence>sequence && isDeepStrictEqual(result.body.controlled.ref,command.actionRef) && isDeepStrictEqual(result.body.controlled.source,source) && isDeepStrictEqual(result.body.controlled.receipt,receipt) && isDeepStrictEqual(result.body.refs,[{id:owner.id,revision:owner.revision}]))
+    })) continue
+    ceased.add(action.id)
+   }
   }
   return ceased
  }

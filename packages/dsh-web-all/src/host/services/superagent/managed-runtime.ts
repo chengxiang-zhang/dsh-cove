@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
+import { verifyRetainedFrameworkCandidate, type RetainedFrameworkCandidate } from './framework-candidate.ts'
 import { OwnerInputGate } from './kernel/owner-input.ts'
 import { createAdmissions, type AdmissionRequest, type AdmissionRuntime } from './kernel/admissions.ts'
 import { deliverTechnicalReply } from './executors/native/technical-reply.ts'
@@ -41,7 +42,7 @@ export interface ManagedRuntimeConfig {
   interruptedVerificationHandoff?: InterruptedVerificationHandoff
   contractPartition?: ContractPartition
   readOnlyMaterials?: ManagedMaterial[]
-  frameworkBaselineTransition?: { commitmentId: string; before: string; after: string; evidenceRefs: string[] }
+  frameworkBaselineTransition?: { commitmentId: string; before: string; after: string; evidenceRefs: string[]; retainedCandidate?: RetainedFrameworkCandidate }
   verification?: { methodId: string; settings?: import('./executors/managed-verification-method.ts').ManagedVerificationMethodSettings; qualification: { runtimeDigest: string; methodAssetsDigest: string; evidenceRefs: string[]; expiresAt: number } }
   projectVerification?: Omit<Parameters<typeof sealProjectInputs>[0], 'sourceRoot' | 'sourceFiles' | 'destination' | 'provenance'> & { authorizationVersion: string }
   initialMaterials?: string
@@ -762,6 +763,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
         && previous?.before === transition.before
         && previous?.after === transition.after
         && isDeepStrictEqual(previous?.evidenceRefs, transition.evidenceRefs)
+        && isDeepStrictEqual(previous?.retainedCandidate, transition.retainedCandidate)
         && baseline?.proofRef?.id === boundCommand?.payload.id
         && baseline?.proofRef?.revision === 1
         && (boundEvent?.sequence ?? Infinity) < (baselineEvent?.sequence ?? 0)
@@ -803,10 +805,11 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
         const prepared = workspaces.get(role)!
         if (prepared.workspace.sourceStatus !== 'explicit-public-input:' + createHash('sha256').update(JSON.stringify(prepared.manifest)).digest('hex')) throw Error('MANAGED_PUBLIC_INPUT_CHANGED')
       }
+      const retainedRoots = frameworkOnly && transition.retainedCandidate ? verifyRetainedFrameworkCandidate({ ledger, root, projectRoot: config.projectRoot, before: transition.before, work: ledger.get(work.id)!, proof: transition.retainedCandidate, publicFiles: config.publicFiles, writePaths: config.implementationWritePaths, assets: method.assets, implementation: workspaces.get('implementation')!.workspace.root, quality: workspaces.get('quality')!.workspace.root }) : new Set<string>()
       for (const path of config.publicFiles) {
         const before = treeEntries(config.projectRoot, transition.before).get(path), after = treeEntries(config.projectRoot, head).get(path)
         if (!before || !after || before.blob !== after.blob || before.mode !== after.mode) throw Error('MANAGED_BASELINE_BUSINESS_CHANGED')
-        for (const sourceRoot of [config.projectRoot, ...['coordinator','implementation','quality'].map(role => workspaces.get(role)!.workspace.root)]) { if ((partition && sourceRoot === partition.candidateRoot) || (handoff && [handoff.candidateRoot, workspaces.get('quality')!.workspace.root].includes(sourceRoot))) continue; const entry = file(sourceRoot, path); if (!entry || entry.blob !== before.blob || entry.mode !== before.mode) throw Error('MANAGED_CANDIDATE_NOT_UNCHANGED') }
+        for (const sourceRoot of [config.projectRoot, ...['coordinator','implementation','quality'].map(role => workspaces.get(role)!.workspace.root)]) { if (retainedRoots.has(sourceRoot)) continue; if ((partition && sourceRoot === partition.candidateRoot) || (handoff && [handoff.candidateRoot, workspaces.get('quality')!.workspace.root].includes(sourceRoot))) continue; const entry = file(sourceRoot, path); if (!entry || entry.blob !== before.blob || entry.mode !== before.mode) throw Error('MANAGED_CANDIDATE_NOT_UNCHANGED') }
       }
       if (frameworkOnly) {
         const qualified = config.verification!.qualification
