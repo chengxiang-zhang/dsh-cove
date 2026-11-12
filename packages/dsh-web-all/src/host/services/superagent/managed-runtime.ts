@@ -16,7 +16,7 @@ import { planLocalGitDelivery } from './executors/delivery/local-git.ts'
 import { git, gitBytes, file, treeEntries, manifestDigest } from './executors/delivery/git.ts'
 import { resourceIds } from './protocol/execution.ts'
 import { deliveryReportText } from './protocol/delivery.ts'
-import { mkdirSync, rmSync, realpathSync, readFileSync, writeFileSync, mkdtempSync, chmodSync, existsSync, renameSync, openSync, closeSync, fsyncSync, statSync, readdirSync } from 'node:fs'
+import { mkdirSync, rmSync, realpathSync, readFileSync, writeFileSync, mkdtempSync, chmodSync, existsSync, renameSync, openSync, closeSync, fsyncSync, statSync, lstatSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
 import { ManagedLedger } from './kernel/managed-ledger.ts'
@@ -1046,24 +1046,48 @@ export function createManagedAdmission(config: ManagedHostConfig, onResult: (req
   if (!raw.root || !raw.defaultProject || !Object.hasOwn(raw.projects ?? {}, raw.defaultProject)) throw new Error('MANAGED_HOST_PROJECT_REQUIRED')
   mkdirSync(raw.root, { recursive: true, mode: 0o700 })
   const identity = managedLoadedIdentity()
-  const calibrations = new Map<string, { state: string; evidence?: Awaited<ReturnType<typeof calibrateManagedMethod>>; error?: string; done: Promise<void> }>()
+  const calibrations = new Map<string, { state: string; evidence?: Awaited<ReturnType<typeof calibrateManagedMethod>>; error?: string; diagnosticPersistence?: 'saved' | 'failed'; done: Promise<void> }>()
   for (const project of Object.values(raw.projects)) {
     const entry = project.verification?.methodId === 'javascript-module@1' ? project.verification.settings?.entryPath : undefined
     if (!entry || calibrations.has(entry)) continue
-    const item: { state: string; evidence?: Awaited<ReturnType<typeof calibrateManagedMethod>>; error?: string; done: Promise<void> } = { state: 'pending', done: Promise.resolve() }
+    const item: { state: string; evidence?: Awaited<ReturnType<typeof calibrateManagedMethod>>; error?: string; diagnosticPersistence?: 'saved' | 'failed'; done: Promise<void> } = { state: 'pending', done: Promise.resolve() }
     item.done = calibrateManagedMethod(entry).then(evidence => {
       item.evidence = evidence; item.state = 'pass'
       const path = join(raw.root, 'readiness-' + identity.generation + '-' + methodAssetDigest(entry) + '.json'), bytes = JSON.stringify(evidence)
       if (!existsSync(path)) writeFileSync(path, bytes, { flag: 'wx', mode: 0o400 })
       else if (readFileSync(path, 'utf8') !== bytes) throw Error('MANAGED_CALIBRATION_EVIDENCE_CHANGED')
-    }).catch(error => { item.state = 'fail'; item.error = error instanceof Error ? error.message.split(':')[0] : 'CALIBRATION_FAILED' })
+    }).catch(error => {
+      item.state = 'fail'; item.error = error instanceof Error ? error.message.split(':')[0] : 'CALIBRATION_FAILED'
+      try {
+        const home = lstatSync(raw.root)
+        if (!home.isDirectory() || home.uid !== process.getuid?.() || (home.mode & 0o077)) throw Error('PRIVATE_HOME_REQUIRED')
+        const detail = error as { calibrationControl?: unknown; subprocessDiagnostic?: Record<string, unknown> }
+        const child = detail?.subprocessDiagnostic
+        // Explicit fields only: never serialize an error, launch input, stdout or environment.
+        const subprocess = child ? {
+          code: typeof child.code === 'number' ? child.code : null,
+          signal: typeof child.signal === 'string' ? child.signal.slice(0, 32) : null,
+          timeoutMs: typeof child.timeoutMs === 'number' ? child.timeoutMs : null,
+          elapsedMs: typeof child.elapsedMs === 'number' ? child.elapsedMs : null,
+          failed: child.failed === true, stopping: child.stopping === true,
+          reason: typeof child.reason === 'string' ? child.reason.slice(0, 64) : null,
+          stdoutBytes: typeof child.stdoutBytes === 'number' ? child.stdoutBytes : null,
+          stderrTail: typeof child.stderrTail === 'string' ? child.stderrTail.slice(-8192) : '',
+        } : null
+        const diagnostic = { ...identity, entryDigest: methodAssetDigest(entry), stage: 'fixed-calibration',
+          control: typeof detail?.calibrationControl === 'string' ? detail.calibrationControl.slice(0, 128) : null,
+          errorCode: item.error?.slice(0, 128), message: error instanceof Error ? error.message.slice(0, 8448) : 'CALIBRATION_FAILED', subprocess }
+        writeFileSync(join(raw.root, 'calibration-failure-' + identity.generation + '-' + methodAssetDigest(entry) + '-' + randomUUID() + '.json'), JSON.stringify(diagnostic), { flag: 'wx', mode: 0o400 })
+        item.diagnosticPersistence = 'saved'
+      } catch { item.diagnosticPersistence = 'failed' }
+    })
     calibrations.set(entry, item)
   }
   const projectReadiness = (id: string) => {
     const verification = raw.projects[id]!.verification, entry = verification?.settings?.entryPath, calibration = entry ? calibrations.get(entry) : undefined
     const qualification = verification?.qualification
     const matches = !!qualification && calibration?.state === 'pass' && qualification.runtimeDigest === identity.runtimeDigest && qualification.methodAssetsDigest === calibration.evidence?.methodAssetsDigest && qualification.expiresAt > Date.now() && qualification.evidenceRefs.length > 0
-    return { id, ready: matches, methodId: verification?.methodId ?? null, calibration: calibration?.state ?? 'unconfigured', methodAssetsDigest: calibration?.evidence?.methodAssetsDigest ?? null, qualificationMatches: matches, expiresAt: qualification?.expiresAt ?? null, controls: calibration?.evidence?.results ?? [], error: calibration?.error ?? null }
+    return { id, ready: matches, methodId: verification?.methodId ?? null, calibration: calibration?.state ?? 'unconfigured', methodAssetsDigest: calibration?.evidence?.methodAssetsDigest ?? null, qualificationMatches: matches, expiresAt: qualification?.expiresAt ?? null, controls: calibration?.evidence?.results ?? [], error: calibration?.error ?? null, ...(calibration?.diagnosticPersistence ? { diagnosticPersistence: calibration.diagnosticPersistence } : {}) }
   }
   let admissionDisposed = false
   const admission = createAdmissions({

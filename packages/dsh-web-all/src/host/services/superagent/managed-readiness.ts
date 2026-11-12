@@ -259,6 +259,9 @@ export function alias(outside) { const cwd=realpathSync(process.cwd()); const al
       results.push(record)
       observations.push({evidence:observed,evaluation:assessment})
       if(record.verdict!==control.verdict || !Number.isSafeInteger(record.collectorPid) || record.collectorPid===process.pid) throw Error('MANAGED_FIXED_CALIBRATION_FAILED:'+control.label)
+    } catch (error) {
+      if (error instanceof Error) Object.assign(error, { calibrationControl: control.label })
+      throw error
     } finally {f.ledger.close();rmSync(f.root,{recursive:true,force:true})}
   }
   return { ...managedLoadedIdentity(), methodId:method.id, methodAssetsDigest:methodAssetDigest(JSON.stringify(method.assets)), results, observations, observedAt:Date.now() }

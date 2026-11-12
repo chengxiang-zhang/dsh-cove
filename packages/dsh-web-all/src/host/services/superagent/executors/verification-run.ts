@@ -16,6 +16,8 @@ function program(
   liveFence?: () => boolean
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    const startedAt = performance.now()
+    let reason: string | null = null
     const child = spawn(realpathSync(process.execPath), ['--input-type=module', '-e', source], {
       env: { PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8', ...(process.env.DSH_QA_SANDBOX_BROKER ? { DSH_QA_SANDBOX_BROKER: process.env.DSH_QA_SANDBOX_BROKER, DSH_QA_SANDBOX_PROFILE: process.env.DSH_QA_SANDBOX_PROFILE ?? '' } : {}) },
       stdio: ['pipe', 'pipe', 'pipe']
@@ -28,6 +30,7 @@ function program(
     const stop = () => {
       if (stopping) return
       stopping = true
+      reason ??= 'live-fence'
       child.kill('SIGTERM')
     }
     const monitor = liveFence
@@ -41,6 +44,7 @@ function program(
       : undefined
     const timer = setTimeout(() => {
       failed = true
+      reason ??= 'timeout'
       child.kill('SIGKILL')
     }, timeoutMs)
     child.stdout.on('data', (chunk) => {
@@ -48,21 +52,26 @@ function program(
       if (stdoutBytes <= 8 * 1048576) stdoutChunks.push(chunk)
       if (stdoutBytes > 8 * 1048576) {
         failed = true
+        reason ??= 'output-limit'
         child.kill('SIGKILL')
       }
     })
     child.stderr.on('data', (chunk) => {
       stderr = (stderr + chunk.toString()).slice(-8192)
     })
+    const failureError = (error: Error, code: number | null, signal: NodeJS.Signals | null) => Object.assign(error, {
+      subprocessDiagnostic: { code, signal, timeoutMs, elapsedMs: Math.round(performance.now() - startedAt), failed, stopping, reason, stdoutBytes, stderrTail: stderr }
+    })
     child.once('error', (error) => {
       clearTimeout(timer)
       clearInterval(monitor)
-      reject(error)
+      reason ??= 'spawn-error'
+      reject(failureError(error, null, null))
     })
-    child.once('close', (code) => {
+    child.once('close', (code, signal) => {
       clearTimeout(timer)
       clearInterval(monitor)
-      if (failed || code !== 0) reject(new Error(`VERIFICATION_PROCESS_FAILED: ${stderr}`))
+      if (failed || code !== 0) reject(failureError(new Error(`VERIFICATION_PROCESS_FAILED: ${stderr}`), code, signal))
       else {
         try {
           resolve(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(stdoutChunks)))
@@ -72,6 +81,7 @@ function program(
       }
     })
     child.stdin.on('error', () => {
+      reason ??= 'stdin-error'
       failed = true
     })
     child.stdin.end(JSON.stringify(input))
