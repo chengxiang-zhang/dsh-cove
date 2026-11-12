@@ -43,12 +43,16 @@ export async function runProjectVerification(input: {
   const capture = (fd: number, bytes: Buffer) => { outputBytes += bytes.length; if (outputBytes > 64 * 1024 * 1024) { errors.push('PROJECT_OUTPUT_LIMIT'); cancel(); return }; try { writeSync(fd, bytes) } catch { errors.push('PROJECT_COLLECTOR_FAILED'); cancel() } }
   child.stdout.on('data', b => capture(out, b)); child.stderr.on('data', b => capture(err, b)); child.on('error', error => errors.push(error.message)); child.on('exit', (c, s) => { code = c; exitSignal = s; exited = true })
   input.signal.addEventListener('abort', cancel, { once: true })
-  let checking = false
-  const monitor = setInterval(() => { if (checking) return; checking = true; void (async () => { try { const status = await inspectProjectKeeper(keeper); if (!input.liveFence() || !status.current) { errors.push('PROJECT_LIVE_FENCE_REVOKED'); cancel() } } catch { errors.push('PROJECT_LIVE_FENCE_REVOKED'); cancel() } finally { checking = false } })() }, 1000)
+  let monitorCheck: Promise<void> | undefined
+  const monitor = setInterval(() => { if (monitorCheck) return; monitorCheck = (async () => { try { const status = await inspectProjectKeeper(keeper); if (!input.liveFence() || !status.current) { errors.push('PROJECT_LIVE_FENCE_REVOKED'); cancel() } } catch { errors.push('PROJECT_LIVE_FENCE_REVOKED'); cancel() } finally { monitorCheck = undefined } })() }, 1000)
   child.stdin.end()
   await new Promise<void>(resolve => child.once('close', resolve))
+  clearInterval(monitor)
+  // A pending monitor may still run the synchronous live fence after its RPC.
+  // Drain it before final inspection/retirement and preserve any late revocation.
+  await monitorCheck
   await p7Fixture?.close()
-  clearInterval(monitor); input.signal.removeEventListener('abort', cancel); closeSync(out); closeSync(err)
+  input.signal.removeEventListener('abort', cancel); closeSync(out); closeSync(err)
   const digest = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex')
   return { gate: step, command: ['pnpm', step], executable, args: [pnpm, step], stdout: { path: outPath, sha256: digest(outPath) }, stderr: { path: errPath, sha256: digest(errPath) }, exit: { observed: exited, code, signal: exitSignal }, complete: exited && errors.length === 0, errors }
   }
