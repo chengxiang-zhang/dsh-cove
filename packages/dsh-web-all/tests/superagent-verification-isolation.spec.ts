@@ -8,7 +8,9 @@ import {
   realpathSync,
   cpSync,
   unlinkSync,
-  symlinkSync
+  symlinkSync,
+  existsSync,
+  readdirSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -195,22 +197,22 @@ it('cannot run outside an admitted Action or replay a claimed verification conte
 })
 
 it('real cancellation interrupts a busy candidate and never produces pass', async () => {
-  const f = setup('export function inspect() { while(true) {} }'),
+  const f = setup(`import {writeFileSync} from 'node:fs';
+    export function inspect() { writeFileSync('busy-started', 'ready'); while(true) {} }`),
     context = await f.seal()
-  const execution = f.admit(context),
-    started = Date.now()
+  const execution = f.admit(context)
   const running = f.service.run(context, execution)
-  const cancel = setTimeout(
-    () => f.kernel.host.revokeControl(context, { id: 'host', revision: 1 }),
-    150
-  )
-  try {
-    const evidence = await running
-    expect(Date.now() - started).toBeLessThan(1500)
-    expect(f.ledger.get(evidence.id)?.data.complete).toBe(false)
-  } finally {
-    clearTimeout(cancel)
+  // Revoke a running candidate, rather than racing the collector's startup.
+  const deadline = Date.now() + 2000
+  while (!readdirSync(f.workspace.root).some(name => name.startsWith('execution-') && existsSync(join(f.workspace.root, name, 'busy-started')))) {
+    if (Date.now() >= deadline) throw Error('BUSY_CANDIDATE_NOT_STARTED')
+    await new Promise(resolve => setTimeout(resolve, 5))
   }
+  const started = Date.now()
+  f.kernel.host.revokeControl(context, { id: 'host', revision: 1 })
+  const evidence = await running
+  expect(Date.now() - started).toBeLessThan(1500)
+  expect(f.ledger.get(evidence.id)?.data.complete).toBe(false)
 })
 
 it('retains real observations when qualification is revoked during execution', async () => {
