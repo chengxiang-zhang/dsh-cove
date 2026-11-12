@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -336,4 +336,37 @@ it('suppresses completion while durable routing failed even when the runtime rep
   d.finish(); await port.settle()
   expect(port.read('initial').state).toBe('waiting')
   expect(results).toEqual([])
+})
+
+it('durably adopts an unchanged public baseline before intake and retains it after a work reload', async () => {
+  const f = runtimeFixture(), git = (...args: string[]) => execFileSync('git', args, { cwd: f.config.projectRoot, encoding: 'utf8', stdio: 'pipe' }).trim()
+  const before = git('rev-parse', 'HEAD'); await f.runtime.dispose()
+  writeFileSync(join(f.config.projectRoot, 'framework.txt'), 'host diagnostic\n'); git('add', 'framework.txt'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost', 'commit', '-m', 'chore: framework')
+  const after = git('rev-parse', 'HEAD'), runtime = createManagedRuntime(f.config)
+  const baselines = runtime.ledger.eventEntries({ runtimeEvent: 'job_baseline' }).map(e => (e.body as any).coordination.payload.payload)
+  expect(baselines).toHaveLength(2); expect(baselines[0]).toMatchObject({ parent: before }); expect(baselines[1]).toMatchObject({ parent: after, previousParent: before, stoppedLaunches: [] })
+  const r = { id: 'requirement', revision: 1 }, a = { id: 'acceptance', revision: 1 }, d = { id: 'delivery', revision: 1 }, base = { revision: 1, extensions: {}, scope_revision_refs: [] }
+  runtime.ledger.transact([], [
+    { kind: 'create', object: { ...base, id: r.id, kind: 'requirement', data: { intent: 'Keep result', source_refs: [runtime.source], wish_refs: [], observable_results: ['Keep result'], constraints: [], criterion_sources: ['owner'] } } },
+    { kind: 'create', object: { ...base, id: a.id, kind: 'acceptance_contract', scope_revision_refs: [r], data: { intent: 'Keep result', requirement_refs: [r], criterion_refs: [r], source_refs: [runtime.source] } } },
+    { kind: 'create', object: { ...base, id: d.id, kind: 'delivery_contract', scope_revision_refs: [r], data: { intent: 'Local commit', requirement_refs: [r], step_refs: [], source_refs: [runtime.source] } } },
+  ] as never)
+  runtime.coordination.acceptManagedIntent(runtime.source, { id: 'work', intent: 'Keep result', requirements: [r], acceptanceContract: a, deliveryContract: d, projects: [runtime.project], boundary: 'Local only', accountable: 'worker:coordinator', policy: runtime.policy, nextReviewAt: Date.now() + 60000 })
+  await runtime.dispose(); const restored = createManagedRuntime(f.config); cleanup.push(() => restored.dispose())
+  expect((restored.ledger.eventEntries({ runtimeEvent: 'job_baseline', latest: true })[0]?.body as any).coordination.payload.payload.parent).toBe(after)
+})
+
+it.each(['public-source', 'public-mode', 'workspace', 'unceased', 'operation'])('refuses pre-intake baseline adoption for %s', async failure => {
+  const f = runtimeFixture(), git = (...args: string[]) => execFileSync('git', args, { cwd: f.config.projectRoot, encoding: 'utf8', stdio: 'pipe' }).trim()
+  await f.runtime.dispose()
+  writeFileSync(join(f.config.projectRoot, failure === 'public-source' ? 'input.ts' : 'framework.txt'), 'changed\n'); if (failure === 'public-mode') chmodSync(join(f.config.projectRoot, 'input.ts'), 0o755); git('add', '.'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost', 'commit', '-m', 'chore: framework')
+  if (failure === 'workspace') writeFileSync(join(f.config.root, 'implementation', 'input.ts'), 'candidate change\n')
+  const { ManagedLedger } = await import('../src/host/services/superagent/kernel/managed-ledger.ts')
+  const original = ManagedLedger.prototype.snapshot
+  const spy = vi.spyOn(ManagedLedger.prototype, 'snapshot').mockImplementation(function (this: InstanceType<typeof ManagedLedger>, kind: any) {
+    if (failure === 'unceased' && kind === 'action') return [{ id: 'native:unknown', revision: 1, data: { action_kind: 'dispatch', receipt: { stopped: false } } }] as any
+    if (failure === 'operation' && kind === 'coordination_operation') return [{ id: 'pending', revision: 1, data: { state: 'running' } }] as any
+    return original.call(this, kind)
+  })
+  try { expect(() => createManagedRuntime(f.config)).toThrow(/MANAGED_PREINTAKE_/ ) } finally { spy.mockRestore() }
 })

@@ -176,6 +176,24 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     const intake = ledger.eventEntries({ runtimeEvent: 'authenticated_intake', latest: true })[0]?.body as any
     try { originalText = JSON.parse(intake?.coordination.payload.payload.text).userRequest ?? '' } catch { /* Historical inputs remain in the ledger. */ }
   } else if (!baselineEvent) record('job_baseline', { parent: initialParent ?? null }, [project])
+  else if (baselineEvent.coordination.payload.payload.parent !== (initialParent ?? null)) {
+    try {
+      const previousParent = baselineEvent.coordination.payload.payload.parent
+      if (!initialParent || !previousParent || git(config.projectRoot, ['merge-base', previousParent, initialParent]) !== previousParent) throw Error('MANAGED_PREINTAKE_BASELINE_NOT_DESCENDANT')
+      const launches = ledger.snapshot('action').filter(o => o.data.action_kind === 'dispatch')
+      if (launches.some(o => (o.data.receipt as any)?.stopped !== true) || ledger.snapshot('coordination_operation').some(o => o.data.state !== 'completed')) throw Error('MANAGED_PREINTAKE_NOT_QUIESCENT')
+      const before = treeEntries(config.projectRoot, previousParent), after = treeEntries(config.projectRoot, initialParent)
+      for (const path of config.publicFiles) {
+        const prior = before.get(path), next = after.get(path)
+        if (!prior || !next || prior.blob !== next.blob || prior.mode !== next.mode) throw Error('MANAGED_PREINTAKE_PUBLIC_CHANGED')
+        for (const sourceRoot of [config.projectRoot, ...['coordinator', 'implementation', 'quality'].map(role => workspaces.get(role)!.workspace.root)]) {
+          const actual = file(sourceRoot, path)
+          if (!actual || actual.blob !== prior.blob || actual.mode !== prior.mode) throw Error('MANAGED_PREINTAKE_PUBLIC_CHANGED')
+        }
+      }
+      record('job_baseline', { parent: initialParent, previousParent, stoppedLaunches: launches.map(o => ({ id: o.id, revision: o.revision })), publicInputs: config.publicFiles.map(path => before.get(path)!) }, [project], ['preintake-framework-public-inputs-unchanged'])
+    } catch (error) { ledger.close(); throw error }
+  }
   const pendingEvent = (ledger.eventEntries({ runtimeEvent: 'authenticated_amendment', latest: true })[0]?.body as any)?.coordination.payload
   const appliedEvent = (ledger.eventEntries({ runtimeEvent: 'amendment_applied', latest: true })[0]?.body as any)?.coordination.payload
   if (pendingEvent && appliedEvent?.payload?.inputId !== pendingEvent.id) { pendingAmendmentId = pendingEvent.id; amending = true }
