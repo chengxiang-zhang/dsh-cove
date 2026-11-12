@@ -15,12 +15,12 @@ it('limits native transport diagnostics to fixed connection targets without inhe
   vi.stubEnv('RUST_LOG', 'trace'); vi.stubEnv('HTTPS_PROXY', 'credential-canary'); vi.stubEnv('OPENAI_API_KEY', 'credential-canary')
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'native-log-env-')))
   try {
-    for (const native of [true, false]) {
+    for (const stateDirectoryVariable of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', undefined]) {
       const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), cancel: vi.fn(), unref: vi.fn() })
       capture.open.mockReturnValue(child)
-      const process = openSandboxProcess({ workspace: { root }, spec: { executable: '/usr/bin/true', args: [], processPolicy: 'single', timeoutMs: 1000 }, expiresAt: Date.now() + 1000, ...(native ? { nativeRuntime: { root, stateDirectoryVariable: 'CODEX_HOME' } } : {}) } as any, new AbortController().signal, () => true, () => {}, x => x)
+      const process = openSandboxProcess({ workspace: { root }, spec: { executable: '/usr/bin/true', args: [], processPolicy: 'single', timeoutMs: 1000 }, expiresAt: Date.now() + 1000, ...(stateDirectoryVariable ? { nativeRuntime: { root, stateDirectoryVariable } } : {}) } as any, new AbortController().signal, () => true, () => {}, x => x)
       const env = capture.open.mock.calls.at(-1)![0].env
-      expect(env).toEqual({ PATH: '/usr/bin:/bin', HOME: root, TMPDIR: root, LANG: 'en_US.UTF-8', ...(native ? { CODEX_HOME: root, RUST_LOG: 'error,reqwest::connect=debug,hyper_util::client::legacy::connect=debug' } : {}) })
+      expect(env).toEqual({ PATH: '/usr/bin:/bin', HOME: root, TMPDIR: root, LANG: 'en_US.UTF-8', ...(stateDirectoryVariable ? { [stateDirectoryVariable]: root, ...(stateDirectoryVariable === 'CODEX_HOME' ? { RUST_LOG: 'error,reqwest::connect=debug,hyper_util::client::legacy::connect=debug' } : {}) } : {}) })
       child.emit('exit', 0); child.emit('close'); await process.closed
     }
   } finally { rmSync(root, { recursive: true, force: true }) }
