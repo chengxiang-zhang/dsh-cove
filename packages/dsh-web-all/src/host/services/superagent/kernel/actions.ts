@@ -316,6 +316,7 @@ export function controlledTransaction(
       ? JSON.parse(String(raw.body_json))
       : { capabilities: [], mandates: [], controls: [], resources: [], workspaces: [] }
     const now = Date.now()
+    let persistControl = true
     let result: ControlledResult
     let changed: ManagedObject | undefined
     if (cmd.kind === 'host') {
@@ -375,6 +376,8 @@ export function controlledTransaction(
           !h.stream.trim()
         )
           throw new Error('NATIVE_OBSERVATION_OWNER_REQUIRED')
+        // Only the original observation branch is read-only; domain absence rewrites cmd after mutations.
+        persistControl = false
         result = {
           nativeRef:
             'native-event:' +
@@ -776,7 +779,7 @@ export function controlledTransaction(
           changed.id
         )
     }
-    db.prepare(
+    if (persistControl) db.prepare(
       'INSERT INTO sa_managed_control VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET body_json=excluded.body_json'
     ).run(JSON.stringify(state))
     const seq =
