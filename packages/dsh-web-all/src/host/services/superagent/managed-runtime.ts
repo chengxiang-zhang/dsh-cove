@@ -741,9 +741,10 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       const handoff = config.interruptedVerificationHandoff
       if (handoff && (handoff.commitment.id !== work.id || handoff.candidateRoot !== workspaces.get('implementation')!.workspace.root || JSON.stringify(handoff.candidate.map(x => x.path).sort()) !== JSON.stringify([...config.publicFiles].sort()))) throw Error('VERIFY_HANDOFF_CANDIDATE_SCOPE')
       if (handoff) { verifyPartitionCandidate(handoff); verifyPartitionCandidate({ ...handoff, candidateRoot: workspaces.get('quality')!.workspace.root }) }
-      const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
+      const actions = ledger.snapshot('action'), ceasedRPCs = frameworkOnly ? ledger.ceasedBorrowedNativeActions(actions) : new Set<string>()
+      const launches = actions.filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
       if (!launches.length) throw Error('MANAGED_CONTINUATION_WRITER_UNKNOWN')
-      if (frameworkOnly && ledger.snapshot('action').some(o => (o.data.execution_spec as any) && (o.data.receipt as any)?.stopped !== true && !ledger.retiredNativeDomain({ id: o.id, revision: o.revision }))) throw Error('MANAGED_CONTINUATION_NOT_QUIESCENT')
+      if (frameworkOnly && actions.some(o => (o.data.execution_spec as any) && (o.data.receipt as any)?.stopped !== true && !ceasedRPCs.has(o.id) && !ledger.retiredNativeDomain({ id: o.id, revision: o.revision }))) throw Error('MANAGED_CONTINUATION_NOT_QUIESCENT')
       const transition = config.frameworkBaselineTransition, head = git(config.projectRoot, ['rev-parse', 'HEAD'])
       const boundEvent = ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound', latest: true })[0]
       const boundCommand = (boundEvent?.body as any)?.coordination

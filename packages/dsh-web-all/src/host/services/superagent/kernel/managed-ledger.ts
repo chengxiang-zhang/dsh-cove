@@ -3,6 +3,7 @@ import { verificationTransaction, type VerificationCommand } from './verificatio
 import { VERIFICATION_KINDS } from '../protocol/verification.ts'
 import { controlledTransaction, type ControlledCommand, type ControlledResult } from './actions.ts'
 import { createHash } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { DatabaseSync } from 'node:sqlite'
 import { assertJson, assertRefs, TERMINAL_MANAGED_STATES, validateManagedObject, type ManagedObject, type ManagedProposal, type Ref, type CommittedRevision, type Conflict } from '../protocol/managed-work.ts'
 import { managedGeneration, migrateManagedWork } from '../protocol/migrations/managed-work.ts'
@@ -75,6 +76,28 @@ export class ManagedLedger {
   return this.#db.prepare('SELECT '+(referencesOnly ? 'sequence' : 'sequence,body_json')+' FROM sa_managed_event' + (clauses.length ? ' WHERE '+clauses.join(' AND ') : '') + ' ORDER BY sequence' + (filter.latest ? ' DESC LIMIT 1' : '')).all(...values)
  }
  snapshot(kind?: string): ManagedObject[] { return (kind === undefined ? this.#db.prepare('SELECT body_json FROM sa_managed_object ORDER BY id').all() : this.#db.prepare('SELECT body_json FROM sa_managed_object WHERE kind=? ORDER BY id').all(kind)).map(r => JSON.parse(String(r.body_json)) as ManagedObject) }
+ /** RPCs borrow an owning native process; they do not independently report process cessation. */
+ ceasedBorrowedNativeActions(actions: ManagedObject[]): Set<string> {
+  const ceased = new Set<string>(), raw = this.#db.prepare('SELECT body_json FROM sa_managed_control WHERE singleton=1').get()
+  if (!raw) return ceased
+  const state = JSON.parse(String(raw.body_json)), byId = new Map(actions.map(action => [action.id, action]))
+  const borrowed = new Map<string, Ref>((state.borrowed ?? []).map((entry: any) => [entry.actionId, entry.ownerRef]))
+  const opened = new Set<string>([...(state.opened ?? []), ...(state.helperDomains ?? []).map((lease: any) => lease.actionId)])
+  const proofs = this.#db.prepare("SELECT body_json FROM sa_managed_event WHERE json_extract(body_json,'$.controlled.kind')='borrow'").all()
+  for (const row of proofs) {
+   const proof = JSON.parse(String(row.body_json)).controlled, ownerRef = borrowed.get(proof.ref?.id)
+   if (!ownerRef || !isDeepStrictEqual(ownerRef, proof.ownerRef) || opened.has(proof.ref.id)) continue
+   const action = byId.get(proof.ref.id), owner = byId.get(ownerRef.id), spec = action?.data.execution_spec as any, parent = owner?.data.execution_spec as any
+   if (!action || action.kind !== 'action' || action.revision < proof.ref.revision || !owner || owner.kind !== 'action' || owner.revision < ownerRef.revision || parent?.kind !== 'dispatch' || (owner.data.receipt as any)?.stopped !== true || !spec || spec.kind === 'dispatch' || !/^[a-f0-9]{64}$/.test(spec.payloadDigest ?? '')) continue
+   // A borrowed helper can spawn independently. Only the original native RPC shape is reusable.
+   const fields = ['subject','requester','target','epoch','workspaceId','resourceIds','scopeRefs','mandateRef','capabilityRef','executable','args','processPolicy']
+   if (!fields.every(key => isDeepStrictEqual(spec[key], parent[key]))) continue
+   const operation = (action.data.receipt as any)?.operation
+   if (operation && (!isDeepStrictEqual(operation.ownerRef, ownerRef) || operation.payloadDigest !== spec.payloadDigest || operation.nativeRequestId !== spec.nativeRequestId)) continue
+   ceased.add(action.id)
+  }
+  return ceased
+ }
  retiredNativeDomain(actionRef: Ref): string | undefined {
   const action = this.get(actionRef.id), spec = action?.data.execution_spec as any
   if (!action || action.revision !== actionRef.revision || action.kind !== 'action' || spec?.kind !== 'dispatch' || spec.processPolicy !== 'single') return undefined

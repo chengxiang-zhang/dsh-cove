@@ -533,3 +533,71 @@ it.each(['proof-id', 'proof-revision', 'commitment', 'commitment-revision', 'sou
   expect(runtime.ledger.eventEntries({ runtimeEvent: 'job_baseline' })).toEqual(baselines)
   expect(runtime.ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound' })).toHaveLength(1)
 })
+
+async function borrowedContinuationFixture() {
+  const f = await continuationFixture(), { runtime } = f, kernel = runtime.kernel
+  vi.mocked(runtime.ledger.snapshot).mockImplementation(f.originalSnapshot)
+  const workspace = runtime.workspaces.get('coordinator')!.workspace, target = { id: 'requirement', revision: 1 }, expiresAt = Date.now() + 60000
+  const executable = f.config.engine.executable, args = ['app-server', '--stdio'], control = kernel.host.grantControl(target, 'fixture-worker', expiresAt)
+  kernel.host.grantCapability({ id: 'rpc-fixture-cap', revision: 1, expiresAt, scopeRefs: [], evidenceRefs: ['fixture-authorized-native'], externalTools: 'blocked', revoked: false, launch: { executable, args, processPolicy: 'single' } })
+  kernel.host.grantMandate({ id: 'rpc-fixture-mandate', revision: 1, requester: 'fixture-owner', subject: 'fixture-worker', target, actions: ['dispatch','attach','respond_request','collect','inspect'], workspaceId: workspace.id, resourceIds: workspace.resources, scopeRefs: [], expiresAt, revoked: false })
+  const spec = { id: 'native-parent', idempotencyKey: 'native-parent', requester: 'fixture-owner', subject: 'fixture-worker', target, epoch: control.epoch, mandateRef: { id: 'rpc-fixture-mandate', revision: 1 }, capabilityRef: { id: 'rpc-fixture-cap', revision: 1 }, kind: 'dispatch' as const, workspaceId: workspace.id, resourceIds: workspace.resources, scopeRefs: [], purpose: 'engineering' as const, executable, args, timeoutMs: 30000, processPolicy: 'single' as const }
+  const planned = kernel.actions.planAction(spec); kernel.actions.claimResources(planned.ref, spec.resourceIds)
+  const parent = kernel.host.beginDispatch(planned.ref); if (parent.kind === 'denial') throw Error(parent.code)
+  for (const [name, kind, reason] of [['confirmed-attach','attach',''], ['notification','attach','NOTIFICATION_HAS_NO_NATIVE_RESPONSE'], ['server-response','respond_request','SERVER_RESPONSE_HAS_NO_RECEIPT'], ['connection-lost','collect','CONNECTION_LOST']] as const) {
+    const payload = JSON.stringify({ method: name }), payloadDigest = createHash('sha256').update(payload).digest('hex'), nativeRequestId = name === 'notification' ? undefined : name
+    const action = kernel.actions.planAction({ ...spec, id: 'rpc:' + name, idempotencyKey: 'rpc:' + name, kind, payloadDigest, ...(nativeRequestId ? { nativeRequestId } : {}) })
+    kernel.host.borrowSessionResources(action.ref, parent.actionRef)
+    const sent = kernel.host.beginDispatch(action.ref); if (sent.kind === 'denial') throw Error(sent.code)
+    kernel.host.reserveNativeExchange(sent.actionRef, parent.actionRef, payload)
+    if (name === 'confirmed-attach') kernel.host.completeOperation(sent.actionRef, { ownerRef: parent.actionRef, payloadDigest, nativeRequestId, responseDigest: createHash('sha256').update('response').digest('hex') }, ['native-response'])
+    else kernel.actions.recordActionResult(sent.actionRef, { status: 'unknown', stopped: false, evidenceRefs: [], reason })
+  }
+  kernel.host.reconcileAction(parent.actionRef, { status: 'failed', stopped: true, evidenceRefs: ['native-cessation'], reason: 'TIMEOUT' })
+  await runtime.reconcile()
+  return { ...f, parent, spec }
+}
+
+it('adopts a framework baseline with canonically borrowed attach notification response and connection-lost RPCs after parent cessation', async () => {
+  const f = await borrowedContinuationFixture()
+  const { DatabaseSync } = await import('node:sqlite'), prepare = DatabaseSync.prototype.prepare
+  let controlReads = 0, borrowReads = 0
+  const read = vi.spyOn(DatabaseSync.prototype, 'prepare').mockImplementation(function (this: InstanceType<typeof DatabaseSync>, sql: string) {
+    if (sql === 'SELECT body_json FROM sa_managed_control WHERE singleton=1') controlReads++
+    if (sql.includes("json_extract(body_json,'$.controlled.kind')='borrow'")) borrowReads++
+    return prepare.call(this, sql)
+  })
+  try { await expect(f.runtime.prepareContinuation(true)).resolves.toMatchObject({ head: f.after }) } finally { read.mockRestore() }
+  expect(controlReads).toBe(1); expect(borrowReads).toBe(1)
+  expect(f.runtime.ledger.get('rpc:confirmed-attach')!.data.receipt).toMatchObject({ stopped: false, status: 'confirmed' })
+  expect(f.runtime.ledger.get('rpc:connection-lost')!.data.receipt).toMatchObject({ stopped: false, status: 'unknown', reason: 'CONNECTION_LOST' })
+})
+
+it.each(['unowned', 'missing-borrow-event', 'forged-owner', 'parent-live', 'different-executable', 'helper-opened', 'independent-collect'])('refuses apparent RPC cessation with %s and writes no adoption', async failure => {
+  const f = await borrowedContinuationFixture(), { runtime } = f
+  if (failure === 'missing-borrow-event') runtime.kernel.actions.planAction({ ...f.spec, id: 'missing-proof', idempotencyKey: 'missing-proof', kind: 'attach', payloadDigest: createHash('sha256').update('attach').digest('hex') })
+  const { DatabaseSync } = await import('node:sqlite'), db = new DatabaseSync(join(f.config.root, 'managed.sqlite'))
+  try {
+    if (['unowned','forged-owner','helper-opened','missing-borrow-event'].includes(failure)) {
+      const row = db.prepare('SELECT body_json FROM sa_managed_control WHERE singleton=1').get()!, state = JSON.parse(String(row.body_json))
+      if (failure === 'missing-borrow-event') state.borrowed.push({ actionId: 'missing-proof', ownerRef: f.parent.actionRef })
+      if (failure === 'unowned') state.borrowed = state.borrowed.filter((b: any) => b.actionId !== 'rpc:notification')
+      if (failure === 'forged-owner') state.borrowed.find((b: any) => b.actionId === 'rpc:notification').ownerRef.revision++
+      if (failure === 'helper-opened') (state.opened ??= []).push('rpc:notification')
+      db.prepare('UPDATE sa_managed_control SET body_json=? WHERE singleton=1').run(JSON.stringify(state))
+    }
+  } finally { db.close() }
+  if (failure === 'parent-live' || failure === 'different-executable') {
+    const snapshot = f.originalSnapshot
+    vi.mocked(runtime.ledger.snapshot).mockImplementation(kind => snapshot(kind).map(o => {
+      if (failure === 'parent-live' && o.id === 'native-parent') return { ...o, data: { ...o.data, receipt: { ...(o.data.receipt as any), stopped: false } } }
+      if (failure === 'different-executable' && o.id === 'rpc:notification') return { ...o, data: { ...o.data, execution_spec: { ...(o.data.execution_spec as any), executable: '/independent-helper' } } }
+      return o
+    }))
+  }
+  if (failure === 'independent-collect') runtime.kernel.actions.planAction({ ...f.spec, id: 'independent-collect', idempotencyKey: 'independent-collect', kind: 'collect', payloadDigest: createHash('sha256').update('collect').digest('hex') })
+  await expect(runtime.prepareContinuation(true)).rejects.toThrow('MANAGED_CONTINUATION_NOT_QUIESCENT')
+  expect(runtime.ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound' })).toHaveLength(0)
+  expect(runtime.ledger.eventEntries({ runtimeEvent: 'job_baseline' })).toHaveLength(1)
+  expect(runtime.ledger.snapshot('profile_qualification')).toHaveLength(0)
+})
