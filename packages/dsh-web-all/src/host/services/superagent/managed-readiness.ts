@@ -246,7 +246,7 @@ async function runCalibration(entryPath: string) {
       writeFileSync(target, `import {realpathSync,readFileSync} from 'node:fs';
 export async function echo(value) { await Promise.resolve(); return value }
 export function invalid() { return undefined }
-export function alias(outside) { const cwd=realpathSync(process.cwd()); const alias=cwd.replace(/^\\/private(?=\\/var(?:\\/|$))/,''); let denied=false; try {readFileSync(outside)} catch {denied=true} return {sameScratch:alias!==cwd&&realpathSync(alias)===cwd,outsideDenied:denied} }
+export function alias(outside) { const cwd=realpathSync(process.cwd()); const alias=cwd.replace(/^\\/private(?=\\/(?:var|tmp)(?:\\/|$))/,''); let denied=false; try {readFileSync(outside)} catch {denied=true} return {sameScratch:alias!==cwd&&realpathSync(alias)===cwd,outsideDenied:denied} }
 `)
       for (const [path,bytes] of Object.entries(method.assets)) writeFileSync(join(f.source,path),bytes)
       const outside=join(f.root,'outside.txt');writeFileSync(outside,'synthetic outside control')
