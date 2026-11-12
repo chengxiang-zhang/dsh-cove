@@ -293,3 +293,21 @@ it('refuses terminal delivery when the exact verifier proposal result was not pe
     expect(() => assertDeliveryProposalPersisted(ledger, operationId, { commit: 'other' } as any)).toThrow('DELIVERY_PROPOSAL_NOT_DURABLE')
   } finally { ledger.close(); rmSync(f.dir, { recursive: true, force: true }) }
 })
+
+it('requires an exact host delivery attachment for a reconciled verifier without rewriting its result', async () => {
+  const { assertDeliveryProposalPersisted } = await import('../src/host/services/superagent/managed-runtime.ts')
+  const { createHash } = await import('node:crypto')
+  const id='proposal:original:operation', operation={id,kind:'coordination_operation',revision:5,data:{state:'completed',proposal:{kind:'verify'},result:{status:'reconciled'}}}
+  const step={ref:{id:'step',revision:1},plannedCommit:'commit',finalTree:'tree',action:{id:'successor'}}, receipt={stepRef:step.ref,commit:'commit',tree:'tree'}
+  let attachment:any
+  const ledger={get:(key:string)=>key===id?operation:key===id+':delivery-completion'?attachment:undefined} as any
+  const original=JSON.stringify(operation)
+  expect(()=>assertDeliveryProposalPersisted(ledger,id,receipt as any,step as any)).toThrow('DELIVERY_PROPOSAL_NOT_DURABLE')
+  attachment={kind:'coordination_runtime_event',data:{event:'published_delivery_completion',payload:{operationRef:{id,revision:5},operationSHA:createHash('sha256').update(original).digest('hex'),step,receipt,result:{status:'delivered-local',receipt}}}}
+  expect(()=>assertDeliveryProposalPersisted(ledger,id,receipt as any,step as any)).not.toThrow()
+  expect(()=>assertDeliveryProposalPersisted(ledger,id,receipt as any,{...step,action:{id:'other'}} as any)).toThrow('DELIVERY_PROPOSAL_NOT_DURABLE')
+  operation.data.proposal.kind='dispatch'
+  attachment.data.payload.operationSHA=createHash('sha256').update(JSON.stringify(operation)).digest('hex')
+  expect(()=>assertDeliveryProposalPersisted(ledger,id,receipt as any,step as any)).toThrow('DELIVERY_PROPOSAL_NOT_DURABLE')
+  operation.data.proposal.kind='verify';expect(JSON.stringify(operation)).toBe(original)
+})

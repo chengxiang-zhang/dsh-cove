@@ -269,6 +269,39 @@ describe('dossier', () => {
     }
   })
 
+  it('a waiting row with no default says the default is to do it (owner M-2), never "not do"', () => {
+    const view = baseView({
+      waiting: [
+        ...baseView().waiting,
+        commit({ commitment_id: 'C-8', what: '要不要顺手清理旧分支', ball: 'party:owner', question: '要不要顺手清理旧分支' }),
+      ],
+    })
+    const { text } = compileDossier(view, compileNow(view, OWNER_P2P), BATCH, CTX, 6000)
+    const line = firstLineOf(text, 'C-8')
+
+    expect(line).toContain('默认:做')
+    expect(line).not.toContain('默认:不做')
+    // A default the desk wrote is still shown as written.
+    expect(firstLineOf(text, 'C-7')).toContain('默认:不改')
+  })
+
+  it('a colleague\'s waiting row with no default never promises "default: do"', () => {
+    const view = baseView({
+      waiting: [
+        ...baseView().waiting,
+        commit({ commitment_id: 'C-20', what: '同事要求重启服务', creditor: 'party:alice', on_behalf_of: 'party:owner', ball: 'party:owner', question: '同事要求重启服务' }),
+        commit({ commitment_id: 'C-21', what: '拆出的子提案', creditor: 'party:alice', ball: 'party:owner' }),
+      ],
+    })
+    const { text } = compileDossier(view, compileNow(view, OWNER_P2P), BATCH, CTX, 6000)
+
+    for (const id of ['C-20', 'C-21']) {
+      const line = firstLineOf(text, id)
+      expect(line).not.toContain('默认:做')
+      expect(line).toContain('等老板批准')
+    }
+  })
+
   it('yields precedent, then what the owner said, then waiting — and keeps every open row', () => {
     const view = baseView()
     const dossier = compileDossier(view, compileNow(view, OWNER_P2P), BATCH, CTX, 60)

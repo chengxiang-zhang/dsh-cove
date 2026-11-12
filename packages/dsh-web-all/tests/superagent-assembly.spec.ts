@@ -54,7 +54,8 @@ function rig(opts: { managedAdmission?: AssemblyDeps['managedAdmission']; mode?:
   dirs.push(root)
   const store = InboxStore.open({ rootDir: root })
   const cfg: SuperagentConfig = { ...structuredClone(DEFAULT_SUPERAGENT_CONFIG), superagentMode: opts.mode ?? 'responder',
-    superagentWorld: { entities: [], mandates: [], owners: [{ union_id: OWNER, name: '老板' }], colleagues: [] } }
+    superagentWorld: { entities: [], mandates: [], owners: [{ union_id: OWNER, name: '老板' }], colleagues: [] },
+    superagentExecutor: { transport: 'inproc', hosts: [] } }
   const clock = createManualClock(Date.UTC(2026, 10, 6, 2, 0, 0))
   const controller = createFakeController()
   const sent: Rig['sent'] = []
@@ -271,5 +272,21 @@ describe('superagent assembly', () => {
   it('9. the bundle still mounts exactly one runtime row (F22)', () => {
     const patch = readFileSync(join(__dirname, '../cordis.patch.yml'), 'utf8')
     expect(patch.split('\n').filter(l => /^\s*- id:/.test(l))).toHaveLength(1)
+  })
+
+  it('10. dispose during startup leaves no keeper or clock running; a live start bundles the keeper with the clock timers', async () => {
+    // Dispose while startup is still in flight: the aborted start tears its own machine
+    // down, so no heartbeat keeper or clock interval survives (the orphan-keeper shape).
+    const aborted = rig({ mode: 'superagent' })
+    const starting = aborted.asm.start(aborted.path)
+    await aborted.asm.dispose()
+    await starting
+    expect(aborted.clock.pending()).toBe(0)
+    expect(aborted.asm.ready()).toBe(false)
+
+    // A clean start wires exactly five intervals on the one clock: kernel clock, the
+    // reconcile loop, the flush loop, the daily sweep, and the lease keeper bundled in.
+    const live = await started({ mode: 'superagent' })
+    expect(live.clock.pending()).toBe(5)
   })
 })

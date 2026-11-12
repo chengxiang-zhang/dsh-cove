@@ -35,6 +35,7 @@ import {
   type Recovery,
   type RecoveryPresence,
 } from '../src/host/services/superagent/recovery/startup.ts'
+import { promoteOwnerProposals } from '../src/host/services/superagent/recovery/owner-ball.ts'
 import type { HistoryRow } from '../src/host/services/superagent/recovery/second-voice.ts'
 
 const roots: string[] = []
@@ -49,6 +50,7 @@ function tempDir(): string {
 }
 
 const HOLDER = 'host-a'
+const OWNER = 'on_owner'
 
 interface Harness {
   clock: ManualClock
@@ -140,6 +142,8 @@ function mount(options: MountOptions = {}): Harness {
     escalation,
     presence,
     outlet,
+    profiles,
+    owner: () => OWNER,
     ...(options.history === undefined ? {} : { channelHistory: options.history }),
   })
 
@@ -343,6 +347,241 @@ describe('reconcile: repair without killing', () => {
     await restarted.startup()
 
     expect(query(harness.ledger)).toEqual(before)
+  })
+})
+
+describe('reconcile: a pending attempt with no live seat is the one thing the agenda never dispatches', () => {
+  const holdLease = (harness: Harness) => { harness.lease.acquire(HOLDER, harness.clock.now()) }
+  const creates = (harness: Harness) => harness.controller.calls.filter(call => call.method === 'create')
+
+  it('dispatches a commitment whose latest attempt is pending and nothing is running', async () => {
+    const harness = mount()
+    holdLease(harness)
+    const commitment = seedCommitment(harness)
+    seedAttempt(harness, commitment.commitment_id, { executor: 'durable-full', lifetime: 'durable' })
+    expect(attemptStates(harness, commitment.commitment_id).map(a => a.state)).toEqual(['pending'])
+
+    const result = await harness.recovery.reconcile(harness.clock.now())
+
+    expect(result.flushed).toBe(1)
+    expect(attemptStates(harness, commitment.commitment_id).map(a => a.state)).toEqual(['running'])
+    expect(creates(harness)).toHaveLength(1)
+  })
+
+  it('picks up the queued retry a twice-failed durable dispatch leaves pending (the live C-2 shape)', async () => {
+    const harness = mount()
+    holdLease(harness)
+    const commitment = seedCommitment(harness)
+    seedAttempt(harness, commitment.commitment_id, { executor: 'durable-full', lifetime: 'durable' })
+    // Two dispatches fail to create a session; the third attempt is written "queued for
+    // agenda retry" and returns, with nothing in the agenda to dispatch a pending attempt.
+    harness.controller.failCreateTimes(2, new Error('host busy'))
+    expect(await harness.executors.dispatch(commitment.commitment_id)).toEqual({ failed: 'host busy' })
+    expect(attemptStates(harness, commitment.commitment_id).map(a => a.state)).toEqual(['ended', 'ended', 'pending'])
+    // The failed durable also let go of the slot, so nothing is wedged on it either.
+    const slot = (harness.db.prepare('SELECT slot FROM sa_commitment WHERE commitment_id = ?').get(commitment.commitment_id) as { slot: string | null }).slot
+    expect(slot).toBeNull()
+
+    const result = await harness.recovery.reconcile(harness.clock.now())
+
+    expect(result.flushed).toBe(1)
+    expect(attemptStates(harness, commitment.commitment_id).map(a => a.state)).toEqual(['ended', 'ended', 'running'])
+  })
+
+  it('flushes a pending attempt at startup too, so a reorg that lost the in-flight dispatch self-heals', async () => {
+    const harness = mount()
+    const commitment = seedCommitment(harness)
+    seedAttempt(harness, commitment.commitment_id, { executor: 'durable-full', lifetime: 'durable' })
+
+    const report = await harness.recovery.startup()
+
+    expect(report.reconciled.flushed).toBe(1)
+    expect(attemptStates(harness, commitment.commitment_id).map(a => a.state)).toEqual(['running'])
+  })
+
+  it('leaves a running commitment and a lease held elsewhere alone', async () => {
+    const running = mount()
+    running.lease.acquire(HOLDER, running.clock.now())
+    const live = seedRunning(running, { lifetime: 'durable', quietMs: 0 })
+    await running.controller.create({ sessionId: live.sessionId })
+    expect((await running.recovery.reconcile(running.clock.now())).flushed).toBe(0)
+    expect(attemptStates(running, live.commitment.commitment_id).map(a => a.state)).toEqual(['running'])
+
+    const other = mount()
+    other.lease.acquire('host-b', other.clock.now())
+    const parked = seedCommitment(other)
+    seedAttempt(other, parked.commitment_id, { executor: 'durable-full', lifetime: 'durable' })
+    expect((await other.recovery.reconcile(other.clock.now())).flushed).toBe(0)
+    expect(attemptStates(other, parked.commitment_id).map(a => a.state)).toEqual(['pending'])
+    expect(creates(other)).toHaveLength(0)
+  })
+})
+
+describe('reconcile: the owner\'s own request is not the owner\'s to approve', () => {
+  interface Parked {
+    creditor?: string
+    kind?: 'deliver' | 'goal'
+    executor?: string
+    /** Write no brief at all, as `propose` does. */
+    brief?: boolean
+    parent?: string
+    origin?: string
+    etaMin?: number
+  }
+  /** What commit used to leave behind for an owner's draft mandate: proposed, ball on the owner, no attempt, a commit brief. */
+  function seedParked(harness: Harness, over: Parked = {}) {
+    const creditor = over.creditor ?? OWNER
+    const parked = seedCommitment(harness, {
+      state: 'proposed', creditor, ball: OWNER, kind: over.kind ?? 'deliver',
+      ...(over.parent === undefined ? {} : { parent_id: over.parent }),
+      ...(over.origin === undefined ? {} : { origin_ref: over.origin }),
+      ...(over.etaMin === undefined ? {} : { eta_at: harness.clock.now() - 3_600_000, eta_model_min: over.etaMin, eta_factor: 1 }),
+    })
+    if (over.brief !== false) {
+      harness.ledger.open(tx => tx.append(parked.commitment_id, { actor: 'desk', kind: 'brief',
+        body: { executor: over.executor ?? 'oneshot-read', mandate: 'draft' } }))
+    }
+    return parked.commitment_id
+  }
+  /** This process holds the outlet lease, as it does after startup. */
+  const holdLease = (harness: Harness) => { harness.lease.acquire(HOLDER, harness.clock.now()) }
+  const commitmentOf = (harness: Harness, id: string) => harness.db.prepare('SELECT state, ball FROM sa_commitment WHERE commitment_id = ?')
+    .get(id) as { state: string; ball: string }
+  const creates = (harness: Harness) => harness.controller.calls.filter(call => call.method === 'create')
+
+  it('opens an owner proposal, gives it a pending attempt on the briefed executor and dispatches it', async () => {
+    const harness = mount()
+    holdLease(harness)
+    const id = seedParked(harness)
+    expect(commitmentOf(harness, id)).toEqual({ state: 'proposed', ball: OWNER })
+    expect(attemptStates(harness, id)).toHaveLength(0)
+
+    const result = await harness.recovery.reconcile(harness.clock.now())
+
+    expect(result.lifted).toBe(1)
+    expect(commitmentOf(harness, id)).toEqual({ state: 'open', ball: 'me' })
+    expect(attemptStates(harness, id)).toEqual([expect.objectContaining({ state: 'running' })])
+    expect(creates(harness)).toHaveLength(1)
+    const attempt = harness.db.prepare('SELECT executor FROM sa_attempt WHERE commitment_id = ?').get(id) as { executor: string }
+    expect(attempt.executor).toBe('oneshot-read')
+  })
+
+  it('leaves a colleague\'s proposal and a host goal for the owner to approve, and lifts nothing twice', async () => {
+    const harness = mount()
+    holdLease(harness)
+    const colleague = seedParked(harness, { creditor: 'on_col' })
+    const goal = seedParked(harness, { kind: 'goal' })
+    const mine = seedParked(harness)
+
+    expect((await harness.recovery.reconcile(harness.clock.now())).lifted).toBe(1)
+    expect((await harness.recovery.reconcile(harness.clock.now())).lifted).toBe(0)
+
+    expect(commitmentOf(harness, colleague).state).toBe('proposed')
+    expect(commitmentOf(harness, goal).state).toBe('proposed')
+    expect(commitmentOf(harness, mine).state).toBe('open')
+    expect(attemptStates(harness, colleague)).toHaveLength(0)
+    expect(creates(harness)).toHaveLength(1)
+  })
+
+  it('never lifts the shape `propose` writes: no brief, a prop: origin, a goal as parent', async () => {
+    const harness = mount()
+    holdLease(harness)
+    const goal = seedParked(harness, { kind: 'goal' })
+    // Same creditor, ball and state as the owner's own request, but not one.
+    const noBrief = seedParked(harness, { brief: false })
+    const propOrigin = seedParked(harness, { origin: 'prop:C-1:D-1:1' })
+    const child = seedParked(harness, { parent: goal })
+    const both = seedParked(harness, { brief: false, origin: 'prop:C-1:D-1:2', parent: goal })
+
+    for (let round = 0; round < 3; round += 1) {
+      expect((await harness.recovery.reconcile(harness.clock.now())).lifted).toBe(0)
+    }
+
+    for (const id of [noBrief, propOrigin, child, both]) {
+      expect(commitmentOf(harness, id)).toEqual({ state: 'proposed', ball: OWNER })
+      expect(attemptStates(harness, id)).toHaveLength(0)
+    }
+    expect(creates(harness)).toHaveLength(0)
+  })
+
+  it('does not warn every round for a row it cannot recognise', async () => {
+    const harness = mount()
+    holdLease(harness)
+    seedParked(harness, { brief: false })
+    seedParked(harness, { executor: 'robot-9' })
+
+    for (let round = 0; round < 3; round += 1) await harness.recovery.reconcile(harness.clock.now())
+
+    expect(harness.warn).not.toHaveBeenCalled()
+  })
+
+  it('starts the clock when it opens: eta and next look are in the future, not a stale late', async () => {
+    const harness = mount()
+    holdLease(harness)
+    const id = seedParked(harness, { etaMin: 30 })
+    const now = harness.clock.now()
+    const before = harness.db.prepare('SELECT eta_at FROM sa_commitment WHERE commitment_id = ?').get(id) as { eta_at: number }
+    expect(before.eta_at).toBeLessThan(now)
+
+    await harness.recovery.reconcile(now)
+
+    const row = harness.db.prepare('SELECT eta_at, next_look_at FROM sa_commitment WHERE commitment_id = ?').get(id) as { eta_at: number; next_look_at: number }
+    expect(row.eta_at).toBe(now + 30 * 60_000)
+    expect(row.next_look_at).toBeGreaterThan(now)
+    expect(row.next_look_at).toBeLessThanOrEqual(row.eta_at)
+  })
+
+  it('does nothing while another process holds the outlet lease', async () => {
+    const harness = mount()
+    harness.lease.acquire('host-b', harness.clock.now())
+    const id = seedParked(harness)
+
+    expect((await harness.recovery.reconcile(harness.clock.now())).lifted).toBe(0)
+
+    expect(commitmentOf(harness, id).state).toBe('proposed')
+    expect(creates(harness)).toHaveLength(0)
+  })
+
+  it('a row that is no longer proposed when the transaction runs is left alone', async () => {
+    const harness = mount()
+    holdLease(harness)
+    const id = seedParked(harness)
+    // The owner approved it between the selection and the write: it already has an attempt.
+    const original = harness.ledger.read.all.bind(harness.ledger.read)
+    const racing = { ...harness.ledger, read: { ...harness.ledger.read, get: harness.ledger.read.get,
+      all: ((sql: string, ...params: Array<string | number | null>) => {
+        const rows = original(sql, ...params)
+        if (/state = 'proposed' AND kind = 'deliver'/.test(sql)) {
+          harness.ledger.open(tx => { tx.transition(id, 'open', { ball: 'me' }); tx.recordAttempt({ commitment_id: id, executor: 'oneshot-read', reason: 'approved meanwhile', lifetime: 'oneshot' }) })
+        }
+        return rows
+      }) as typeof harness.ledger.read.all } }
+    const dispatch = vi.fn(async () => ({ attemptId: 'x', sessionId: 'y' }))
+    const lifted = await promoteOwnerProposals({ ledger: racing, profiles: createProfileRegistry(), executors: { dispatch },
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, lease: harness.lease, holder: HOLDER, owner: () => OWNER }, harness.clock.now())
+
+    expect(lifted).toEqual([])
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('runs at startup too, before the first trigger can meet the parked row', async () => {
+    const harness = mount()
+    const id = seedParked(harness)
+
+    const report = await harness.recovery.startup()
+
+    expect(report.reconciled.lifted).toBe(1)
+    expect(commitmentOf(harness, id).state).toBe('open')
+  })
+
+  it('does not guess an executor: a row whose brief names an unregistered one stays proposed', async () => {
+    const harness = mount()
+    holdLease(harness)
+    const id = seedParked(harness, { executor: 'robot-9' })
+
+    expect((await harness.recovery.reconcile(harness.clock.now())).lifted).toBe(0)
+
+    expect(commitmentOf(harness, id).state).toBe('proposed')
   })
 })
 

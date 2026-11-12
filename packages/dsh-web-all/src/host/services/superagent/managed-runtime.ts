@@ -1,3 +1,5 @@
+import { OwnerInputGate } from './kernel/owner-input.ts'
+import { createAdmissions, type AdmissionRequest, type AdmissionRuntime } from './kernel/admissions.ts'
 import { deliverTechnicalReply } from './executors/native/technical-reply.ts'
 import { NativeTurnQueue, NativeRequestScope, closeExactSession } from './executors/native/turn-lifecycle.ts'
 import { currentApiMaterial } from './context/api-material.ts'
@@ -28,7 +30,7 @@ import { createContextCompiler } from './context/compile.ts'
 import { ControlledFileTools, nativeFileToolSchemas } from './executors/native/tools.ts'
 import { createProposalInterpreter } from './coordination/interpreter.ts'
 import { createVerificationService } from './verification/index.ts'
-import { managedVerificationMethod, methodAssetDigest } from './executors/managed-verification-method.ts'
+import { managedVerificationMethod, methodAssetDigest, parseModuleVerificationCases } from './executors/managed-verification-method.ts'
 import type { ContextSource } from './protocol/coordination.ts'
 
 const json = (value: unknown): Json => { assertJson(value); return value }
@@ -38,7 +40,7 @@ export interface ManagedRuntimeConfig {
   contractPartition?: ContractPartition
   readOnlyMaterials?: ManagedMaterial[]
   frameworkBaselineTransition?: { commitmentId: string; before: string; after: string; evidenceRefs: string[] }
-  verification?: { methodId: string; qualification: { runtimeDigest: string; methodAssetsDigest: string; evidenceRefs: string[]; expiresAt: number } }
+  verification?: { methodId: string; settings?: import('./executors/managed-verification-method.ts').ManagedVerificationMethodSettings; qualification: { runtimeDigest: string; methodAssetsDigest: string; evidenceRefs: string[]; expiresAt: number } }
   projectVerification?: Omit<Parameters<typeof sealProjectInputs>[0], 'sourceRoot' | 'sourceFiles' | 'destination' | 'provenance'> & { authorizationVersion: string }
   initialMaterials?: string
   bootstrapResume?: { home: string; nativeSessionId: string }; parentPlan?: RuntimeProposal['intake']; root: string; projectRoot: string; publicFiles: string[]; implementationWritePaths: string[]; engine: Omit<ManagedEngineConfig, 'source'>
@@ -56,6 +58,7 @@ export const managedCoordinatorSchema: Json = {
   } } }
 }
 export interface RuntimeProposal { kind: 'accept'|'dispatch'|'verify'|'answer'|'wait'|'look'; role: string; instruction: string; reason: string; questionId: string; answer: string; intake: null | { goal: string; results: string[]; constraints: string[]; criteria: string[]; deliveryCriteria?: string[]; assignments: { role: string; basis: string; deliverables: string[]; consumers: string[]; criteria: number[] }[] } }
+export const preserveManagedDeliveryCriteria = (previous: string[], added: string[] = []) => [...new Set([...previous, ...added])]
 export function intakeReadiness(value: any): 'pass' | 'inconclusive' {
   if (value?.purpose !== 'intake' || !['ready','blocked'].includes(value.intake_readiness)) throw new Error('EXPLICIT_INTAKE_READINESS_REQUIRED')
   return value.intake_readiness === 'ready' ? 'pass' : 'inconclusive'
@@ -77,12 +80,16 @@ export async function runManagedOperationTurn(ledger: ManagedLedger, coordinatio
 }
 
 /** Terminal publication is permitted only after the exact verifier result is durable. */
-export function assertDeliveryProposalPersisted(ledger: ManagedLedger, operationId: string, receipt: DeliveryReceipt): void {
+export function assertDeliveryProposalPersisted(ledger: ManagedLedger, operationId: string, receipt: DeliveryReceipt, step?: DeliveryStep): void {
   const operation = ledger.get(operationId), proposal = ledger.get(operationId.replace(/:operation$/, ':result'))
   const matches = (value: unknown) => {
     const result = value as { status?: string; receipt?: DeliveryReceipt } | undefined
     return result?.status === 'delivered-local' && JSON.stringify(result.receipt) === JSON.stringify(receipt)
   }
+  if(!operationId.endsWith(':operation') || operation?.kind!=='coordination_operation' || (operation.data.proposal as any)?.kind!=='verify')throw Error('DELIVERY_PROPOSAL_NOT_DURABLE')
+  const attachment=ledger.get(operationId+':delivery-completion'), p=attachment?.data.payload as any
+  const attached=operation?.data.state==='completed' && (operation.data.result as any)?.status==='reconciled' && attachment?.kind==='coordination_runtime_event' && attachment.data.event==='published_delivery_completion' && p?.operationRef?.id===operation.id && p.operationRef.revision===operation.revision && p.operationSHA===createHash('sha256').update(JSON.stringify(operation)).digest('hex') && JSON.stringify(p.receipt)===JSON.stringify(receipt) && JSON.stringify(p.step?.ref)===JSON.stringify(receipt.stepRef) && p.step?.plannedCommit===receipt.commit && p.step?.finalTree===receipt.tree && matches(p.result) && !!step && JSON.stringify(p.step)===JSON.stringify(step)
+  if(attached)return
   if (!operationId.endsWith(':operation') || operation?.kind !== 'coordination_operation' || operation.data.state !== 'completed' || (operation.data.proposal as any)?.kind !== 'verify' || !matches(operation.data.result) || proposal?.kind !== 'coordination_runtime_event' || proposal.data.event !== 'proposal_result' || !matches(proposal.data.payload)) throw Error('DELIVERY_PROPOSAL_NOT_DURABLE')
 }
 
@@ -105,7 +112,8 @@ export function latestFrameworkBaseline(ledger: ManagedLedger): any {
 /** Only the trusted web-all host creates this runtime. JSON intake material cannot construct a grant. */
 export function createManagedRuntime(config: ManagedRuntimeConfig) {
   mkdirSync(config.root, { recursive: true, mode: 0o700 })
-  const method = managedVerificationMethod(config.verification?.methodId ?? 'codex-runTurn-replay@1')
+  const method = managedVerificationMethod(config.verification?.methodId ?? 'codex-runTurn-replay@1', config.verification?.settings)
+  if (config.verification?.settings && !config.publicFiles.includes(config.verification.settings.entryPath)) throw Error('VERIFICATION_MODULE_NOT_PUBLIC')
   let initialParent: string | undefined
   try { initialParent = git(config.projectRoot, ['rev-parse', 'HEAD']) } catch { /* Read-only/non-Git projects can coordinate; Git delivery reports the explicit gap. */ }
   const root = realpathSync(config.root), source: Ref = { id: 'host-authenticated:' + randomUUID(), revision: 1 }
@@ -136,16 +144,32 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   if (savedWork) { initialParent = undefined; work = { id: savedWork.id, revision: savedWork.revision }; requirement = (savedWork.data.requirement_refs as unknown as Ref[])[0]; contract = savedWork.data.acceptance_contract as unknown as Ref; team = ledger.snapshot('team_assignment').filter(o => o.data.commitment_id === work!.id).map(o => ({ id: o.id, revision: o.revision })); criteria = ledger.get(contract.id)!.data.criterion_refs as unknown as Ref[] }
   let delivered: { step: DeliveryStep; receipt: DeliveryReceipt; binding: DeliveryAcceptanceBinding; operationId: string } | undefined
   const deliveryBindings = new Map<string, DeliveryAcceptanceBinding>()
-  const delivery = createManagedLocalDelivery({ ledger, source, storageRoot: join(root, 'delivery'), host: kernel.host, binding: step => { const binding = deliveryBindings.get(step.ref.id); if (!binding) throw new Error('DELIVERY_BINDING_MISSING'); return binding } })
+  const delivery = createManagedLocalDelivery({ ledger, source, storageRoot: join(root, 'delivery'), host: kernel.host, beforeFulfill: (step,receipt) => { if(!delivered)throw Error('DELIVERY_PROPOSAL_NOT_DURABLE');assertDeliveryProposalPersisted(ledger,delivered.operationId,receipt,step) }, binding: step => { const binding = deliveryBindings.get(step.ref.id); if (!binding) throw new Error('DELIVERY_BINDING_MISSING'); return binding } })
   let originalText = '', qaResult: any, lastResult: Json = null
-  const abort = new AbortController()
+  let abort = new AbortController(), amending = false, amendmentSuspended = false
+  const ownerInput = new OwnerInputGate()
+  let pendingAmendmentId: string | undefined
   const record = (event: string, payload: unknown, scopes: Ref[] = [project], evidence: string[] = []) => coordination.host.recordRuntimeEvent(event + ':' + randomUUID(), event, json(payload), scopes, evidence)
+  const baselineEvent = ledger.eventEntries({ runtimeEvent: 'job_baseline', latest: true })[0]?.body as any
+  if (savedWork) {
+    initialParent = baselineEvent?.coordination.payload.payload.parent ?? undefined
+    const intake = ledger.eventEntries({ runtimeEvent: 'authenticated_intake', latest: true })[0]?.body as any
+    try { originalText = JSON.parse(intake?.coordination.payload.payload.text).userRequest ?? '' } catch { /* Historical inputs remain in the ledger. */ }
+  } else if (!baselineEvent) record('job_baseline', { parent: initialParent ?? null }, [project])
+  const pendingEvent = (ledger.eventEntries({ runtimeEvent: 'authenticated_amendment', latest: true })[0]?.body as any)?.coordination.payload
+  const appliedEvent = (ledger.eventEntries({ runtimeEvent: 'amendment_applied', latest: true })[0]?.body as any)?.coordination.payload
+  if (pendingEvent && appliedEvent?.payload?.inputId !== pendingEvent.id) { pendingAmendmentId = pendingEvent.id; amending = true }
+  const stopped = ledger.eventEntries({ runtimeEvent: 'owner_interrupted', latest: true })[0]
+  const pendingSequence = ledger.eventEntries({ runtimeEvent: 'authenticated_amendment', latest: true })[0]?.sequence ?? 0
+  if (amending && stopped && stopped.sequence > pendingSequence) amendmentSuspended = true
   const scope = (role: string) => [workers.get(role)!, ...coordination.semanticScopes(work!.id), ...team.filter(r => (ledger.get(r.id)!.data.worker_ref as any)?.id === workers.get(role)!.id)]
   const assignment = (role: string) => team.find(r => (ledger.get(r.id)!.data.worker_ref as any)?.id === workers.get(role)!.id)!
   const attach = (role: string, session: Awaited<ReturnType<typeof launchManagedCodex>>, priorDomainEvidenceRef?: string) => {
     const fact = kernel.host.nativeFacts(session.io.stream, 'binding').find(f => (f.observation as any).kind === 'binding')!
     const existing = ledger.snapshot().some(o => o.kind === 'session_binding' && (o.data.worker_ref as any)?.id === workers.get(role)!.id)
-    if (existing) coordination.host.resumeNativeSession(workers.get(role)!, fact.ref, priorDomainEvidenceRef); else coordination.host.bindNativeSession(workers.get(role)!, fact.ref)
+    const binding = ledger.snapshot('session_binding').find(o => (o.data.worker_ref as any)?.id === workers.get(role)!.id)
+    const retired = binding && ledger.retiredNativeDomain(binding.data.launch_ref as unknown as Ref)
+    if (existing) coordination.host.resumeNativeSession(workers.get(role)!, fact.ref, priorDomainEvidenceRef ?? retired); else coordination.host.bindNativeSession(workers.get(role)!, fact.ref)
   }
   const contextFor = (role: string, instruction: string) => {
     instruction = JSON.stringify({ instruction, hostReadOnlyMaterials: supplemental, method: { id: method.id, description: method.description, instructions: method.instructions, responseSchema: method.qualitySchema(criteria), assets: method.assets }, hostExecution: 'During intake return purpose=intake and readiness; no candidate tests are claimed. After implementation the secretary proposes verify; host requests independent verification_design cases then runs the exact registered asynchronous method on baseline and candidate. Workers do not call a shell or invent a new tool. Fixed project gates and controlled local dev delivery follow only after business acceptance. Engineering gate/receipt obligations remain later prerequisites, never synthetic replay facts. If canonical-api-evidence contains frozenCases, the full cases are already inline: return the exact original criterion/input/expected values in verification_design, preserving order, without inventing a filesystem path or digest-only tool. The host freezes the current candidate bytes/modes/allowed-path mapping and binds current method qualification after your design; prior API evidence remains historical, never a new-candidate pass.' })
@@ -196,8 +220,8 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     if (oldBinding) {
       const oldAction = ledger.get((oldBinding.data.launch_ref as unknown as Ref).id)!
       if ((oldAction.data.receipt as any)?.stopped !== true) {
-        if (role !== 'quality' || String(oldBinding.data.runtime_namespace) !== join(config.engine.stateRoot,'quality')) throw Error('NATIVE_CESSATION_UNKNOWN')
-        priorDomainEvidenceRef = kernel.host.observeNativeDomainAbsence({id:oldAction.id,revision:oldAction.revision}).nativeRef
+        if (String(oldBinding.data.runtime_namespace) !== join(config.engine.stateRoot, role)) throw Error('NATIVE_CESSATION_UNKNOWN')
+        priorDomainEvidenceRef = ledger.retiredNativeDomain({id:oldAction.id,revision:oldAction.revision}) ?? kernel.host.observeNativeDomainAbsence({id:oldAction.id,revision:oldAction.revision}).nativeRef
         rmSync(join(String(oldBinding.data.runtime_namespace),'auth.json'),{force:true})
       }
     }
@@ -242,6 +266,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     const evidence = record('professional_result', { operationId, role, answer: result.answer, nativeSessionId: session.engine.identity.native_session_id, turnId: result.receipt.consumption.turn_id }, scope(role), [proof.id])
     if (role === 'quality') {
       qaResult = JSON.parse(result.answer)
+      if (method.id === 'javascript-module@1' && qaResult.purpose === 'verification_design') qaResult.cases = parseModuleVerificationCases(qaResult.cases)
       if (qaResult.purpose === 'intake') coordination.host.recordTeamReview(work!.id, workers.get(role)!, team, [evidence.id, proof.id], intakeReadiness(qaResult))
     }
     return { status: 'observed', role, evidence, answer: result.answer } as unknown as Json
@@ -310,6 +335,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   }
   async function verifyProjectAndDeliver(service: ReturnType<typeof createVerificationService>, apiResult: { candidate: Ref; evaluation: Ref; verdict: Json; results: Json | undefined }, baseline: unknown, operationId: string): Promise<Json> {
     const settings = config.projectVerification
+    if (amending) throw Error('OWNER_INPUT_PENDING')
     if (!settings || !initialParent) return json({ status: 'engineering-prerequisite-missing', ...apiResult, missing: !settings ? 'Host project verification configuration' : 'Local dev Git repository', baseline })
     const targetRoot = realpathSync(config.projectRoot), realGitDir = realpathSync(git(targetRoot, ['rev-parse', '--absolute-git-dir']))
     if (git(targetRoot, ['branch', '--show-current']) !== 'dev' || git(targetRoot, ['rev-parse', 'HEAD']) !== initialParent) throw new Error('DELIVERY_BASELINE_CHANGED')
@@ -349,7 +375,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     chmodSync(collector, 0o700)
     record('project_collector_retained', { root: collector, responsibility: 'retained-until-qualified-cessation', tree: provisional.finalTree }, [project])
     const observations: DeliveryAcceptanceBinding['gates'] = []
-    const live = () => !abort.signal.aborted && ledger.get(current.id)?.revision === current.revision && ledger.applicability(current.id) === 'usable' && verifyProjectSeal(seal) && git(targetRoot, ['rev-parse', 'HEAD']) === initialParent
+    const live = () => !abort.signal.aborted && !amending && ledger.get(current.id)?.revision === current.revision && ledger.applicability(current.id) === 'usable' && verifyProjectSeal(seal) && git(targetRoot, ['rev-parse', 'HEAD']) === initialParent
     for (const [index, gate] of gates.entries()) {
       const observation = await runProjectVerification({ sealedCandidate: seal, workRoot: gateWork, collectorRoot: collector, gate, authorizationVersion: settings.authorizationVersion, signal: abort.signal, liveFence: live })
       const observationPath = join(observation.keeperRef.root, 'project-observation.json'), observationDigest = createHash('sha256').update(readFileSync(observationPath)).digest('hex')
@@ -357,15 +383,18 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       if (!observation.complete || observation.exit.code !== 0 || observation.errors.length || !observation.isolationCurrent) return json({ status: 'project-gate-failed', gate, ...apiResult, observationPath, observationDigest, baseline, instruction: 'Return exact gate evidence to original implementation/quality sessions; no Git publication occurred.' })
       observations.push({ ref: gateRefs[index]!, gate, observationPath, observationDigest })
     }
+    await ownerInput.beforeDelivery()
+    if (!live()) throw Error('DELIVERY_EXECUTION_FENCED')
     const target = service.enterDelivery({ id: current.id, revision: current.revision }, apiResult.evaluation)
     work = target
     const workspace = { id: provisional.action.workspaceId, root: targetRoot, source: targetRoot, repositoryId: realGitDir, baseline: initialParent, branch: 'dev', resources: resourceIds(realGitDir, 'dev'), sourceStatus: 'exact-tree:' + provisional.finalTree, role: 'engineering' as const }
     kernel.host.registerWorkspace(workspace)
     const expiresAt = Date.now() + 60000, control = kernel.host.grantControl(target, 'host-local-delivery', expiresAt)
     const step = { ...provisional, action: { ...provisional.action, target, epoch: control.epoch, scopeRefs: service.requiredActionScopes(target.id) } }
-    const binding: DeliveryAcceptanceBinding = { ref: step.acceptanceRef, candidate: apiResult.candidate, evaluation: apiResult.evaluation, seal, authorizationVersion: settings.authorizationVersion, gates: observations, method: { id: method.id, assetsDigest: methodAssetDigest(JSON.stringify(method.assets)) } }
+    const binding: DeliveryAcceptanceBinding = { ref: step.acceptanceRef, candidate: apiResult.candidate, evaluation: apiResult.evaluation, seal, authorizationVersion: settings.authorizationVersion, gates: observations, method: { id: method.id, ...(config.verification?.settings ? { settings: config.verification.settings } : {}), assetsDigest: methodAssetDigest(JSON.stringify(method.assets)) } }
     readDeliveryAcceptance(ledger, step, binding)
     deliveryBindings.set(step.ref.id, binding)
+    writeFileSync(join(root,'delivery-intent.json'),JSON.stringify({step,binding,apiResult,baseline,operationId}),{flag:'wx',mode:0o600})
     const spec = prepareDeliveryStep(step)
     kernel.host.grantCapability({ id: spec.capabilityRef.id, revision: 1, expiresAt, scopeRefs: spec.scopeRefs, evidenceRefs: observations.map(g => g.observationDigest), externalTools: 'blocked', revoked: false, launch: { executable: spec.executable, args: spec.args, processPolicy: 'single' }, expectedDevTransition: spec.expectedDevTransition })
     kernel.host.grantMandate({ id: spec.mandateRef.id, revision: 1, requester: spec.requester, subject: spec.subject, target, workspaceId: workspace.id, resourceIds: workspace.resources, actions: ['deliver'], scopeRefs: spec.scopeRefs, expiresAt, revoked: false })
@@ -399,8 +428,23 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   const interpreter = createProposalInterpreter(ledger, coordination, async (raw, key) => {
     const p = raw as unknown as RuntimeProposal
     if (p.kind === 'accept') {
-      if (work || !p.intake || !p.intake.criteria.length) throw new Error('INTAKE_PROPOSAL_REQUIRED')
+      if ((work && !amending) || !p.intake || !p.intake.criteria.length) throw new Error('INTAKE_PROPOSAL_REQUIRED')
       const v = p.intake, parent = config.parentPlan, id = randomUUID()
+      const priorWork = work && ledger.get(work.id)
+      if (priorWork) {
+        const previousRequirement = ledger.get(requirement!.id)!, previousContract = ledger.get(contract!.id)!
+        const oldDelivery = ledger.get((priorWork.data.delivery_contract as unknown as Ref).id)!
+        v.deliveryCriteria = preserveManagedDeliveryCriteria(((oldDelivery.data.criterion_refs ?? []) as unknown as Ref[]).map(r => String(ledger.get(r.id)!.data.intent)), v.deliveryCriteria)
+        v.results = [...new Set([...(previousRequirement.data.observable_results as string[]), ...v.results])]
+        v.constraints = [...new Set([...(previousRequirement.data.constraints as string[]), ...v.constraints])]
+        for (const ref of previousContract.data.criterion_refs as unknown as Ref[]) {
+          const text = String(ledger.get(ref.id)!.data.intent)
+          if (!v.criteria.includes(text)) { const index = v.criteria.length; v.criteria.push(text); for (const a of v.assignments) a.criteria.push(index) }
+        }
+        await api.stopNative()
+        const current = ledger.get(priorWork.id)!
+        if (current.data.control_state !== 'paused') ledger.transact([{ id: current.id, revision: current.revision }], [{ kind: 'control', id: current.id, control_state: 'paused', reason: 'Authenticated amendment replaces candidate contract', evidence_refs: [source.id] }])
+      }
       const makeRequirement = (id: string, intent: string, results: string[], constraints: string[]) => ({ id, kind: 'requirement', revision: 1, scope_revision_refs: [], extensions: {}, data: { intent, source_refs: [source], wish_refs: [], observable_results: results, constraints, criterion_sources: [source.id] } } as unknown as ManagedObject)
       requirement = { id: 'requirement:' + id, revision: 1 }; contract = { id: 'contract:' + id, revision: 1 }
       criteria = v.criteria.map((_, i) => ({ id: 'criterion:' + id + ':' + i, revision: 1 }))
@@ -409,11 +453,18 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       const objects = [makeRequirement(requirement.id, v.goal, v.results, v.constraints), ...v.criteria.map((text,i) => ({ ...makeRequirement(criteria[i]!.id, text, [text], []), scope_revision_refs: [requirement!] })), ...(v.deliveryCriteria ?? []).map((text,i) => ({ ...makeRequirement(deliveryCriteria[i]!.id, text, [text], []), scope_revision_refs: [requirement!] })), { id: contract.id, kind: 'acceptance_contract', revision: 1, data: { intent: v.goal, requirement_refs: [requirement], criterion_refs: criteria, source_refs: [source] }, scope_revision_refs: [requirement, ...criteria], extensions: {} }, { id: deliveryRef.id, kind: 'delivery_contract', revision: 1, data: { intent: 'Exact local dev delivery after independent business acceptance and full project gates', requirement_refs: [requirement], step_refs: [stepRef], source_refs: [source], criterion_refs: deliveryCriteria, evidence_policy: DELIVERY_EVIDENCE_POLICY }, scope_revision_refs: [requirement, ...deliveryCriteria], extensions: {} }] as unknown as ManagedObject[]
       ledger.transact([], objects.map(object => ({ kind: 'create', object })))
       if (parent) record('parent_goal_pending', { requirements: parent as unknown as Json, status: 'pending', reason: 'Separate prior platform outcome; this business delivery does not fulfill or discard it.' }, [project])
-      work = coordination.acceptManagedIntent(source, { id: 'work:' + id, intent: v.goal, requirements: [requirement], acceptanceContract: contract, deliveryContract: deliveryRef, projects: [project], boundary: 'Only host-authorized paths; independent business acceptance plus exact-tree project gates before controlled local dev commit; no push or deployment', accountable: workers.get('coordinator')!.id, policy, nextReviewAt: Date.now()+60000 })
-      team = ports.plan(work, v.assignments.map(a => ({ role: a.role, applicable: true, basis: a.basis, worker: workers.get(a.role) ?? null, deliverables: a.deliverables, consumers: a.consumers, criteria: a.criteria.map(i => criteria[i]!), dependencies: [], combinationBasis: '' })))
-      const old = native.get('coordinator')!, identity = old.engine.identity
-      await closeRole('coordinator')
-      const next = await launchManagedCodex(kernel, { ...config.engine, source, stateRoot: old.home }, workers.get('coordinator')!, workspaces.get('coordinator')!.workspace, scope('coordinator'), instructions, [], managedCoordinatorSchema, { home: old.home, nativeSessionId: identity.native_session_id })
+      const spec = { id: priorWork?.id ?? 'work:' + id, intent: v.goal, requirements: [requirement], acceptanceContract: contract, deliveryContract: deliveryRef, projects: [project], boundary: 'Only host-authorized paths; independent business acceptance plus exact-tree project gates before controlled local dev commit; no push or deployment', accountable: workers.get('coordinator')!.id, policy, nextReviewAt: Date.now()+60000 }
+      const assignments = v.assignments.map(a => ({ role: a.role, applicable: true, basis: a.basis, worker: workers.get(a.role) ?? null, deliverables: a.deliverables, consumers: a.consumers, criteria: a.criteria.map(i => criteria[i]!), dependencies: [], combinationBasis: '' }))
+      if (priorWork) record('amendment_plan', { inputId: pendingAmendmentId!, acceptanceContract: contract, assignments }, [project])
+      work = priorWork ? coordination.host.amendManagedIntent({ id: priorWork.id, revision: ledger.get(priorWork.id)!.revision }, spec, [source.id]) : coordination.acceptManagedIntent(source, spec)
+      team = priorWork ? coordination.host.replanProfessionalTeam(work, assignments) : ports.plan(work, assignments)
+      if (priorWork) record('amendment_applied', { inputId: pendingAmendmentId!, commitment: work, contract, team }, [project])
+      amending = false
+      pendingAmendmentId = undefined
+      const old = native.get('coordinator'), binding = ledger.snapshot('session_binding').find(o => (o.data.worker_ref as any)?.id === workers.get('coordinator')!.id)
+      const resume = old ? { home: old.home, nativeSessionId: old.engine.identity.native_session_id } : binding ? { home: String(binding.data.runtime_namespace), nativeSessionId: String(binding.data.native_session_id) } : undefined
+      if (old) await closeRole('coordinator')
+      const next = await launchManagedCodex(kernel, { ...config.engine, source, stateRoot: resume!.home }, workers.get('coordinator')!, workspaces.get('coordinator')!.workspace, scope('coordinator'), instructions, [], managedCoordinatorSchema, resume)
       native.set('coordinator', next); attach('coordinator', next)
       return json({ status: 'accepted', commitment: work, team, criteria, parentRequirementsPreserved: true })
     }
@@ -427,7 +478,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     if (p.kind === 'wait') return { status: 'waiting', reason: p.reason, nextReviewAt: Date.now()+60000 }
     if (p.kind === 'verify') { const request=record('verification_instruction',{operationId:key,instruction:p.instruction},coordination.semanticScopes(work!.id)); await ports.verify({ method: 'json-equality@1', context: request }); completeOperation(key,lastResult); return lastResult }
     throw new Error('PROPOSAL_NOT_EXECUTABLE_IN_THIS_CONTEXT')
-  }, { preflight(raw) { const p=raw as unknown as RuntimeProposal; if(p.kind==='dispatch') assertRoleDispatchReady(p.role); else if(p.kind==='verify') assertVerificationReady() }, executionSlots(raw) { const p=raw as unknown as RuntimeProposal; return p.kind==='dispatch'?[p.role]:p.kind==='verify'?['quality','collect:baseline','collect:candidate']:[] }, domains(raw) {
+  }, { preflight(raw) { const p=raw as unknown as RuntimeProposal; if (abort.signal.aborted) throw Error('MANAGED_TURN_ABORTED'); if (amending && !['accept','look','wait'].includes(p.kind)) throw Error('AMENDMENT_CONTRACT_REQUIRED'); if(p.kind==='dispatch') assertRoleDispatchReady(p.role); else if(p.kind==='verify') assertVerificationReady() }, executionSlots(raw) { const p=raw as unknown as RuntimeProposal; return p.kind==='dispatch'?[p.role]:p.kind==='verify'?['quality','collect:baseline','collect:candidate']:[] }, domains(raw) {
     const p=raw as unknown as RuntimeProposal
     const roles=p.kind==='dispatch'?[p.role]:p.kind==='verify'?['quality','collector']:[]
     if(!roles.length) return undefined
@@ -439,9 +490,144 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   } })
   const api = {
     ledger, coordination, kernel, root, source, project, policy, workers, workspaces, native, reconcileOperations,
+    amendmentPending: () => amending,
+    async routeMessage(text: string): Promise<{ kind: 'discussion' | 'amendment'; answer: string }> {
+      if (!work) return { kind: 'discussion', answer: '事项正在受理，尚未派发执行。' }
+      return ownerInput.classify(async () => {
+        const batch = await askSecretary(JSON.stringify({ ownerMessage: text, task: work, instruction: 'Classify this authenticated owner message without executing it. Return exactly one answer proposal. Set role="discussion" for progress questions, explanations and discussion; answer it using current facts. Set role="amendment" only when the owner actually requests changes or explicitly resumes work; preserve their exact request in answer. Do not accept, dispatch, verify, or answer native technical questions in this classification turn. Ordinary conversation never changes the contract.' }))
+        const response = batch.proposals[0]
+        if (batch.proposals.length !== 1 || response?.kind !== 'answer' || !['discussion','amendment'].includes(response.role) || !response.answer.trim()) throw Error('OWNER_MESSAGE_CLASSIFICATION_REQUIRED')
+        return { kind: response.role as 'discussion' | 'amendment', answer: response.answer }
+      })
+    },
+    async reconcile(): Promise<{ state: 'ready' | 'pending' | 'paused' | 'delivered' | 'unstarted'; reason?: string }> {
+      if (work && ledger.get(work.id)!.data.control_state !== 'autonomous' && (!amending || amendmentSuspended)) return { state: 'paused' }
+      for (const action of ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')) {
+        if ((action.data.receipt as any)?.stopped === true || ledger.retiredNativeDomain({ id: action.id, revision: action.revision })) continue
+        try { kernel.host.observeNativeDomainAbsence({ id: action.id, revision: action.revision }) }
+        catch (error) { return { state: 'pending', reason: 'Original writer not yet proved absent: ' + String(error) } }
+      }
+      if (!work) {
+        const fact = (ledger.eventEntries({ nativeKind: 'binding', latest: true })[0]?.body as any)?.controlled.command
+        const identity = fact?.observation?.binding?.identity
+        if (identity) {
+          if (identity.runtime_namespace !== join(config.engine.stateRoot, 'coordinator')) return { state: 'pending', reason: 'Bootstrap native domain is not the configured coordinator.' }
+          config.bootstrapResume = { home: identity.runtime_namespace, nativeSessionId: identity.native_session_id }
+        }
+        abort = new AbortController()
+        return { state: 'unstarted' }
+      }
+      if (ledger.get(work.id)!.data.state === 'fulfilled') {
+        const saved = JSON.parse(readFileSync(join(root, 'delivery-result.json'), 'utf8'))
+        deliveryBindings.set(saved.step.ref.id, saved.binding)
+        delivered = saved
+        if (api.deliveryEvaluation().verdict !== 'pass') return { state: 'pending', reason: 'Published delivery evidence no longer verifies.' }
+        return { state: 'delivered' }
+      }
+      if (api.hasPublishedDelivery()) { await api.recoverPublishedDelivery(); return { state: 'delivered' } }
+      if (amending && ledger.get(work.id)!.data.control_state === 'paused') {
+        const current = ledger.get(work.id)!
+        work = coordination.host.resumeForAmendment({ id: current.id, revision: current.revision }, [pendingAmendmentId!])
+      }
+      reconcileOperations()
+      const observation = record('recovery_observed', { commitment: work, reason: 'Native writers ceased; original artifacts and unanswered requests retained for diagnosis.' }, [project])
+      try { coordination.host.retireInterruptedOperations(work.id, [observation.id]) }
+      catch (error) { return { state: 'pending', reason: String(error) } }
+      abort = new AbortController()
+      return { state: 'ready' }
+    },
+    interrupt(reason: string, origin: 'owner' | 'lifecycle' | 'amendment' = 'owner') {
+      abort.abort()
+      ownerInput.clearAmendment()
+      if (origin === 'amendment') {
+        const earlier = pendingAmendmentId && (ledger.get(pendingAmendmentId)!.data.payload as any).text
+        const event = record('authenticated_amendment', { text: earlier ? earlier + '\n' + reason : reason }, [project])
+        pendingAmendmentId = event.id; amending = true; amendmentSuspended = false
+      } else {
+        record(origin === 'owner' ? 'owner_interrupted' : 'lifecycle_interrupted', { reason }, [project])
+        if (origin === 'owner' && amending) amendmentSuspended = true
+      }
+      if (work && origin !== 'lifecycle') {
+        const current = ledger.get(work.id)!
+        if (current.data.control_state !== 'paused' && !['fulfilled','released','withdrawn','broken'].includes(String(current.data.state))) {
+          const result = ledger.transact([{ id: current.id, revision: current.revision }], [{ kind: 'control', id: current.id, control_state: 'paused', reason, evidence_refs: [source.id] }])
+          if (result.kind !== 'committed') throw Error('MANAGED_CONTROL_CONFLICT')
+          work = result.refs[0]!
+        }
+      }
+      const liveTargets = new Map<string, Ref>()
+      for (const action of ledger.snapshot('action')) {
+        const spec = action.data.execution_spec as any
+        if (spec?.kind === 'dispatch' && (action.data.receipt as any)?.stopped !== true && workers.has(String(spec.target?.id).replace(/^worker:/, ''))) liveTargets.set(spec.target.id, spec.target)
+      }
+      for (const target of liveTargets.values()) kernel.host.revokeControl(target, source)
+    },
+    async wake(text: string): Promise<{ requestId: string; proposals: { proposals: RuntimeProposal[] } }> {
+      if (amending && !amendmentSuspended) return api.amend((ledger.get(pendingAmendmentId!)!.data.payload as any).text)
+      if (!work) throw Error('MANAGED_WORK_MISSING')
+      const current = ledger.get(work.id)!
+      if (current.data.control_state !== 'autonomous') throw Error('CONTROL_LOST')
+      const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
+      if (launches.some(o => (o.data.receipt as any)?.stopped !== true && !ledger.retiredNativeDomain({ id: o.id, revision: o.revision }))) throw Error('NATIVE_CESSATION_UNKNOWN')
+      reconcileOperations()
+      abort = new AbortController()
+      if (amending) return api.amend((ledger.get(pendingAmendmentId!)!.data.payload as any).text)
+      return { requestId: 'review:' + randomUUID(), proposals: await askSecretary(JSON.stringify({ instruction: text, lastResults: lastResult, next: 'Continue the original task from actual durable state. Return look if diagnosis is needed. Do not abandon responsibility or repeat unknown effects.' })) }
+    },
+    async amend(text: string): Promise<{ requestId: string; proposals: { proposals: RuntimeProposal[] } }> {
+      if (!work) { abort = new AbortController(); return api.bootstrap(text) }
+      if (ledger.get(work.id)?.data.state === 'delivering' || existsSync(join(root, 'delivery-intent.json'))) throw Error('PUBLISHED_DELIVERY_RECONCILIATION_REQUIRED')
+      const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
+      if (launches.some(o => (o.data.receipt as any)?.stopped !== true && !ledger.retiredNativeDomain({ id: o.id, revision: o.revision }))) throw Error('NATIVE_CESSATION_UNKNOWN')
+      abort = new AbortController(); amending = true
+      ownerInput.clearAmendment()
+      if (amendmentSuspended) { pendingAmendmentId = undefined; amendmentSuspended = false }
+      const event = pendingAmendmentId ? { id: pendingAmendmentId } : record('authenticated_amendment', { text }, [project])
+      pendingAmendmentId = event.id
+      const plan = (ledger.eventEntries({ runtimeEvent: 'amendment_plan', latest: true })[0]?.body as any)?.coordination.payload.payload
+      if (plan?.inputId === pendingAmendmentId && JSON.stringify(ledger.get(work.id)!.data.acceptance_contract) === JSON.stringify(plan.acceptanceContract)) {
+        const currentTeam = ledger.snapshot('team_assignment').filter(o => o.data.commitment_id === work!.id)
+        if (currentTeam.some(o => ledger.applicability(o.id) !== 'usable')) team = coordination.host.replanProfessionalTeam({ id: work.id, revision: ledger.get(work.id)!.revision }, plan.assignments)
+        record('amendment_applied', { inputId: pendingAmendmentId, commitment: work, contract, team }, [project])
+        amending = false; pendingAmendmentId = undefined
+        return api.wake('The interrupted contract amendment is durably applied; obtain fresh independent quality review and continue the retained candidate.')
+      }
+      const current = ledger.get(work.id)!
+      if (current.data.control_state === 'paused') work = coordination.host.resumeForAmendment({ id: current.id, revision: current.revision }, [event.id])
+      return { requestId: 'amend:' + event.id, proposals: await askSecretary(JSON.stringify({ instruction: text, originalRequest: originalText, next: 'Return one accept proposal with a full revised intake for this SAME responsibility. Preserve previous results, constraints, criteria and all responsibilities; add the new requirement. Do not dispatch or verify until that amendment is accepted. Keep the original native threads and candidate for repair.' })) }
+    },
     deliveryEvaluation: () => delivered && ledger.get(delivered.step.action.target.id)?.data.state === 'fulfilled' ? delivery.verifyDeliveryReceipt(delivered.step.ref, delivered.receipt) : { verdict: 'fail' as const, reason: 'No independently verified local delivery', receipt: null },
     resultReport: () => delivered && ledger.get(delivered.step.action.target.id)?.data.state === 'fulfilled' ? delivery.report(delivered.step.ref, delivered.receipt) : undefined,
-    async bootstrap(text: string, signal: AbortSignal = new AbortController().signal) {
+    hasPublishedDelivery() { return existsSync(join(root,'delivery-intent.json')) && ledger.get(work!.id)?.data.state === 'delivering' },
+    async recoverPublishedDelivery() {
+      if(native.size)throw Error('DELIVERY_RECOVERY_NOT_QUIESCENT')
+      const intent=JSON.parse(readFileSync(join(root,'delivery-intent.json'),'utf8')) as {step:DeliveryStep;binding:DeliveryAcceptanceBinding;apiResult:any;baseline:unknown;operationId:string}
+      const operation=ledger.get(intent.operationId)
+      if(!operation||operation.kind!=='coordination_operation'||(operation.data.proposal as any)?.kind!=='verify'||intent.step.action.target.id!==work?.id)throw Error('DELIVERY_RECOVERY_OPERATION_REQUIRED')
+      deliveryBindings.set(intent.step.ref.id,intent.binding)
+      const recovered=await delivery.recoverPublished(intent.step.ref)
+      delivered={...recovered,binding:intent.binding,operationId:intent.operationId}
+      const result=json({status:'delivered-local',...intent.apiResult,commitment:recovered.step.action.target,receipt:recovered.receipt,priorPlatformGoal:'unchanged'})
+      const resultPath=join(root,'delivery-result.json'), stored=JSON.stringify(delivered)
+      if(existsSync(resultPath)){if(readFileSync(resultPath,'utf8')!==stored)throw Error('DELIVERY_RECOVERY_RESULT_CONFLICT')}
+      else writeFileSync(resultPath,stored,{flag:'wx',mode:0o600})
+      const currentOperation=ledger.get(intent.operationId)!
+      if(currentOperation.data.state==='completed' && (currentOperation.data.result as any)?.status==='reconciled') {
+        const prior=currentOperation.data.result as any
+        if(prior.operation!==intent.operationId || prior.basis!=='Persisted exact native input completion or controlled receipts; not an acceptance verdict')throw Error('DELIVERY_RECOVERY_OPERATION_CONFLICT')
+        coordination.host.recordRuntimeEvent(intent.operationId+':delivery-completion','published_delivery_completion',json({operationRef:{id:currentOperation.id,revision:currentOperation.revision},operationSHA:createHash('sha256').update(JSON.stringify(currentOperation)).digest('hex'),step:recovered.step,receipt:recovered.receipt,result,acceptance:{ref:intent.binding.ref,sealDigest:intent.binding.seal.digest,evaluation:intent.binding.evaluation,gates:intent.binding.gates}}),recovered.step.action.scopeRefs,[String(operation.data.input_ref),recovered.receipt.commit])
+      } else {
+        if(currentOperation.data.state==='completed'){if(JSON.stringify(currentOperation.data.result)!==JSON.stringify(result))throw Error('DELIVERY_RECOVERY_OPERATION_CONFLICT')}
+        else completeOperation(intent.operationId,result)
+        coordination.host.recordRuntimeEvent(intent.operationId.replace(/:operation$/,':result'),'proposal_result',result,scope('coordinator'),[String(operation.data.input_ref)])
+      }
+      assertDeliveryProposalPersisted(ledger,intent.operationId,recovered.receipt,recovered.step)
+      work=delivery.fulfill(recovered.step,recovered.receipt)
+      const text=delivery.report(recovered.step.ref,recovered.receipt)
+      record('local_delivery_verified',{commitment:work,receipt:recovered.receipt,text,recoveredFrom:intent.step.action.id},[project],[recovered.receipt.commit])
+      return json({status:'fulfilled-local',commitment:work,receipt:recovered.receipt,text,priorPlatformGoal:'unchanged'})
+    },
+    async bootstrap(text: string, signal: AbortSignal = abort.signal) {
       originalText = text
       text = JSON.stringify({ userRequest: text, supportedVerificationMethod: { id: method.id, description: method.description }, sourceFiles: config.publicFiles, allowedWritePaths: config.implementationWritePaths, trustedMaterials: config.initialMaterials ?? '', engineeringPrerequisites: 'Put only business method assertions in criteria; put exact-tree gates, allowed-path local dev commit and truthful delivery in deliveryCriteria. Preserve all original results/constraints. Independent qualified business acceptance, all exact-tree project gates, controlled local dev commit. Prior M1 platform obligations remain separate pending work; do not treat them as this task criteria or silently fulfill them.' })
       const worker = workers.get('coordinator')!, home = config.bootstrapResume?.home ?? join(config.engine.stateRoot, 'coordinator')
@@ -542,7 +728,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       let current = batch
       for (let turn = 0; turn < 8; turn++) {
         let result: Json[], applied = false
-        try { result = await interpreter.apply(current.requestId, current.proposals.proposals as unknown as Json[], work ? coordination.semanticScopes(work.id) : [project]); applied = true } catch (error) { result = [{ status: 'refused_or_unknown', reason: String(error), instruction: 'Inspect durable operation/native facts; correct proposals internally. Never bypass quality or automatically repeat unknown effects.' }] }
+        try { result = await interpreter.apply(current.requestId, current.proposals.proposals as unknown as Json[], work && !amending ? coordination.semanticScopes(work.id) : [project]); applied = true } catch (error) { result = [{ status: 'refused_or_unknown', reason: String(error), instruction: 'Inspect durable operation/native facts; correct proposals internally. Never bypass quality or automatically repeat unknown effects.' }] }
         outcomes.push(...result)
         if (delivered && applied) {
           assertDeliveryProposalPersisted(ledger, delivered.operationId, delivered.receipt)
@@ -554,7 +740,8 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
           outcomes.push(json({ status: 'fulfilled-local', commitment: work, receipt: delivered.receipt, text, priorPlatformGoal: 'unchanged' }))
           break
         }
-        if (current.proposals.proposals.some(p => p.kind === 'wait')) break
+        if (abort.signal.aborted) throw Error('MANAGED_TURN_ABORTED')
+        if (current.proposals.proposals.some(p => p.kind === 'wait') || turn === 7) break
         const text = JSON.stringify({ observedResults: result, next: (coordination.dispatchReadiness(work!.id).ready?'Continue from the durable current phase and these actual results. Current independent team intake is approved; do not repeat intake or regenerate a completed candidate. A complete verification design goes directly to controlled replay. Observed candidate failure goes to the original implementation thread, then independent verification.':'First obtain independent quality approval of the criteria before implementation.')+' Criteria ids: '+criteria.map(r=>r.id).join(',')+'. The implementation must use ask if uncertain; technical matters stay internal. After candidate implementation request independent verify. After independent acceptance passes, the host runs the configured project gates and exact local dev delivery automatically. Only host receipt-backed reporting can claim completion; if a gate fails, use its actual evidence for original-thread repair.' })
         current = { requestId: 'advance:'+randomUUID(), proposals: await askSecretary(text) }
       }
@@ -586,23 +773,29 @@ export function createManagedLocalDelivery(input: {
   ledger: ManagedLedger; source: Ref; storageRoot: string
   host: ReturnType<typeof createControlledKernel>['host']
   binding(step: DeliveryStep): DeliveryAcceptanceBinding
+  beforeFulfill?(step: DeliveryStep, receipt: DeliveryReceipt): void
 }) {
   const port = createLocalGitDelivery({ storageRoot: input.storageRoot, verifyReceipt: inspectDeliveryReceipt,
     readAcceptance: step => readDeliveryAcceptance(input.ledger, step, input.binding(step), true),
     fence: ref => { const result = input.host.fenceDispatch(ref); if (result.kind !== 'envelope') throw new Error('DELIVERY_EXECUTION_FENCED'); return result },
+    authorizeRecovery: (before, after, journalDigest, proof) => {
+      const o=input.ledger.get(proof.id),p=o?.data.payload as any
+      if(!o||o.revision!==proof.revision||o.kind!=='coordination_runtime_event'||o.data.event!=='local_delivery_reauthorization'||JSON.stringify(p)!==JSON.stringify({before,after,journalDigest}))throw Error('DELIVERY_RECOVERY_PROOF_REQUIRED')
+    },
   })
   const fulfill = createDeliveryFulfillment(input.ledger, input.source, (step, receipt) => {
+    input.beforeFulfill?.(step,receipt)
     const acceptance = readDeliveryAcceptance(input.ledger, step, input.binding(step), true)
     const evaluation = inspectDeliveryReceipt(step, receipt)
     if (evaluation.verdict !== 'pass') throw new Error('DELIVERY_NOT_VERIFIED:' + evaluation.reason)
     return acceptance
   })
-  return Object.freeze({
+  const api = Object.freeze({
     prepareDeliveryStep,
     async execute(step: DeliveryStep, action: Ref): Promise<DeliveryReceipt> {
-      readDeliveryAcceptance(input.ledger, step, input.binding(step), true)
       const existing = input.ledger.get(action.id)
       if (existing?.data.state === 'confirmed' && JSON.stringify(existing.data.execution_spec) === JSON.stringify(prepareDeliveryStep(step))) {
+        readDeliveryAcceptance(input.ledger,step,input.binding(step),true)
         const prior = port.reconcile(step.ref).receipt
         if (!prior || port.verifyDeliveryReceipt(step.ref, prior).verdict !== 'pass') throw new Error('DELIVERY_RECONCILIATION_FAILED')
         return { ...prior, actionRef: { id: existing.id, revision: existing.revision } }
@@ -627,7 +820,33 @@ export function createManagedLocalDelivery(input: {
     },
     reconcile: port.reconcile,
     fulfill(step: DeliveryStep, receipt: DeliveryReceipt) { return fulfill(step, receipt) },
+    async recoverPublished(ref: Ref) {
+      const state=port.reconcile(ref)
+      if(state.stage==='aligned'&&state.receipt){
+        if(port.verifyDeliveryReceipt(ref,state.receipt).verdict!=='pass')throw Error('DELIVERY_RECONCILIATION_FAILED')
+        const action=input.ledger.get(state.step.action.id)!
+        const confirmed=action.data.state==='confirmed'?{ref:{id:action.id,revision:action.revision}}:input.host.reconcileAction({id:action.id,revision:action.revision},{status:'confirmed',stopped:true,evidenceRefs:['local-git:'+state.receipt.commit+':'+state.receipt.tree]}) as ActionRecord
+        return {step:state.step,receipt:{...state.receipt,actionRef:confirmed.ref}}
+      }
+      const observed=port.inspectPublished(ref),before=observed.step
+      readDeliveryAcceptance(input.ledger,before,input.binding(before),true)
+      const rechecked=port.inspectPublished(ref)
+      if(rechecked.journalDigest!==observed.journalDigest)throw Error('DELIVERY_RECOVERY_JOURNAL_CHANGED')
+      const original=input.ledger.get(before.action.id)
+      if(!original||JSON.stringify(original.data.execution_spec)!==JSON.stringify(prepareDeliveryStep(before)))throw Error('DELIVERY_PREDECESSOR_CHANGED')
+      input.host.retirePartialDelivery({id:original.id,revision:original.revision},createHash('sha256').update(JSON.stringify(original.data.execution_spec)).digest('hex'),observed.journalDigest)
+      const id=before.action.id+':recovery:'+randomUUID(),expiresAt=Date.now()+60000,control=input.host.grantControl(before.action.target,before.action.subject,expiresAt)
+      const step:DeliveryStep={...before,action:{...before.action,id,idempotencyKey:id,epoch:control.epoch,capabilityRef:{id:id+':cap',revision:1},mandateRef:{id:id+':mandate',revision:1}}},spec=prepareDeliveryStep(step)
+      const proof=createCoordinationService(input.ledger,input.source).host.recordRuntimeEvent(id+':authorization','local_delivery_reauthorization',json({before,after:step,journalDigest:observed.journalDigest}),spec.scopeRefs,['delivery-journal:'+observed.journalDigest])
+      input.host.grantCapability({deliveryRecovery:proof,id:spec.capabilityRef.id,revision:1,scopeRefs:spec.scopeRefs,evidenceRefs:['delivery-journal:'+observed.journalDigest],expiresAt,externalTools:'blocked',revoked:false,launch:{executable:spec.executable,args:spec.args,processPolicy:spec.processPolicy},expectedDevTransition:spec.expectedDevTransition})
+      input.host.grantMandate({id:spec.mandateRef.id,revision:1,requester:spec.requester,subject:spec.subject,target:spec.target,workspaceId:spec.workspaceId,resourceIds:spec.resourceIds,actions:['deliver'],scopeRefs:spec.scopeRefs,expiresAt,revoked:false})
+      const kernel=createControlledKernel(input.ledger,input.source),action=kernel.actions.planAction(spec)
+      kernel.actions.claimResources(action.ref,spec.resourceIds)
+      port.reauthorize(ref,step,proof)
+      return {step,receipt:await api.execute(step,action.ref)}
+    },
   })
+  return api
 }
 
 export function continuationVersion(prior: Record<string, any>, item: Record<string, any>) {
@@ -641,91 +860,43 @@ interface HostProjects {
   defaultProject: string
   projects: Record<string, Omit<ManagedRuntimeConfig, 'root' | 'engine'> & { engine: Omit<ManagedEngineConfig, 'source' | 'stateRoot'> }>
 }
-export interface ManagedAdmissionRequest { requestId: string; project?: string; text: string; origin: { kind: 'feishu' | 'trusted-host'; chatId?: string; messageId?: string; eventId?: string } }
-/** Persist before returning to a synchronous channel hook; each input has one owner and one queued execution. */
-export function createManagedAdmission(config: ManagedHostConfig, onResult: (request: ManagedAdmissionRequest, result: { state: string; reason?: string; evaluate: () => import('./protocol/delivery.ts').DeliveryEvaluation }) => void) {
+export type ManagedAdmissionRequest = AdmissionRequest
+export function managedAdmissionRuntime(runtime: ReturnType<typeof createManagedRuntime>, settings: Pick<ManagedRuntimeConfig, 'frameworkBaselineTransition'>): AdmissionRuntime {
+  return {
+    routeMessage: runtime.routeMessage, amendmentPending: runtime.amendmentPending, reconcile: runtime.reconcile,
+    start: async text => runtime.advance(await runtime.bootstrap(text)),
+    wake: async text => {
+      const proof = await runtime.reconcile()
+      if (proof.state === 'delivered') return { status: 'delivery-reconciled' }
+      if (proof.state === 'paused') throw Error('CONTROL_LOST')
+      if (proof.state === 'pending') throw Error('RECOVERY_PENDING:' + proof.reason)
+      return runtime.advance(await runtime.wake(text))
+    },
+    amend: async text => {
+      if (runtime.hasPublishedDelivery()) throw Error('PUBLISHED_DELIVERY_RECONCILIATION_REQUIRED')
+      if (settings.frameworkBaselineTransition) await runtime.prepareContinuation()
+      return runtime.advance(await runtime.amend(text))
+    },
+    interrupt: runtime.interrupt,
+    stopNative: async () => { const results = await runtime.stopNative(); if (results.some((r: any) => r.stopped === false)) throw Error('NATIVE_CESSATION_UNKNOWN'); return results },
+    dispose: runtime.dispose, deliveryEvaluation: runtime.deliveryEvaluation, resultReport: runtime.resultReport,
+  }
+}
+/** Host-only factory injection also lets lifecycle contracts run without a model or credentials. */
+export function createManagedAdmission(config: ManagedHostConfig, onResult: (request: ManagedAdmissionRequest, result: { state: string; reason?: string; evaluate: () => import('./protocol/delivery.ts').DeliveryEvaluation }) => void, ports?: { runtime?(project: string, root: string): AdmissionRuntime; notice?(request: ManagedAdmissionRequest, text: string): void }) {
   const stat = statSync(config.bootstrapFile)
   if (!stat.isFile() || stat.mode & 0o022 || (process.getuid?.() !== 0 && stat.uid !== process.getuid?.())) throw new Error('MANAGED_HOST_BOOTSTRAP_TRUST_REQUIRED')
   const raw = JSON.parse(readFileSync(config.bootstrapFile, 'utf8')) as HostProjects
-  if (!raw.root || !raw.defaultProject || !raw.projects?.[raw.defaultProject]) throw new Error('MANAGED_HOST_PROJECT_REQUIRED')
+  if (!raw.root || !raw.defaultProject || !Object.hasOwn(raw.projects ?? {}, raw.defaultProject)) throw new Error('MANAGED_HOST_PROJECT_REQUIRED')
   mkdirSync(raw.root, { recursive: true, mode: 0o700 })
-  const root = realpathSync(raw.root), requestsRoot = join(root, 'requests'); mkdirSync(requestsRoot, { recursive: true, mode: 0o700 })
-  const running = new Map<string, ReturnType<typeof createManagedRuntime>>()
-  let queue = Promise.resolve(), disposed = false
-  const pathOf = (id: string) => join(requestsRoot, createHash('sha256').update(id).digest('hex') + '.json')
-  const persist = (path: string, record: unknown) => { const tmp = path + '.next'; writeFileSync(tmp, JSON.stringify(record), { mode: 0o600 }); const fd = openSync(tmp, 'r'); try { fsyncSync(fd) } finally { closeSync(fd) }; renameSync(tmp, path) }
-  const api = {
-    projects: () => Object.entries(raw.projects).map(([id, project]) => ({ id, default: id === raw.defaultProject, verificationMethod: project.verification?.methodId ?? null })),
-    read(requestId: string) { return JSON.parse(readFileSync(pathOf(requestId), 'utf8')) as { request: ManagedAdmissionRequest; state: string; result?: unknown; error?: string } },
-    enqueue(request: ManagedAdmissionRequest) {
-      if (disposed || !request.requestId || !request.text.trim() || request.text.length > 64000) throw new Error('MANAGED_INTAKE_INVALID')
-      const project = request.project ?? raw.defaultProject, settings = raw.projects[project]
-      if (!Object.hasOwn(raw.projects, project) || !settings) throw new Error('MANAGED_PROJECT_NOT_CONFIGURED')
-      const input = { ...request, project }, path = pathOf(input.requestId), key = createHash('sha256').update(input.requestId).digest('hex')
-      if (existsSync(path)) { const old = api.read(input.requestId); if (JSON.stringify(old.request) !== JSON.stringify(input)) throw new Error('MANAGED_ADMISSION_CONFLICT'); return { requestId: input.requestId, state: old.state, duplicate: true } }
-      // Exclusive creation and fsync happen before the native queue is touched.
-      const fd = openSync(path, 'wx', 0o600)
-      try { writeFileSync(fd, JSON.stringify({ request: input, state: 'queued', admittedAt: Date.now() })); fsyncSync(fd) } finally { closeSync(fd) }
-      queue = queue.then(async () => {
-        if (disposed) return
-        const jobRoot = join(root, 'jobs', key); mkdirSync(dirname(jobRoot), { recursive: true, mode: 0o700 })
-        const runtime = createManagedRuntime({ ...settings, root: jobRoot, engine: { ...settings.engine, stateRoot: join(jobRoot, 'native') } })
-        running.set(input.requestId, runtime)
-        persist(path, { request: input, state: 'running', runtimeRoot: jobRoot, startedAt: Date.now() })
-        try {
-          const intake = await runtime.bootstrap(input.text), result = await runtime.advance(intake), evaluation = runtime.deliveryEvaluation()
-          const state = evaluation.verdict === 'pass' ? 'fulfilled-local' : 'needs-attention'
-          persist(path, { request: input, state, runtimeRoot: jobRoot, result, report: runtime.resultReport() ?? null, endedAt: Date.now() })
-          onResult(input, { state, evaluate: runtime.deliveryEvaluation })
-        } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error)
-          persist(path, { request: input, state: 'needs-attention', runtimeRoot: jobRoot, error: reason, endedAt: Date.now() })
-          onResult(input, { state: 'needs-attention', reason, evaluate: runtime.deliveryEvaluation })
-        } finally {
-          await runtime.stopNative()
-          // Retain bounded read-only evidence for delayed outlet checks; closed older
-          // entries remain durable on disk and cannot authorize an unverified send.
-          while (running.size > 32) { const oldest = running.entries().next().value!; running.delete(oldest[0]); await oldest[1].dispose() }
-        }
-      }).catch(error => { const reason = error instanceof Error ? error.message : String(error); persist(path, { request: input, state: 'needs-attention', error: reason }); onResult(input, { state: 'needs-attention', reason, evaluate: () => ({ verdict: 'fail', reason, receipt: null }) }) })
-      return { requestId: input.requestId, state: 'queued', duplicate: false }
-    },
-    continue(requestId: string, continuationId: string, text: string) {
-      if (disposed || !continuationId || !text.trim() || text.length > 64000) throw Error('MANAGED_CONTINUATION_INVALID')
-      const path = pathOf(requestId), prior = api.read(requestId) as any
-      const settings = raw.projects[prior.request.project]
-      if (!settings) throw Error('MANAGED_PROJECT_NOT_CONFIGURED')
-      const materialDigest = loadManagedMaterials(settings.readOnlyMaterials).digest
-      const continuations = prior.continuations ?? [], old = continuations.find((item: any) => item.id === continuationId)
-      if (old) { if (old.text !== text || old.materialDigest !== materialDigest) throw Error('MANAGED_CONTINUATION_CONFLICT'); return { requestId, continuationId, state: prior.state, duplicate: true } }
-      if (!['needs-attention', 'needs-reconciliation'].includes(prior.state) || !prior.runtimeRoot) throw Error('MANAGED_CONTINUATION_NOT_READY')
-      const item = { id: continuationId, text, materialDigest, state: 'queued', admittedAt: Date.now() }
-      const version = continuationVersion(prior, item)
-      persist(path, version)
-      queue = queue.then(async () => {
-        if (disposed) return
-        let runtime = running.get(requestId)
-        try {
-          if (!runtime) { runtime = createManagedRuntime({ ...settings, root: prior.runtimeRoot, engine: { ...settings.engine, stateRoot: join(prior.runtimeRoot, 'native') } }); running.set(requestId, runtime) }
-          const baseline = await runtime.prepareContinuation()
-          persist(path, { ...version, state: 'running', continuationStartedAt: Date.now(), baseline })
-          runtime.coordination.host.recordRuntimeEvent('host-continuation:' + continuationId, 'authenticated_continuation', { requestId, continuationId, text, materialDigest, baseline }, [runtime.project], [runtime.source.id])
-          const batch = await runtime.resume(text), result = await runtime.advance(batch), evaluation = runtime.deliveryEvaluation()
-          const state = evaluation.verdict === 'pass' ? 'fulfilled-local' : 'needs-attention'
-          persist(path, { ...version, state, result, report: runtime.resultReport() ?? null, endedAt: Date.now(), continuations: [...continuations, { ...item, state: 'completed' }] })
-          onResult(prior.request, { state, evaluate: runtime.deliveryEvaluation })
-        } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error)
-          persist(path, { ...version, state: 'needs-attention', error: reason, endedAt: Date.now(), continuations: [...continuations, { ...item, state: 'failed', error: reason }] })
-          onResult(prior.request, { state: 'needs-attention', reason, evaluate: runtime?.deliveryEvaluation ?? (() => ({ verdict: 'fail', reason, receipt: null })) })
-        } finally { await runtime?.stopNative() }
-      })
-      return { requestId, continuationId, state: 'queued', duplicate: false }
-    },
-    async settle() { await queue },
-    async dispose() { disposed = true; for (const runtime of running.values()) await runtime.dispose(); running.clear() },
-  }
-  // Historical running admissions remain visible, never silently relaunched with new effect identities.
-  for (const name of readdirSync(requestsRoot)) if (name.endsWith('.json')) { const path = join(requestsRoot, name), record = JSON.parse(readFileSync(path, 'utf8')); if (record.state === 'running' || record.state === 'queued') persist(path, { ...record, state: 'needs-reconciliation', reason: 'Previous host admission retained; inspect its native operation history before resuming.' }) }
-  return api
+  return createAdmissions({
+    root: realpathSync(raw.root), projects: Object.keys(raw.projects), defaultProject: raw.defaultProject, onResult, onNotice: ports?.notice,
+    projectsView: () => Object.entries(raw.projects).map(([id, project]) => ({ id, default: id === raw.defaultProject, verificationMethod: project.verification?.methodId ?? null })),
+    materialDigest: project => loadManagedMaterials(raw.projects[project]!.readOnlyMaterials).digest,
+    runtime: ports?.runtime ?? ((project, root) => {
+      const settings = raw.projects[project]!
+      const runtime = createManagedRuntime({ ...settings, root, engine: { ...settings.engine, stateRoot: join(root, 'native') } })
+      return managedAdmissionRuntime(runtime, settings)
+    }),
+  })
 }

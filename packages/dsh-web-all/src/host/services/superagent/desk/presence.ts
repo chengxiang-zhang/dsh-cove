@@ -12,6 +12,7 @@
  */
 
 import type { HostClock, HostLog, SessionControllerFace } from '../host-ports.ts'
+import { finishTurnAndPush } from '../kernel/clock.ts'
 import type { Ledger } from '../kernel/ledger.ts'
 import type { Outlet } from '../kernel/outlet.ts'
 import type { OutletPolicy, TurnRequest } from '../kernel/ports.ts'
@@ -200,7 +201,7 @@ export function createPresence(deps: DeskDeps): Presence {
     || [...inflight.values()].some(t => t.deskId === deskId && t.human)
 
   function finish(deliberationId: string, r: Parameters<import('../kernel/ledger.ts').KernelTx['finishTurn']>[1]): void {
-    ledger.open(tx => tx.finishTurn(deliberationId, r), { module: 'desk' })
+    finishTurnAndPush(ledger, 'desk', deliberationId, r)
   }
 
   /** Events of the batch nobody judged: back to the queue once, host fallback on the second miss. */

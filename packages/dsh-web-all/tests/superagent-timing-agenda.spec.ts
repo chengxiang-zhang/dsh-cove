@@ -30,6 +30,7 @@ import {
   createTickSignal,
   selectAgendaSources,
 } from '../src/host/services/superagent/timing/agenda/index.ts'
+import { LATE_WARNED_KEY, createClock } from '../src/host/services/superagent/kernel/clock.ts'
 import { createBrief } from '../src/host/services/superagent/timing/brief.ts'
 import { createSpeculation } from '../src/host/services/superagent/timing/speculation.ts'
 import { createIdleGuard } from '../src/host/services/superagent/timing/idle-guard.ts'
@@ -124,6 +125,79 @@ describe('agenda sources', () => {
     expect(agendaDeferral({ hasLiveHumanMessage: true, deferrals: 4 })).toEqual({ defer: true, nextDeferrals: 5 })
     expect(agendaDeferral({ hasLiveHumanMessage: true, deferrals: 5 })).toEqual({ defer: false, nextDeferrals: 5 })
     expect(agendaDeferral({ hasLiveHumanMessage: false, deferrals: 0 })).toEqual({ defer: false, nextDeferrals: 0 })
+  })
+
+  it('never calls a proposed delivery late: it waits for the owner, not for the executor', () => {
+    const t = setup()
+    // The storm shape: proposed, ball with the owner, no attempt, ETA long gone.
+    const proposed = seedCommitment(t, { kind: 'deliver', state: 'proposed', ball: 'ou_owner', eta_at: NOW - 3 * HOUR })
+    expect(agendaSignal(t.ledger.read, proposed.commitment_id, NOW)).toBeNull()
+    expect(createTickSignal(t.ledger.read).has(proposed.commitment_id, NOW)).toBeNull()
+
+    // Control: the same overdue ETA on work the executor holds is late. This pins the
+    // difference to the state and the ball, not to the clock.
+    const open = seedCommitment(t, { kind: 'deliver', state: 'open', ball: 'me', eta_at: NOW - 3 * HOUR })
+    expect(agendaSignal(t.ledger.read, open.commitment_id, NOW)?.kind).toBe('late')
+  })
+
+  it('calls an overdue delivery late only once it is on the executing side', () => {
+    const t = setup()
+    const overdue = NOW - MINUTE
+    const mine = seedCommitment(t, { kind: 'deliver', state: 'open', ball: 'me', eta_at: overdue })
+    const atRisk = seedCommitment(t, { kind: 'deliver', state: 'at_risk', ball: 'me', eta_at: overdue })
+    // Open but the ball is with the owner and nothing ever ran: not the executor's lag.
+    const waiting = seedCommitment(t, { kind: 'deliver', state: 'open', ball: 'ou_owner', eta_at: overdue })
+    // An attempt puts it on the executing side whatever the ball says.
+    const running = seedCommitment(t, { kind: 'deliver', state: 'open', ball: 'ou_owner', eta_at: overdue })
+    seedAttempt(t, running.commitment_id, { last_tool_at: NOW - MINUTE, repeat_count: 0 })
+
+    expect(agendaSignal(t.ledger.read, mine.commitment_id, NOW)?.kind).toBe('late')
+    expect(agendaSignal(t.ledger.read, atRisk.commitment_id, NOW)?.kind).toBe('late')
+    expect(agendaSignal(t.ledger.read, waiting.commitment_id, NOW)).toBeNull()
+    expect(agendaSignal(t.ledger.read, running.commitment_id, NOW)?.kind).toBe('late')
+  })
+
+  it('warns late once: the journal mark silences the second round', () => {
+    const t = setup()
+    const row = seedCommitment(t, { kind: 'deliver', state: 'open', ball: 'me', eta_at: NOW - MINUTE })
+    expect(agendaSignal(t.ledger.read, row.commitment_id, NOW)?.kind).toBe('late')
+
+    // An unrelated note must not count as the mark.
+    t.ledger.open((tx) => tx.append(row.commitment_id, { actor: 'host', kind: 'note', body: { text: 'unrelated' } }))
+    expect(agendaSignal(t.ledger.read, row.commitment_id, NOW)?.kind).toBe('late')
+
+    t.ledger.open((tx) => tx.append(row.commitment_id, { actor: 'host', kind: 'note', body: { [LATE_WARNED_KEY]: true } }))
+    expect(agendaSignal(t.ledger.read, row.commitment_id, NOW)).toBeNull()
+    expect(agendaSignal(t.ledger.read, row.commitment_id, NOW + HOUR)).toBeNull()
+  })
+
+  it('the clock requests a late warning once and writes the mark with the request', () => {
+    const t = setup()
+    const row = seedCommitment(t, { kind: 'deliver', state: 'open', ball: 'me', eta_at: NOW - MINUTE, next_look_at: NOW + MINUTE })
+    const clock = createClock(t.ledger)
+    const signal = createTickSignal(t.ledger.read)
+    const done = { ops: 1, tool_errors: 0, tokens: 0, end_reason: 'completed', rule_trace: [] }
+
+    t.clock.advance(MINUTE)
+    const first = clock.tick(t.clock.now(), signal)
+    expect(first.requested.map((r) => r.commitment_id)).toEqual([row.commitment_id])
+    clock.finish(first.requested[0]!.deliberation_id, done)
+
+    // Force the commitment due again each round: only the mark may stop the repeat.
+    for (let round = 0; round < 3; round += 1) {
+      t.db.prepare('UPDATE sa_commitment SET next_look_at = ? WHERE commitment_id = ?').run(t.clock.now(), row.commitment_id)
+      t.clock.advance(MINUTE)
+      expect(clock.tick(t.clock.now(), signal).requested).toEqual([])
+    }
+    expect((t.db.prepare('SELECT count(*) AS c FROM sa_deliberation').get() as { c: number }).c).toBe(1)
+  })
+
+  it('does not let the late mark hide a stall: self-heal still fires after the warning', () => {
+    const t = setup()
+    const row = seedCommitment(t, { kind: 'deliver', state: 'open', ball: 'me', eta_at: NOW - HOUR })
+    seedAttempt(t, row.commitment_id, { last_tool_at: NOW - 10 * MINUTE, repeat_count: 0 })
+    t.ledger.open((tx) => tx.append(row.commitment_id, { actor: 'host', kind: 'note', body: { [LATE_WARNED_KEY]: true } }))
+    expect(agendaSignal(t.ledger.read, row.commitment_id, NOW)?.kind).toBe('self_heal')
   })
 
   it('probes a watched target every ten minutes, not more often', () => {

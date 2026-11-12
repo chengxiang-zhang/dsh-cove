@@ -107,9 +107,15 @@ export function renderStatusText(payload: StatusPayload, maxLines = STATUS_MAX_L
   return clip(lines, maxLines).join('\n')
 }
 
+/** Stamp that changes whenever the executor transport ships; the hot-reload probe reads it. */
+export const SUPERAGENT_BUILD = '2026-11-07-transport-http+registry'
+
 /** `status [--json]`; an unknown flag is an argument error. */
 export function statusCommand(deps: CommandDeps, args: string[]): CommandResult {
   if (args.some((arg) => arg !== '--json')) return usage('用法: status [--json]', 'usage: status [--json]')
-  const payload = buildStatus(deps.read, deps.now())
+  const payload = {
+    ...buildStatus(deps.read, deps.now()),
+    runtime: { build: SUPERAGENT_BUILD, transport: deps.runtime?.().transport ?? 'unknown' },
+  }
   return { json: payload, text: renderStatusText(payload), exitCode: EXIT_OK }
 }

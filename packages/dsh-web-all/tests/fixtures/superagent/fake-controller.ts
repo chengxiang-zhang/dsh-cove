@@ -19,6 +19,8 @@ export interface FakeController extends SessionControllerFace {
   failPrompt(error: Error | undefined): void
   /** Fails the next `times` creates with `error`, then succeeds again. */
   failCreateTimes(times: number, error: Error): void
+  /** Seed an existing session at `cwd` (a stale seat from a previous life). */
+  seedSession(sessionId: string, cwd: string): void
 }
 
 interface Session { cwd?: string; events: unknown[] }
@@ -39,7 +41,16 @@ export function createFakeController(): FakeController {
       if (createError !== undefined) throw createError
       if (createFailures > 0 && createFailure !== undefined) { createFailures -= 1; throw createFailure }
       const sessionId = req.sessionId ?? `fake-session-${++seq}`
-      if (!sessions.has(sessionId)) sessions.set(sessionId, { cwd: req.cwd, events: [] })
+      const existing = sessions.get(sessionId)
+      if (existing !== undefined) {
+        // The engine refuses a reused id at a different directory, and treats the same
+        // directory as "already yours" (the shape ensureExecutorSession heals against).
+        if (existing.cwd !== undefined && req.cwd !== undefined && existing.cwd !== req.cwd) {
+          throw new Error(`session "${sessionId}" belongs to "${existing.cwd}", not "${req.cwd}"`)
+        }
+        return { sessionId, agentPreset: req.agentPreset ?? 'standard' }
+      }
+      sessions.set(sessionId, { cwd: req.cwd, events: [] })
       // S2: the host reports the preset it used, and a default one when none was asked for.
       return { sessionId, agentPreset: req.agentPreset ?? 'standard' }
     },
@@ -52,6 +63,8 @@ export function createFakeController(): FakeController {
     },
     cancel(req) {
       calls.push({ method: 'cancel', req: { ...req } })
+      // A cancelled session frees its id so a later create (the cwd-conflict heal) can take it.
+      sessions.delete(req.sessionId)
       return undefined
     },
     async inspect(sessionId) {
@@ -68,5 +81,6 @@ export function createFakeController(): FakeController {
     failCreate(error) { createError = error },
     failPrompt(error) { promptError = error },
     failCreateTimes(times, error) { createFailures = times; createFailure = error },
+    seedSession(sessionId, cwd) { sessions.set(sessionId, { cwd, events: [] }) },
   }
 }

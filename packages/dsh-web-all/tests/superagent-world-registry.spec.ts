@@ -302,4 +302,39 @@ describe('superagent world registry', () => {
       .toThrowError(/PARTY_CLASS_REQUIRES_CONFIG/)
     expect(count(t, 'SELECT count(*) AS n FROM sa_party')).toBe(1)
   })
+
+  it('11. a workspace is owned by a mandate whose scope covers it, not only an exact-path one', () => {
+    const t = openTestLedger(createManualClock(T0))
+    const world = registryFor(t)
+    owner(t, world)
+    // A parent grant the person wrote; placement returns this mandate for a child target.
+    write(t, tx => world.register(tx, { canonical: 'ws', kind: 'repo', realm: 'local', path: 'local/workspaces', manifest: { executors: ['claude'] } }))
+    write(t, tx => world.grantFromConfig(tx, [
+      { principal: 'p1', scopePath: 'local/workspaces', capability: 'write_repo', strength: 'allow', grantedBy: '老板' },
+      { principal: 'p1', scopePath: 'local/workspaces/sub', capability: 'write_repo', strength: 'allow', grantedBy: '老板' },
+    ], 1))
+    const parent = 'M:p1:write_repo:local/workspaces'
+    const child = 'M:p1:write_repo:local/workspaces/sub'
+
+    // The parent mandate covers a deeper child path (the production bug: inheritance
+    // is downward, so a root grant owns every workspace beneath it).
+    write(t, tx => world.registerWorkspace(tx, {
+      path: 'local/workspaces/sub/task', entity_id: 'E:ws', commitment_id: 'C-2', mandate_id: parent,
+    }))
+    expect(rows<{ path: string; mandate_id: string }>(t, 'SELECT path, mandate_id FROM sa_workspace')).toEqual([
+      { path: 'local/workspaces/sub/task', mandate_id: parent },
+    ])
+
+    // A mandate that does not cover the path (a sibling/narrower grant) still owns nothing.
+    expect(() => write(t, tx => world.registerWorkspace(tx, {
+      path: 'local/workspaces/other', entity_id: 'E:ws', commitment_id: 'C-3', mandate_id: child,
+    }))).toThrow(/MANDATE_NOT_LIVE/)
+
+    // A revoked mandate is never a live owner, covering or not.
+    write(t, tx => world.revokeMandate(tx, parent, '老板'))
+    expect(() => write(t, tx => world.registerWorkspace(tx, {
+      path: 'local/workspaces/sub/again', entity_id: 'E:ws', commitment_id: 'C-4', mandate_id: parent,
+    }))).toThrow(/MANDATE_NOT_LIVE/)
+    expect(count(t, 'SELECT count(*) AS n FROM sa_workspace')).toBe(1)
+  })
 })

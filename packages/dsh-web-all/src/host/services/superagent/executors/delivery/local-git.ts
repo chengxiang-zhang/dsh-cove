@@ -19,6 +19,7 @@ interface Journal {
   indexLockOwner: number
   indexLockIdentity: { dev: number; ino: number; markerDigest: string }
   receipt?: DeliveryReceipt
+  reauthorizations?: { step: DeliveryStep; proof: Ref }[]
 }
 function durable(path: string, value: unknown): void {
   const temp = path + '.next'
@@ -55,6 +56,8 @@ export interface LocalGitDeliveryDeps {
   readAcceptance(step: DeliveryStep): DeliveryAcceptance
   /** Live controlled-kernel fence; this function is never exposed as model input. */
   fence(action: Ref): ExecutionEnvelope
+  /** Host resolves a persisted exact predecessor/successor record, never a model boolean. */
+  authorizeRecovery?(before: DeliveryStep, after: DeliveryStep, journalDigest: string, proof: Ref): void
   /** Host fault-injection/telemetry boundary, never supplied by a model. */
   checkpoint?(stage: Journal['stage']): void
 }
@@ -67,6 +70,21 @@ export function createLocalGitDelivery(deps: LocalGitDeliveryDeps) {
   const storage = realpathSync(deps.storageRoot)
   const journalPath = (r: Ref) => join(storage, digest(r) + '.json')
   const load = (r: Ref): Journal => JSON.parse(readFileSync(journalPath(r), 'utf8')) as Journal
+  const activeStep = (j: Journal) => j.reauthorizations?.at(-1)?.step ?? j.step
+  function inspectPublished(ref: Ref) {
+    const path = journalPath(ref), bytes = readFileSync(path), j = load(ref), s = activeStep(j)
+    if (!['published','worktree'].includes(j.stage) || j.receipt) throw Error('DELIVERY_RECOVERY_STAGE')
+    identity(s); validateManifest(s)
+    if (git(s.targetRoot,['rev-parse','HEAD']) !== s.plannedCommit || git(s.targetRoot,['cat-file','commit',s.plannedCommit]) !== commitBytes(s).trimEnd()) throw Error('DELIVERY_RECOVERY_COMMIT')
+    if (existsSync(join(s.realGitDir,'dsh-delivery.lock')) || existsSync(join(s.realGitDir,'index.lock'))) throw Error('DELIVERY_RESOURCE_BUSY')
+    const indexHash = bytesDigest(readFileSync(join(s.realGitDir,'index')))
+    if (![j.indexBefore,j.indexAfter].includes(indexHash) || bytesDigest(readFileSync(join(storage,digest(ref)+'.index'))) !== j.indexAfter) throw Error('DELIVERY_INDEX_CHANGED')
+    for (const p of [...s.manifest.map(e=>e.path),...s.deletions]) {
+      const e=s.manifest.find(e=>e.path===p), actual=fingerprint(s.targetRoot,p), next=e?{blob:e.blob,mode:e.mode}:null
+      if (!same(actual,j.before[p]) && !same(actual,next)) throw Error('DELIVERY_WORKTREE_CHANGED')
+    }
+    return { step:s, originalStep:j.step, stage:j.stage, journalDigest:bytesDigest(bytes), indexHash }
+  }
   function live(s: DeliveryStep, envelope: ExecutionEnvelope): void {
     const current = deps.fence(envelope.actionRef)
     if (current.kind !== 'envelope' || current.expiresAt <= Date.now() || current.epoch !== envelope.epoch || !same(current.actionRef, envelope.actionRef) || !same(current.spec, prepareDeliveryStep(s)) || current.workspace.root !== s.targetRoot || current.workspace.baseline !== s.expectedParent || current.workspace.branch !== 'dev' || !['repository:' + s.realGitDir, 'branch:' + s.realGitDir + ':dev'].every(id => current.spec.resourceIds.includes(id)) || !same(envelope.spec, current.spec)) throw new Error('DELIVERY_EXECUTION_FENCED')
@@ -75,7 +93,7 @@ export function createLocalGitDelivery(deps: LocalGitDeliveryDeps) {
     const s = structuredClone(step), path = journalPath(s.ref)
     identity(s)
     let journal = existsSync(path) ? load(s.ref) : undefined
-    if (journal && !same(journal.step, s)) throw new Error('DELIVERY_STEP_CHANGED')
+    if (journal && !same(activeStep(journal), s)) throw new Error('DELIVERY_STEP_CHANGED')
     const head = git(s.targetRoot, ['rev-parse', 'HEAD'])
     if (head !== s.expectedParent && head !== s.plannedCommit) throw new Error('DELIVERY_HEAD_CHANGED')
     if (head === s.plannedCommit && !journal) throw new Error('DELIVERY_PUBLICATION_UNOWNED')
@@ -139,6 +157,7 @@ export function createLocalGitDelivery(deps: LocalGitDeliveryDeps) {
       if (![journal.indexBefore, journal.indexAfter].includes(indexHash)) throw new Error('DELIVERY_INDEX_CHANGED')
       live(s, envelope); assertDeliveryAcceptance(s, deps.readAcceptance(s)); validateManifest(s)
       if (git(s.targetRoot, ['rev-parse', 'HEAD']) === s.expectedParent) {
+        live(s, envelope)
         git(s.targetRoot, ['update-ref', '-m', `dsh delivery ${s.ref.id}@${s.ref.revision}`, 'refs/heads/dev', s.plannedCommit, s.expectedParent])
       }
       if (git(s.targetRoot, ['rev-parse', 'HEAD']) !== s.plannedCommit) throw new Error('DELIVERY_HEAD_CHANGED')
@@ -155,12 +174,15 @@ export function createLocalGitDelivery(deps: LocalGitDeliveryDeps) {
           if (candidate.blob !== next.blob || candidate.mode !== next.mode) throw new Error('DELIVERY_CANDIDATE_CHANGED')
           mkdirSync(dirname(target), { recursive: true })
           const temp = join(dirname(target), '.dsh-delivery-' + digest({ step: s.ref, p }))
+          live(s, envelope)
           writeFileSync(temp, candidate.bytes, { flag: 'wx', mode: next.mode === '100755' ? 0o755 : 0o644 })
+          chmodSync(temp, next.mode === '100755' ? 0o755 : 0o644)
           try {
             if (!same(fingerprint(s.targetRoot, p), journal.before[p])) throw new Error('DELIVERY_WORKTREE_CHANGED')
-            renameSync(temp, target); chmodSync(target, next.mode === '100755' ? 0o755 : 0o644)
+            live(s, envelope)
+            renameSync(temp, target)
           } finally { rmSync(temp, { force: true }) }
-        } else rmSync(target)
+        } else { live(s, envelope); rmSync(target) }
         journal.stage = 'worktree'; durable(path, journal); deps.checkpoint?.('worktree')
       }
       live(s, envelope)
@@ -168,6 +190,7 @@ export function createLocalGitDelivery(deps: LocalGitDeliveryDeps) {
       const nextIndex = readFileSync(join(storage, digest(s.ref) + '.index'))
       if (bytesDigest(nextIndex) !== journal.indexAfter) throw new Error('DELIVERY_INDEX_EVIDENCE_CHANGED')
       writeFileSync(lock, nextIndex); const fd2 = openSync(lock, 'r'); try { fsyncSync(fd2) } finally { closeSync(fd2) }
+      live(s, envelope)
       renameSync(lock, indexPath); lockOwned = false
       const receipt: DeliveryReceipt = { stepRef: s.ref, targetRoot: s.targetRoot, realGitDir: s.realGitDir, branch: 'dev', parent: s.expectedParent, commit: s.plannedCommit, tree: s.finalTree, manifestDigest: manifestDigest(s), acceptanceRef: s.acceptanceRef, actionRef: envelope.actionRef, stage: 'aligned' }
       journal.stage = 'aligned'; journal.receipt = receipt; durable(path, journal); deps.checkpoint?.('aligned')
@@ -175,10 +198,22 @@ export function createLocalGitDelivery(deps: LocalGitDeliveryDeps) {
     } finally { if (lockOwned) rmSync(lock, { force: true }); rmSync(deliveryLock, { force: true }); rmSync(scratch, { recursive: true, force: true }) }
   }
   return Object.freeze({ executeLocalGitDelivery,
+    inspectPublished,
+    reauthorize(ref: Ref, next: DeliveryStep, proof: Ref) {
+      const lock=journalPath(ref)+'.reauthorize.lock',fd=openSync(lock,'wx',0o600)
+      try {
+        const observed=inspectPublished(ref), before=observed.step
+        const content=(s:DeliveryStep)=>{const {action,...rest}=s;return rest}
+        const authority=(s:DeliveryStep)=>{const {id,idempotencyKey,epoch,capabilityRef,mandateRef,...rest}=s.action;return rest}
+        if(!same(content(before),content(next))||!same(authority(before),authority(next))||next.action.epoch<=before.action.epoch||next.action.id===before.action.id||next.action.capabilityRef.id===before.action.capabilityRef.id||next.action.mandateRef.id===before.action.mandateRef.id||!deps.authorizeRecovery)throw Error('DELIVERY_RECOVERY_AUTHORITY_REQUIRED')
+        deps.authorizeRecovery(before,next,observed.journalDigest,proof)
+        const j=load(ref);(j.reauthorizations??=[]).push({step:structuredClone(next),proof});durable(journalPath(ref),j)
+      } finally { closeSync(fd);rmSync(lock,{force:true}) }
+    },
     verifyDeliveryReceipt(ref: Ref, receipt: DeliveryReceipt) {
-      try { const s = load(ref).step; assertDeliveryAcceptance(s, deps.readAcceptance(s)); return deps.verifyReceipt(s, receipt) }
+      try { const s = activeStep(load(ref)); assertDeliveryAcceptance(s, deps.readAcceptance(s)); return deps.verifyReceipt(s, receipt) }
       catch (error) { return { verdict: 'fail' as const, reason: (error as Error).message, receipt: null } }
     },
-    reconcile(ref: Ref) { const j = load(ref); return { stage: j.stage, receipt: j.receipt ?? null, head: git(j.step.targetRoot, ['rev-parse', 'HEAD']) } },
+    reconcile(ref: Ref) { const j = load(ref); return { step:activeStep(j), originalStep:j.step, stage: j.stage, receipt: j.receipt ?? null, head: git(j.step.targetRoot, ['rev-parse', 'HEAD']) } },
   })
 }

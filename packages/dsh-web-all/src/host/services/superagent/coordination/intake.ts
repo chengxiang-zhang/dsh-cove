@@ -10,6 +10,10 @@ export function createCoordinationService(ledger: ManagedLedger, source: Ref) {
   const write = createCoordinationWriter(ledger, source)
   return Object.freeze({
     host: Object.freeze({
+      retireInterruptedOperations: (commitmentId: string, evidenceRefs: string[]) => write({ kind: 'retire_interrupted', commitmentId, evidenceRefs }),
+      resumeForAmendment: (commitment: Ref, evidenceRefs: string[]) => write({ kind: 'resume_for_amendment', commitment, evidenceRefs })[0]!,
+      amendManagedIntent: (commitment: Ref, input: CommitmentSpec, evidenceRefs: string[]) => write({ kind: 'amend', commitment, input, evidenceRefs })[0]!,
+      replanProfessionalTeam: (commitment: Ref, assignments: AssignmentSpec[]) => write({ kind: 'team_handoff', commitment, assignments }),
       handoffInterruptedVerification: (plan: InterruptedVerificationHandoff) => write({ kind: 'verify_interrupted_handoff', plan }),
       partitionContracts: (plan: ContractPartition, approval: PartitionApproval) => write({ kind: 'partition_contract', plan, approval }),
       claimOperation: (input: OperationClaim) => write({ kind: 'operation_claim', input })[0]!,

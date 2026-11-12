@@ -8,7 +8,7 @@ import { verificationScopes } from '../kernel/verification-ledger.ts'
 import { verifyProjectSeal, type ProjectSeal } from '../executors/project-snapshot.ts'
 import type { DeliveryAcceptance, DeliveryStep } from '../protocol/delivery.ts'
 import type { Ref } from '../protocol/managed-work.ts'
-import { managedVerificationMethod, methodAssetDigest } from '../executors/managed-verification-method.ts'
+import { managedVerificationMethod, methodAssetDigest, type ManagedVerificationMethodSettings } from '../executors/managed-verification-method.ts'
 import { treeEntries, file, manifestDigest } from '../executors/delivery/git.ts'
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
@@ -19,7 +19,7 @@ export interface DeliveryAcceptanceBinding {
   /** Mode-aware whole final tree used by every project gate; old byte-only seals cannot enter. */
   seal: ProjectSeal
   authorizationVersion: string
-  method?: { id: string; assetsDigest: string }
+  method?: { id: string; assetsDigest: string; settings?: ManagedVerificationMethodSettings }
   gates: { ref: Ref; gate: string; observationPath: string; observationDigest: string }[]
 }
 /** Host composition resolves immutable collector artifacts, never model-supplied pass booleans. */
@@ -30,7 +30,7 @@ export function readDeliveryAcceptance(ledger: ManagedLedger, s: DeliveryStep, b
     return o
   }
   if (!same(binding.ref, s.acceptanceRef) || !binding.authorizationVersion || !verifyProjectSeal(binding.seal)) throw new Error('DELIVERY_ACCEPTANCE_SEAL')
-  const recorded = historical && ledger.eventEntries({deliveryStep:s.ref}).some(({body:event}) => { const x = event as unknown as { delivery?: string; step?: DeliveryStep }; return x.delivery === 'fulfilled' && same(x.step, s) })
+  const recorded = historical && ledger.get(s.action.target.id)?.data.state === 'fulfilled' && ledger.eventEntries({deliveryStep:s.ref}).some(({body:event}) => { const x = event as unknown as { delivery?: string; step?: DeliveryStep }; return x.delivery === 'fulfilled' && same(x.step, s) })
   const c = recorded ? current({ id: s.action.target.id, revision: s.action.target.revision + 1 }, 'commitment') : current(s.action.target, 'commitment'), e = current(binding.evaluation, 'evaluation'), candidate = current(binding.candidate, 'candidate')
   if ((c.data.state !== 'delivering' && !(recorded && c.data.state === 'fulfilled')) || c.data.control_state !== 'autonomous' || e.data.verdict !== 'pass' || e.data.commitment_id !== c.id || !same(e.data.candidate_ref, binding.candidate) || !same(e.data.contract_ref, c.data.acceptance_contract)) throw new Error('DELIVERY_ACCEPTANCE_EVALUATION')
   // A child matrix cannot stand in for an inherited outcome contract.
@@ -71,7 +71,7 @@ export function readDeliveryAcceptance(ledger: ManagedLedger, s: DeliveryStep, b
   for (const entry of candidateManifest) {
     const sealed = file(binding.seal.sourceRoot, entry.path), evaluated = file(String(candidate.data.root), entry.path)
     if (!sealed && binding.method && evaluated) {
-      const method = managedVerificationMethod(binding.method.id)
+      const method = managedVerificationMethod(binding.method.id, binding.method.settings)
       const asset = method.assets[entry.path]
       if (binding.method.assetsDigest === methodAssetDigest(JSON.stringify(method.assets)) && asset !== undefined && methodAssetDigest(asset) === entry.digest && hash(evaluated.bytes) === entry.digest) continue
     }

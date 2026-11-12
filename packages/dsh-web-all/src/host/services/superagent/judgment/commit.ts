@@ -4,8 +4,9 @@
  * One ledger transaction writes the commitment (open), the pending attempt, the
  * open questions, the thread subscription and the brief; the same turn then says
  * the ack ("I took it", never "dispatched"); dispatch runs after, off the turn.
- * A draft mandate turns the commitment into a proposal: proposed, ball on the
- * owner, no attempt. A shadow turn validates and writes nothing but intake(shadow=1).
+ * A draft mandate turns a non-owner's request into a proposal: proposed, ball on the
+ * owner, no attempt. The owner's own request never waits for the owner (translate
+ * reads draft as allow for the owner). A shadow turn validates and writes nothing but intake(shadow=1).
  */
 
 import { recordPendingAttempt } from '../executors/attempts.ts'

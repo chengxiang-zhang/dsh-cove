@@ -140,6 +140,22 @@ describe('executors dispatch', () => {
     expect(await r.ex.dispatch(second.c.commitment_id)).toMatchObject({ sessionId: 'sa-x-C-2-a1' })
   })
 
+  it('5b. a dispatch that never seats releases the slot so another durable is not wedged', async () => {
+    const r = rig()
+    const first = commit(r)
+    const second = commit(r)
+    // Both of C-1's attempts fail to create; the third is queued for the agenda.
+    r.controller.failCreateTimes(2, new Error('host busy'))
+    expect(await r.ex.dispatch(first.c.commitment_id)).toEqual({ failed: 'host busy' })
+    expect(attempts(r, first.c.commitment_id).map(x => x.state)).toEqual(['ended', 'ended', 'pending'])
+    // The failed durable kept the commitment open but let go of the single slot.
+    expect(one(r, 'SELECT slot FROM sa_commitment WHERE commitment_id = ?', 'C-1').slot).toBeNull()
+    // So the other durable deliver seats now instead of SLOT_FULL until C-1 breaks.
+    expect(await r.ex.dispatch(second.c.commitment_id)).toMatchObject({ sessionId: 'sa-x-C-2-a1' })
+    expect(r.t.db.prepare('SELECT commitment_id, slot FROM sa_commitment ORDER BY n').all())
+      .toEqual([{ commitment_id: 'C-1', slot: null }, { commitment_id: 'C-2', slot: '1' }])
+  })
+
   it('6. a oneshot attempt takes no slot and runs next to a durable one', async () => {
     const r = rig()
     const durable = commit(r)
@@ -234,6 +250,71 @@ describe('executors dispatch', () => {
     expect(r.controller.calls.filter(x => x.method === 'cancel')).toEqual([{ method: 'cancel', req: { sessionId: 'sa-x-C-1-a1' } }])
     expect(attempts(r, c.commitment_id)[0]).toMatchObject({ state: 'ended', cancel_origin: 'release', end_reason: 'aborted' })
     expect(one(r, `SELECT count(*) AS n FROM sa_attempt WHERE state = 'running'`).n).toBe(0)
+  })
+
+  it('15. a turn ended aborted without our own cancel is recorded as an external stop', async () => {
+    const r = rig()
+    const { c } = commit(r)
+    await r.ex.dispatch(c.commitment_id)
+    const sid = 'sa-x-C-1-a1'
+    r.ex.onSessionEvent(sid, ev('turn/start', { turn: 1 }))
+    r.ex.onSessionEvent(sid, ev('turn/end', { turn: 1, reason: { kind: 'aborted' } }))
+    expect(attempts(r, c.commitment_id)[0]).toMatchObject({ state: 'running', cancel_origin: 'external', turn_open: 0 })
+    // A cancellation this process issued keeps its own origin, never `external`.
+    const r2 = rig()
+    const second = commit(r2)
+    await r2.ex.dispatch(second.c.commitment_id)
+    await r2.ex.cancel(second.a.attempt_id, 'release')
+    r2.ex.onSessionEvent('sa-x-C-1-a1', ev('turn/end', { turn: 1, reason: { kind: 'aborted' } }))
+    expect(attempts(r2, second.c.commitment_id)[0]).toMatchObject({ cancel_origin: 'release' })
+  })
+
+  it('16. the fenced JSON report is the fallback when the host has no report tool', async () => {
+    const r = rig()
+    const { c, a } = commit(r)
+    await r.ex.dispatch(c.commitment_id)
+    const text = 'Done.\n```json\n{"state":"ready","summary":"tests pass","evidence":[{"command":"pnpm test","exit":0,"reading":"ok"}]}\n```'
+    r.ex.onSessionEvent('sa-x-C-1-a1', ev('assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text }] } }))
+    expect(r.ex.lastReport(a.attempt_id)).toEqual({
+      state: 'ready', summary: 'tests pass', evidence: [{ command: 'pnpm test', exit: 0, reading: 'ok' }],
+    })
+  })
+
+  it('17. a report tool call on the event stream is the claim even without a local tool', async () => {
+    const r = rig()
+    const { c, a } = commit(r)
+    await r.ex.dispatch(c.commitment_id)
+    const args = JSON.stringify({ state: 'ready', summary: 'tests pass', evidence: [{ command: 'pnpm test', exit: 0, reading: 'ok' }] })
+    r.ex.onSessionEvent('sa-x-C-1-a1', ev('tool/call', { turn: 1, step: 1, callId: 'c9', name: 'report', arguments: args }))
+    expect(r.ex.lastReport(a.attempt_id)).toEqual({
+      state: 'ready', summary: 'tests pass', evidence: [{ command: 'pnpm test', exit: 0, reading: 'ok' }],
+    })
+    expect(r.ex.toolLog(a.attempt_id).at(-1)).toMatchObject({ name: 'report' })
+  })
+
+  it('18. a stale session id at the wrong cwd is cancelled, then recreated once at the right cwd', async () => {
+    const r = rig()
+    const { c, a } = commit(r)
+    const rightCwd = durableDir(r.seatRoot, 'C-1')
+    // A previous life left sa-x-C-1-a1 seated at a different directory; a bare create would
+    // meet the engine's `belongs to` refusal and fail the dispatch.
+    r.controller.seedSession('sa-x-C-1-a1', join(r.seatRoot, 'work', 'STALE'))
+    const out = await r.ex.dispatch(c.commitment_id)
+    expect(out).toEqual({ attemptId: a.attempt_id, sessionId: 'sa-x-C-1-a1' })
+
+    // The heal is observable in the call order: create (refused) -> cancel -> create (at the right cwd).
+    const methods = r.controller.calls.map(x => x.method)
+    const firstCreate = methods.indexOf('create')
+    const cancelIdx = methods.indexOf('cancel')
+    const secondCreate = methods.indexOf('create', firstCreate + 1)
+    expect(firstCreate).toBeGreaterThanOrEqual(0)
+    expect(cancelIdx).toBeGreaterThan(firstCreate)
+    expect(secondCreate).toBeGreaterThan(cancelIdx)
+    const createCalls = r.controller.calls.filter(x => x.method === 'create') as Array<Extract<FakeController['calls'][number], { method: 'create' }>>
+    expect(createCalls.at(-1)?.req).toMatchObject({ sessionId: 'sa-x-C-1-a1', cwd: rightCwd })
+    // No new attempt was spent: the same a1 is now running at the right seat.
+    expect(attempts(r, c.commitment_id)).toHaveLength(1)
+    expect(attempts(r, c.commitment_id)[0]).toMatchObject({ state: 'running', session_id: 'sa-x-C-1-a1', cwd: rightCwd })
   })
 
   it('14. executorGuard: read-only refuses writes; every profile refuses channel and worktree tools', () => {

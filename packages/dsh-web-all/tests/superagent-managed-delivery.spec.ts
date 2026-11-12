@@ -1,6 +1,6 @@
 import { createProjectKeeperFixture } from '../src/host/services/superagent/executors/project-keeper-fixture.ts'
 import { readKeeperFixtureCapability, keeperFixtureRequest } from '../src/host/services/superagent/executors/project-keeper-fixture-client.ts'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, chmodSync, readdirSync, lstatSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -46,6 +46,24 @@ function fixture() {
   return { root, candidate, storage, step, envelope, port, setAcceptance: (value: DeliveryAcceptance) => { current = value } }
 }
 describe('P7 real local Git delivery', () => {
+  it('checks the live lease again after expensive acceptance, before publishing', async () => {
+    const f=fixture();let checks=0
+    const port=createLocalGitDelivery({storageRoot:f.storage,verifyReceipt:inspectDeliveryReceipt,fence:()=>f.envelope,readAcceptance:()=>{if(++checks===2)f.envelope.expiresAt=Date.now()-1;return {ref:f.step.acceptanceRef,candidateRef:{id:'candidate',revision:1},evaluationRef:{id:'evaluation',revision:1},finalTree:f.step.finalTree,manifestDigest:manifestDigest(f.step),gateRefs:f.step.requiredGateRefs}}})
+    await expect(port.executeLocalGitDelivery(f.step,f.envelope)).rejects.toThrow('DELIVERY_EXECUTION_FENCED')
+    expect(git(f.root,['rev-parse','HEAD'])).toBe(f.step.expectedParent)
+  })
+  it.each(['recover','user-change','wrong-proof'])('only aligns an owned published journal under a distinct exact successor: %s',async scenario=>{
+    const f=fixture(),acceptance={ref:f.step.acceptanceRef,candidateRef:{id:'candidate',revision:1},evaluationRef:{id:'evaluation',revision:1},finalTree:f.step.finalTree,manifestDigest:manifestDigest(f.step),gateRefs:f.step.requiredGateRefs}
+    const initial=createLocalGitDelivery({storageRoot:f.storage,verifyReceipt:inspectDeliveryReceipt,readAcceptance:()=>acceptance,fence:()=>f.envelope,checkpoint:stage=>{if(stage==='published')throw Error('expired after publication')}})
+    await expect(initial.executeLocalGitDelivery(f.step,f.envelope)).rejects.toThrow('expired after publication')
+    const staged=git(f.root,['ls-files','-s','user.txt']),flags=git(f.root,['ls-files','-v','flags.txt'])
+    const next={...f.step,action:{...f.step.action,id:'recovery',idempotencyKey:'recovery',epoch:2,capabilityRef:{id:'recovery-cap',revision:1},mandateRef:{id:'recovery-mandate',revision:1}}},envelope={...f.envelope,epoch:2,actionRef:{id:'recovery',revision:2},spec:prepareDeliveryStep(next)}
+    const port=createLocalGitDelivery({storageRoot:f.storage,verifyReceipt:inspectDeliveryReceipt,readAcceptance:()=>acceptance,fence:()=>envelope,authorizeRecovery:(before,after,hash,proof)=>{expect(before).toEqual(f.step);expect(after).toEqual(next);expect(hash).toMatch(/^[a-f0-9]{64}$/);if(proof.id!=='trusted')throw Error('DELIVERY_RECOVERY_PROOF_REQUIRED')}})
+    if(scenario==='user-change'){writeFileSync(join(f.root,'fix.txt'),'new user content');expect(()=>port.reauthorize(f.step.ref,next,{id:'trusted',revision:1})).toThrow('DELIVERY_WORKTREE_CHANGED');return}
+    if(scenario==='wrong-proof'){expect(()=>port.reauthorize(f.step.ref,next,{id:'untrusted',revision:1})).toThrow('DELIVERY_RECOVERY_PROOF_REQUIRED');return}
+    port.reauthorize(f.step.ref,next,{id:'trusted',revision:1});const receipt=await port.executeLocalGitDelivery(next,envelope)
+    expect(port.reconcile(f.step.ref).originalStep).toEqual(f.step);expect(git(f.root,['rev-list','--count','HEAD'])).toBe('2');expect(readFileSync(join(f.root,'fix.txt'),'utf8')).toBe('fixed\n');expect(git(f.root,['diff','--cached','--','fix.txt'])).toBe('');expect(git(f.root,['ls-files','-s','user.txt'])).toBe(staged);expect(git(f.root,['ls-files','-v','flags.txt'])).toBe(flags);expect(port.verifyDeliveryReceipt(f.step.ref,receipt).verdict).toBe('pass')
+  })
   it('refuses absent/stale final-tree evidence and never equates text with delivery', async () => {
     const f = fixture(); f.setAcceptance({} as DeliveryAcceptance)
     await expect(f.port.executeLocalGitDelivery(f.step, f.envelope)).rejects.toThrow('DELIVERY_ACCEPTANCE')
@@ -161,7 +179,7 @@ it('real controlled host delivery requires complete canonical acceptance, then f
   const workspace = { ...f.envelope.workspace, id: 'delivery-workspace' }
   v.kernel.host.registerWorkspace(workspace)
   const expiry = Date.now() + 60000, control = v.kernel.host.grantControl(target, 'host-delivery', expiry)
-  const step = planLocalGitDelivery({ ...f.step, manifest, action: { ...f.step.action, target, epoch: control.epoch, workspaceId: workspace.id, scopeRefs: v.service.requiredActionScopes(target.id) }, requiredGateRefs: names.map(id => ({ id: 'gate:' + id, revision: 1 })) }, f.storage)
+  let step = planLocalGitDelivery({ ...f.step, manifest, action: { ...f.step.action, target, epoch: control.epoch, workspaceId: workspace.id, scopeRefs: v.service.requiredActionScopes(target.id) }, requiredGateRefs: names.map(id => ({ id: 'gate:' + id, revision: 1 })) }, f.storage)
   const seal = sealProjectInputs({ sourceRoot: f.candidate, sourceFiles: ['fix.txt', 'candidate.mjs', 'package.json', 'user.txt', 'flags.txt'], dependencyRoots: [], tools: [], destination: join(f.storage, 'source-seal'), provenance: { source: 'isolated-real-git-fixture', revision: step.expectedParent } })
   const binding: DeliveryAcceptanceBinding = { ref: step.acceptanceRef, candidate, evaluation, seal, authorizationVersion: 'fixture-v1', gates: [] }
   const fixtureCapability = process.env.DSH_P7_KEEPER_FIXTURE
@@ -203,7 +221,13 @@ it('real controlled host delivery requires complete canonical acceptance, then f
   v.kernel.host.grantMandate({ id: step.action.mandateRef.id, revision: 1, requester: 'owner', subject: 'host-delivery', target, workspaceId: workspace.id, resourceIds: workspace.resources, actions: ['deliver'], scopeRefs: step.action.scopeRefs, expiresAt: expiry, revoked: false })
   const action = v.kernel.actions.planAction(launch); v.kernel.actions.claimResources(action.ref, workspace.resources)
   const service = createManagedLocalDelivery({ ledger: v.ledger, source: { id: 'host', revision: 1 }, storageRoot: f.storage, host: v.kernel.host, binding: () => binding })
-  const receipt = await service.execute(step, action.ref)
+  const originalStep=step, fence=v.kernel.host.fenceDispatch.bind(v.kernel.host)
+  const spy=vi.spyOn(v.kernel.host,'fenceDispatch').mockImplementation(ref=>git(f.root,['rev-parse','HEAD'])===step.plannedCommit?{kind:'denial',code:'CONTROL_FENCE',subject:'expired after publication'} as any:fence(ref))
+  await expect(service.execute(step,action.ref)).rejects.toThrow('DELIVERY_EXECUTION_FENCED');spy.mockRestore()
+  const recovered=await service.recoverPublished(step.ref);step=recovered.step;const receipt=recovered.receipt
+  expect(v.ledger.get(originalStep.action.id)?.data.receipt).toMatchObject({status:'failed',stopped:true,reason:'DELIVERY_PUBLISHED_ALIGNMENT_PENDING'})
+  expect(step.plannedCommit).toBe(originalStep.plannedCommit)
+
   expect(() => verifyWorkspace(workspace)).toThrow('WORKSPACE_IDENTITY_CHANGED')
   expect(service.verifyDeliveryReceipt(step.ref, receipt).verdict).toBe('pass')
   if (process.env.DSH_P7_PROOF_PATH) writeFileSync(process.env.DSH_P7_PROOF_PATH, JSON.stringify({ receipt, head: git(f.root, ['rev-parse', 'HEAD']), tree: git(f.root, ['rev-parse', 'HEAD^{tree}']), commitCount: git(f.root, ['rev-list', '--count', 'HEAD']), ownedStagedDiff: git(f.root, ['diff', '--cached', '--', ...step.manifest.map(x => x.path)]), ownedWorktreeDiff: git(f.root, ['diff', '--', ...step.manifest.map(x => x.path)]), preservedUserStage: git(f.root, ['show', ':user.txt']), preservedUserWorktree: readFileSync(join(f.root, 'user.txt'), 'utf8'), preservedFlags: git(f.root, ['ls-files', '-v', 'flags.txt']), evaluation: service.verifyDeliveryReceipt(step.ref, receipt) }, null, 2))

@@ -8,6 +8,10 @@ import { refOf, type HostSpec, type ProjectSpec, type PolicySpec, type ProfileSp
   type ContextConsumption, type OperationClaim, type OperationExecution } from '../protocol/coordination.ts'
 
 type Payload =
+  | { kind: 'retire_interrupted'; commitmentId: string; evidenceRefs: string[] }
+  | { kind: 'resume_for_amendment'; commitment: Ref; evidenceRefs: string[] }
+  | { kind: 'amend'; commitment: Ref; input: CommitmentSpec; evidenceRefs: string[] }
+  | { kind: 'team_handoff'; commitment: Ref; assignments: AssignmentSpec[] }
   | { kind: 'verify_interrupted_handoff'; plan: InterruptedVerificationHandoff }
   | { kind: 'partition_contract'; plan: ContractPartition; approval: PartitionApproval }
   | { kind: 'operation_claim'; input: OperationClaim }
@@ -43,6 +47,10 @@ export function createCoordinationWriter(ledger: ManagedLedger, source: Ref) {
 const json = (value: unknown): Json => { assertJson(value); return value }
 const ref = (value: unknown): Ref => value as Ref
 const refs = (value: unknown): Ref[] => value as Ref[]
+/** The ledger validates domain-absence proofs; a retired writer need not have a rewritten receipt. */
+export function nativeWriterCeased(ledger: Pick<ManagedLedger, 'retiredNativeDomain'>, action: ManagedObject | undefined): boolean {
+  return !!action && action.kind === 'action' && (action.data.execution_spec as any)?.kind === 'dispatch' && ((action.data.receipt as any)?.stopped === true || !!ledger.retiredNativeDomain({ id: action.id, revision: action.revision }))
+}
 const text = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
 function texts(value: unknown, nonempty = true): asserts value is string[] {
   if (!Array.isArray(value) || (nonempty && !value.length) || value.some(v => !text(v)) || new Set(value).size !== value.length) throw new Error('COORDINATION_TEXT_REQUIRED')
@@ -93,7 +101,7 @@ export function managedLaunchScope(ledger: CoordinationRead, worker: Ref, scope:
 export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger, command: CoordinationCommand): Ref[] {
   const authority = command && authorities.get(command.token)
   if (!authority || authority.ledger !== ledger || authority.source.id !== command.source.id || authority.source.revision !== command.source.revision) throw new Error('COORDINATION_HOST_REQUIRED')
-  assertJson(command.payload)
+  assertJson(command.payload as unknown)
   db.exec('BEGIN IMMEDIATE')
   try {
     const changed: ManagedObject[] = []
@@ -156,7 +164,7 @@ export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger,
       input.scopeRefs.forEach(r=>current(r))
       const existing=ledger.get(input.id)
       if(existing) { if(existing.kind!=='coordination_operation'||JSON.stringify(existing.data.proposal)!==JSON.stringify(input.proposal)) throw new Error('OPERATION_IDENTITY_CONFLICT'); throw new OperationDomainBusy(refOf(existing)) }
-      const conflict=ledger.snapshot('coordination_operation').find(o=>o.data.state!=='completed' && !partitionHandoff(ledger, o, input.scopeRefs) && (o.data.domain_keys as string[]).some(key=>input.domainKeys.includes(key)))
+      const conflict=ledger.snapshot('coordination_operation').find(o=>!['completed','superseded'].includes(String(o.data.state)) && !partitionHandoff(ledger, o, input.scopeRefs) && (o.data.domain_keys as string[]).some(key=>input.domainKeys.includes(key)))
       if(conflict) throw new OperationDomainBusy(refOf(conflict))
       result=[save('coordination_operation',{input_ref:input.inputRef,proposal:input.proposal,domain_keys:input.domainKeys,semantic_refs:json(input.scopeRefs),execution_slots:input.executionSlots,state:'running',executions:[],result:null,evidence_refs:[]},[],input.id)]
     } else if (p.kind === 'operation_bind') {
@@ -169,7 +177,7 @@ export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger,
       else {
         const domains=operation.data.domain_keys as string[]
         for (const prior of ledger.snapshot('coordination_operation')) {
-          if (prior.id === operation.id || prior.data.state === 'completed' || !(prior.data.domain_keys as string[]).some(key => domains.includes(key))) continue
+          if (prior.id === operation.id || ['completed','superseded'].includes(String(prior.data.state)) || !(prior.data.domain_keys as string[]).some(key => domains.includes(key))) continue
           const handoff = partitionHandoff(ledger, prior, refs(operation.data.semantic_refs))
           if (!handoff) throw Error('OPERATION_DOMAIN_UNRESOLVED')
           if(execution.kind==='controlled' && (handoff.data.payload as any)?.readonlyQualityInterruption===true && (operation.data.proposal as any)?.kind==='verify' && ['collect:baseline','collect:candidate'].includes(execution.slot)){
@@ -276,9 +284,46 @@ export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger,
       } else if (p.resume) throw new Error('WORKER_BINDING_REQUIRED')
       if (ledger.snapshot().some(o => o.kind === 'session_binding' && o.id !== previous?.id && ref(o.data.host_ref).id === host.id && o.data.engine_ref === identity.engine_ref && o.data.runtime_namespace === identity.runtime_namespace && o.data.native_session_id === identity.native_session_id)) throw new Error('EXPLICIT_HANDOFF_REQUIRED')
       result = [save('session_binding', { worker_ref: json(p.worker), host_ref: json(refOf(host)), profile_ref: json(refOf(profile)), project_refs: json(projects), engine_ref: identity.engine_ref, runtime_namespace: identity.runtime_namespace, native_session_id: identity.native_session_id, native_binding_ref: json(binding.ref), native_evidence_ref: p.evidenceRef, launch_ref: json(binding.launchRef), stream: fact.command.stream }, [p.worker], undefined, previous)]
-    } else if (p.kind === 'accept') {
+    } else if (p.kind === 'retire_interrupted') {
+      commitment(p.commitmentId); texts(p.evidenceRefs)
+      const intake = coordinationScopes(ledger, p.commitmentId)[0]!
+      for (const operation of ledger.snapshot('coordination_operation').filter(o => o.data.state === 'running' && refs(o.data.semantic_refs).some(r => r.id === intake.id))) {
+        const executions = operation.data.executions as unknown as OperationExecution[]
+        for (const execution of executions) {
+          const actionRef = execution.kind === 'native' ? execution.launch : execution.action
+          const action = ledger.get(actionRef.id)
+          const stopped = (action?.data.receipt as any)?.stopped === true || (execution.kind === 'native' && !!ledger.retiredNativeDomain(actionRef))
+          if (!action || !stopped || (execution.kind === 'controlled' && (action.data.execution_spec as any)?.kind !== 'collect')) throw Error('INTERRUPTED_EFFECT_UNRESOLVED')
+        }
+        result.push(save(operation.kind, { ...operation.data, state: 'superseded', result: { status: 'interrupted', reason: 'Cessation observed; retained artifacts require fresh diagnosis and validation, not a successful old result' }, evidence_refs: p.evidenceRefs }, [], undefined, operation))
+      }
+    } else if (p.kind === 'resume_for_amendment') {
+      const work = current(p.commitment, 'commitment'); texts(p.evidenceRefs)
+      if (work.data.control_state !== 'paused' || ['fulfilled','released','withdrawn','broken'].includes(String(work.data.state))) throw Error('AMENDMENT_SCOPE_REQUIRED')
+      const workers = ledger.snapshot('team_assignment').filter(o => o.data.commitment_id === work.id).map(o => ref(o.data.worker_ref)?.id)
+      if (ledger.snapshot('action').some(o => workers.includes((o.data.execution_spec as any)?.target?.id) && (o.data.execution_spec as any)?.kind === 'dispatch' && !nativeWriterCeased(ledger, o))) throw Error('OLD_NATIVE_WRITER_CESSATION_REQUIRED')
+      const { previous_control_state, pause_reason, control_evidence_refs, ...data } = work.data
+      result = [save(work.kind, { ...data, control_state: 'autonomous' }, work.scope_revision_refs, undefined, work)]
+    } else if (p.kind === 'accept' || p.kind === 'amend') {
       const s = p.input
-      if (p.source.id !== command.source.id || p.source.revision !== command.source.revision) throw new Error('INTAKE_SOURCE_NOT_AUTHENTICATED')
+      const previous = p.kind === 'amend' ? current(p.commitment, 'commitment') : undefined
+      if (p.kind === 'accept' && (p.source.id !== command.source.id || p.source.revision !== command.source.revision)) throw new Error('INTAKE_SOURCE_NOT_AUTHENTICATED')
+      if (previous) {
+        if (previous.id !== s.id || previous.data.control_state !== 'paused' || ['fulfilled','released','withdrawn','broken','delivering'].includes(String(previous.data.state)) || previous.data.boundary !== s.boundary || previous.data.accountable !== s.accountable || JSON.stringify(previous.data.project_refs) !== JSON.stringify(s.projects)) throw Error('AMENDMENT_SCOPE_REQUIRED')
+        if (p.kind !== 'amend') throw Error('AMENDMENT_SCOPE_REQUIRED')
+        texts(p.evidenceRefs)
+        const workers = ledger.snapshot('team_assignment').filter(o => o.data.commitment_id === previous.id).map(o => ref(o.data.worker_ref)?.id).filter(Boolean)
+        if (ledger.snapshot('action').some(o => workers.includes((o.data.execution_spec as any)?.target?.id) && (o.data.execution_spec as any)?.kind === 'dispatch' && !nativeWriterCeased(ledger, o))) throw Error('OLD_NATIVE_WRITER_CESSATION_REQUIRED')
+        // Cessation retires an interrupted computation, never certifies its result.
+        // Its artifacts stay in the original workspace and require fresh independent validation.
+        for (const operation of ledger.snapshot('coordination_operation').filter(o => o.data.state === 'running' && refs(o.data.semantic_refs).some(r => r.id === coordinationScopes(ledger, previous.id)[0]!.id))) {
+          for (const execution of operation.data.executions as unknown as OperationExecution[]) {
+            const action = ledger.get(execution.kind === 'native' ? execution.launch.id : execution.action.id)
+            if (!action || ((action.data.receipt as any)?.stopped !== true && !(execution.kind === 'native' && nativeWriterCeased(ledger, action))) || (execution.kind === 'controlled' && (action.data.execution_spec as any)?.kind !== 'collect')) throw Error('OPERATION_CONTROLLED_OUTCOME_UNKNOWN')
+          }
+          save(operation.kind, { ...operation.data, state: 'superseded', result: { status: 'superseded', reason: 'Authenticated amendment after writer cessation; no acceptance verdict' }, evidence_refs: p.evidenceRefs }, [], undefined, operation)
+        }
+      }
       requireText(s.id, s.intent, s.boundary, s.accountable); assertRefs(s.requirements); assertRefs(s.projects)
       if (!s.requirements.length || !s.projects.length || !Number.isSafeInteger(s.nextReviewAt) || s.nextReviewAt <= Date.now()) throw new Error('INTAKE_SCOPE_REQUIRED')
       s.requirements.forEach(r => current(r, 'requirement')); s.projects.forEach(r => current(r, 'project')); current(s.policy, 'professional_policy')
@@ -287,10 +332,12 @@ export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger,
         if (JSON.stringify(refs(contract.data.requirement_refs)) !== JSON.stringify(s.requirements)) throw new Error('CONTRACT_REQUIREMENTS_MISMATCH')
       }
       const scopes = [...s.requirements, s.acceptanceContract, s.deliveryContract, ...s.projects, s.policy]
-      const work = save('commitment', { intent: s.intent, work_kind: 'task', type_ref: 'core/task@2', wish_refs: [], requirement_refs: json(s.requirements), source_refs: json([p.source]), project_refs: json(s.projects), requirement_revision: 1, acceptance_contract: json(s.acceptanceContract), delivery_contract: json(s.deliveryContract), boundary: s.boundary, accountable: s.accountable, next_review_at: s.nextReviewAt, state: 'proposed', control_state: 'autonomous' }, scopes, s.id)
-      save('coordination_intake', { commitment_id: work.id, source_ref: json(p.source), policy_ref: json(s.policy), requirement_refs: json(s.requirements), contract_ref: json(s.acceptanceContract), delivery_ref: json(s.deliveryContract), project_refs: json(s.projects) }, scopes)
+      const authenticatedSource = p.kind === 'accept' ? p.source : command.source
+      const work = save('commitment', { intent: s.intent, work_kind: 'task', type_ref: 'core/task@2', wish_refs: [], requirement_refs: json(s.requirements), source_refs: json([authenticatedSource]), project_refs: json(s.projects), requirement_revision: Number(previous?.data.requirement_revision ?? 0) + 1, acceptance_contract: json(s.acceptanceContract), delivery_contract: json(s.deliveryContract), boundary: s.boundary, accountable: s.accountable, next_review_at: s.nextReviewAt, state: 'proposed', control_state: 'autonomous' }, scopes, s.id, previous)
+      const oldIntake = previous ? ledger.snapshot('coordination_intake').find(o => o.data.commitment_id === previous.id) : undefined
+      save('coordination_intake', { commitment_id: work.id, source_ref: json(authenticatedSource), policy_ref: json(s.policy), requirement_refs: json(s.requirements), contract_ref: json(s.acceptanceContract), delivery_ref: json(s.deliveryContract), project_refs: json(s.projects) }, scopes, undefined, oldIntake)
       result = [work]
-    } else if (p.kind === 'team') {
+    } else if (p.kind === 'team' || p.kind === 'team_handoff') {
       const work = current(p.commitment, 'commitment'); commitment(work.id)
       const scopes = scopesFor(work.id), intake = current(scopes[0]!, 'coordination_intake'), policy = current(ref(intake.data.policy_ref), 'professional_policy')
       const roles = policy.data.roles as unknown as PolicySpec['roles'], specs = p.assignments
@@ -305,7 +352,7 @@ export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger,
         const worker = registeredWorker(ledger, s.worker), profile = current(refs(worker.data.capability_profile_refs)[0]!, 'capability_profile')
         const binding = ledger.snapshot().find(o => o.kind === 'session_binding' && ref(o.data.worker_ref).id === s.worker!.id)
         // A new assignment cannot adopt an already-running launch lacking its exact ref.
-        if (binding) throw new Error('EXPLICIT_HANDOFF_REQUIRED')
+        if (binding && (p.kind !== 'team_handoff' || !nativeWriterCeased(ledger, ledger.get(ref(binding.data.launch_ref).id)))) throw new Error('EXPLICIT_HANDOFF_REQUIRED')
         if (!(profile.data.capabilities as string[]).includes(s.role)) throw new Error('ROLE_CAPABILITY_MISSING')
         if (refs(intake.data.project_refs).some(r => !worker.scope_revision_refs.some(b => b.id === r.id && b.revision === r.revision))) throw new Error('WORKER_PROJECT_MISMATCH')
         const criteria = refs(current(ref(intake.data.contract_ref)).data.criterion_refs)
@@ -320,8 +367,8 @@ export function coordinationTransaction(db: DatabaseSync, ledger: ManagedLedger,
       specs.forEach(s => visit(s.role))
       for (const s of specs) {
         const previous = ledger.snapshot().find(o => o.kind === 'team_assignment' && o.data.commitment_id === work.id && o.data.role === s.role)
-        if (previous) throw new Error('EXPLICIT_HANDOFF_REQUIRED')
-        result.push(save('team_assignment', { commitment_id: work.id, policy_ref: json(refOf(policy)), role: s.role, applicable: s.applicable, basis: s.basis, worker_ref: json(s.worker), binding_ref: null, deliverables: s.deliverables, consumers: s.consumers, criterion_refs: json(s.criteria), dependencies: s.dependencies, combination_basis: s.combinationBasis, state: s.applicable ? 'planned' : 'closed' }, [...scopes, ...(s.worker ? [s.worker] : [])]))
+        if (previous && (p.kind !== 'team_handoff' || ledger.applicability(previous.id) === 'usable' || JSON.stringify(previous.data.worker_ref) !== JSON.stringify(s.worker))) throw new Error('EXPLICIT_HANDOFF_REQUIRED')
+        result.push(save('team_assignment', { commitment_id: work.id, policy_ref: json(refOf(policy)), role: s.role, applicable: s.applicable, basis: s.basis, worker_ref: json(s.worker), binding_ref: null, deliverables: s.deliverables, consumers: s.consumers, criterion_refs: json(s.criteria), dependencies: s.dependencies, combination_basis: s.combinationBasis, state: s.applicable ? 'planned' : 'closed' }, [...scopes, ...(s.worker ? [s.worker] : [])], undefined, previous))
       }
     } else if (p.kind === 'question') {
       const s = p.input; commitment(s.commitmentId); const scopes = scopesFor(s.commitmentId), assignment = current(s.assignment, 'team_assignment')

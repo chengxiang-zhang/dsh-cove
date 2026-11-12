@@ -14,6 +14,9 @@
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { HostClock, HostLog, SessionControllerFace } from '../host-ports.ts'
+import { createInprocTransport } from './transport/inproc.ts'
+import { ensureExecutorSession, realmOfTarget, scopePathOf, type ExecutorTransportFactory } from './transport/index.ts'
+import type { ExecutorTransport } from './transport/types.ts'
 import type { KernelTx, Ledger } from '../kernel/ledger.ts'
 import type { SpeechProposal } from '../kernel/ports.ts'
 import { PHYSICAL } from '../protocol/db.ts'
@@ -22,7 +25,7 @@ import type { ReportInput, ToolResult } from '../protocol/tools.ts'
 import type { Placement, PlacementRequest } from '../world/place.ts'
 import type { WorkspaceInput } from '../world/registry.ts'
 import { extended, judgeBudget, ONESHOT_WALL_MS, PROGRESS_WINDOW_MS, type Budget } from './budget.ts'
-import { callSignature, exitCodeOf, inputMarker, inputRequestIds, parseSessionEvent, TurnRanges, turnEndKind } from './events.ts'
+import { callSignature, contentText, exitCodeOf, inputMarker, inputRequestIds, parseSessionEvent, reportFromCall, reportFromText, TurnRanges, turnEndKind } from './events.ts'
 import type { Profile, ProfileRegistry } from './profiles/index.ts'
 import { createReportTool, type ToolDefinitionLike } from './report-tool.ts'
 
@@ -49,6 +52,10 @@ export interface ExecutorWorld {
 export interface ExecutorDeps {
   ledger: Ledger
   controller: () => SessionControllerFace
+  /** Dispatch transport; absent means the in-process one built from `controller`. */
+  transport?: ExecutorTransportFactory
+  /** Sink for transport-delivered session events; defaults to this module's own handler. */
+  onEvent?: (sessionId: string, event: unknown) => void
   world: ExecutorWorld
   profiles: ProfileRegistry
   clock: HostClock
@@ -101,6 +108,8 @@ interface SessionState {
   lastEnd?: { turn: number; reason: EndReason }
   report?: ReportInput
   calls: ToolLogEntry[]
+  /** Last assistant message, for hosts that cannot compose this process's report tool. */
+  lastText?: string
 }
 
 export function createExecutors(deps: ExecutorDeps): Executors {
@@ -108,12 +117,23 @@ export function createExecutors(deps: ExecutorDeps): Executors {
   const sessions = new Map<string, SessionState>()
   /** Steers delivered per attempt (process-local); the queue path stays safe regardless. */
   const steers = new Map<string, number>()
+  /** Attempts this process cancelled itself; a later `turn/end` is then not "external". */
+  const cancelled = new Set<string>()
+  /** Stop functions of the per-attempt event watchers. */
+  const watchers = new Map<string, () => void>()
+  const write = <T>(fn: (tx: KernelTx) => T): T => ledger.open(fn, { module: 'executors' })
+  let localTransport: ExecutorTransport | undefined
+  /** The transport of one target; `inproc` is the fallback when no factory is composed. */
+  const transportFor = (target: string | null | undefined): ExecutorTransport => {
+    if (deps.transport !== undefined) return deps.transport.forTarget(target)
+    localTransport ??= createInprocTransport(deps.controller)
+    return localTransport
+  }
   const stateOf = (sessionId: string): SessionState => {
     let s = sessions.get(sessionId)
     if (!s) { s = { ranges: new TurnRanges(), calls: [] }; sessions.set(sessionId, s) }
     return s
   }
-  const write = <T>(fn: (tx: KernelTx) => T): T => ledger.open(fn, { module: 'executors' })
   const attemptById = (id: string): AttemptRow | undefined => ledger.read.get<AttemptRow>(`SELECT * FROM ${A} WHERE attempt_id = ?`, id)
   const attemptBySession = (sid: string): AttemptRow | undefined => ledger.read.get<AttemptRow>(`SELECT * FROM ${A} WHERE session_id = ?`, sid)
   const commitmentById = (id: string): CommitmentRow | undefined => ledger.read.get<CommitmentRow>(`SELECT * FROM ${C} WHERE commitment_id = ?`, id)
@@ -138,6 +158,9 @@ export function createExecutors(deps: ExecutorDeps): Executors {
       ...pendingInput.map(p => `Added input: ${p.body_json ?? ''} ${inputMarker(p.request_id as string)}`),
       'Report through the report tool: report(state: ready|progress|blocked|failed|dropped, summary, evidence?: [{command, exit, reading}], question?).',
       'For ready, list the exact commands you ran and their exit codes; blocked needs one question.',
+      ...(deps.transport?.kind === 'http'
+        ? ['If the report tool is not available in this host, end your final message with one fenced JSON object of the same shape: {"state":"ready|progress|blocked|failed|dropped","summary":"...","evidence":[{"command":"...","exit":0,"reading":"..."}]}.']
+        : []),
     ].join('\n')
   }
 
@@ -157,16 +180,39 @@ export function createExecutors(deps: ExecutorDeps): Executors {
     }
   }
 
-  function prepareCwd(c: CommitmentRow, a: AttemptRow, profile: Profile): string {
+  /**
+   * A dispatch that never reached `running` leaves the single slot claimed but
+   * unused: the commitment stays open with the slot held and only a pending
+   * retry, so every other durable deliver is wedged behind `ux_sa_commit_slot`
+   * with no live seat to wait on. When no durable seat is live, release the slot
+   * here; a later redispatch reclaims it through `claimSlot`, and the ledger
+   * guard still refuses a release while a durable attempt is pending or running.
+   */
+  function releaseSlotIfIdle(commitmentId: string): void {
+    const c = commitmentById(commitmentId)
+    if (!c || c.slot === null) return
+    const liveSeat = ledger.read.get(
+      `SELECT 1 FROM ${A} WHERE commitment_id = ? AND lifetime = 'durable' AND state IN ('pending', 'running')`, commitmentId)
+    if (liveSeat) return
+    write(tx => tx.patchCommitment(commitmentId, { slot: null }))
+  }
+
+  /** Where an attempt lands: the working directory and, for a durable seat, the machine. */
+  function prepareCwd(c: CommitmentRow, a: AttemptRow, profile: Profile): { dir: string; host?: string } {
     if (profile.lifetime === 'oneshot') {
+      // A one-shot seat is process-local by construction: its directory is created here.
       const dir = oneshotDir(deps.seatRoot, a.attempt_id)
       mkdirSync(dir, { recursive: true })
-      return dir
+      return { dir }
     }
+    // `04`: the target names the realm and machine; a bare commitment lands locally.
+    const realm = realmOfTarget(c.target)
+    const requestedPath = scopePathOf(c.target) ?? deps.workspacePath?.(c)
     const placement = deps.world.place({
       what: c.what, check_kind: c.check_kind, principal: c.creditor, needsWrite: profile.tools === 'full',
-      realm: 'local', workspace: 'new', executorClass: profile.id,
-      ...(c.target ? { target: c.target } : {}), ...(deps.workspacePath?.(c) ? { path: deps.workspacePath(c) } : {}),
+      realm: realm.realm, workspace: 'new', executorClass: profile.id,
+      ...(realm.host === undefined ? {} : { host: realm.host }),
+      ...(c.target ? { target: c.target } : {}), ...(requestedPath === undefined ? {} : { path: requestedPath }),
     })
     if ('denied' in placement) throw new DispatchFailure(`placement denied: ${placement.denied}`, true)
     const dir = durableDir(deps.seatRoot, c.commitment_id)
@@ -175,7 +221,7 @@ export function createExecutors(deps: ExecutorDeps): Executors {
       ledger.open(tx => deps.world.registerWorkspace(tx, { path: placement.scopePath, entity_id: placement.host ?? 'local',
         commitment_id: c.commitment_id, mandate_id: placement.mandateId as string, branch: branchOf(c.commitment_id) }), { module: 'world' })
     }
-    return dir
+    return { dir, ...(placement.host === undefined ? {} : { host: placement.host }) }
   }
 
   function cannotProposal(c: CommitmentRow, tried: string[]): void {
@@ -213,6 +259,9 @@ export function createExecutors(deps: ExecutorDeps): Executors {
       tx.updateAttempt(a.attempt_id, { state: 'ended', end_reason: 'dispatch_failed', cancel_origin: 'dispatch' })
       tx.append(a.commitment_id, { actor: 'executors', kind: 'state', body: { dispatch_failed: a.attempt_id, reason } })
     })
+    // The attempt just ended without a live seat; free the single slot before any
+    // retry is queued so a failed durable dispatch cannot block the other durables.
+    releaseSlotIfIdle(a.commitment_id)
     if (a.session_id && a.lifetime === 'oneshot') rmSync(oneshotDir(deps.seatRoot, a.attempt_id), { recursive: true, force: true })
     log.warn(`executors: dispatch of ${a.attempt_id} failed: ${reason}`)
     const failures = ledger.read.get<{ k: number }>(
@@ -272,31 +321,54 @@ export function createExecutors(deps: ExecutorDeps): Executors {
       return { failed: 'SLOT_FULL' }   // stays pending; the agenda retries
     }
     const sessionId = sessionIdOf(c.commitment_id, a.n)
+    let createdSessionId: string | undefined
+    let dispatchTransport: ExecutorTransport | undefined
     try {
-      const cwd = prepareCwd(c, a, profile)
-      write(tx => tx.updateAttempt(a.attempt_id, { session_id: sessionId, cwd, provider: profile.provider ?? null,
-        model: profile.model ?? null, effort: profile.effort ?? null, branch: profile.lifetime === 'durable' ? branchOf(c.commitment_id) : null }))
+      const landed = prepareCwd(c, a, profile)
+      const transport = transportFor(c.target)
+      dispatchTransport = transport
+      const model = profile.provider !== undefined && profile.provider !== null && profile.model !== undefined && profile.model !== null
+        ? { provider: profile.provider, model: profile.model, ...(profile.effort === undefined ? {} : { effort: profile.effort }) }
+        : undefined
+      write(tx => tx.updateAttempt(a.attempt_id, { session_id: sessionId, cwd: landed.dir, provider: profile.provider ?? null,
+        model: profile.model ?? null, effort: profile.effort ?? null, branch: profile.lifetime === 'durable' ? branchOf(c.commitment_id) : null,
+        host: landed.host ?? null }))
       const closedDuring = (): { failed: string } => ({ failed: `commitment ${commitmentId} closed during dispatch` })
       if (!(await stillDispatchable(commitmentId, a.attempt_id))) return closedDuring()
-      const created = await deps.controller().create({ sessionId, cwd, agentPreset: profile.preset })
+      const created = await ensureExecutorSession(transport, { sessionId, cwd: landed.dir, preset: profile.preset, ...(model === undefined ? {} : { model }) })
+      createdSessionId = created.sessionId
+      // `stillDispatchable` cancels the attempt (through the transport) when the commitment
+      // closed during the create, so no extra cancel is sent here.
       if (!(await stillDispatchable(commitmentId, a.attempt_id))) return closedDuring()
       // Record what the host reports, not what was asked (S2: the default preset is reported too).
-      const reported = created as { sessionId?: unknown; agentPreset?: unknown }
       write(tx => tx.append(c.commitment_id, { actor: 'executors', kind: 'state', body: {
-        dispatched: a.attempt_id, session_id: typeof reported.sessionId === 'string' ? reported.sessionId : sessionId,
-        agentPreset: typeof reported.agentPreset === 'string' ? reported.agentPreset : null } }))
+        dispatched: a.attempt_id, session_id: created.sessionId,
+        agentPreset: created.agentPreset ?? null,
+        ...(landed.host === undefined ? {} : { host: landed.host }),
+        ...(created.presetDegraded === undefined ? {} : { presetDegraded: created.presetDegraded }) } }))
+      if (created.presetDegraded !== undefined) {
+        log.warn(`executors: ${a.attempt_id} asked preset ${created.presetDegraded.asked}; host runs ${created.presetDegraded.used}`)
+      }
       if (!(await stillDispatchable(commitmentId, a.attempt_id))) return closedDuring()
-      await deps.controller().prompt({ requestId: `dispatch:${a.attempt_id}`, sessionId, mode: 'queue',
-        content: [{ type: 'text', text: briefText(c) }] }, AbortSignal.timeout(PROMPT_TIMEOUT_MS))
+      // The event watcher starts before the prompt so no early event can be missed;
+      // `inproc` returns a no-op (its host bus forwards the same events).
+      watchers.get(a.attempt_id)?.()
+      const sink = deps.onEvent ?? ((sid: string, ev: unknown) => { onSessionEvent(sid, ev) })
+      watchers.set(a.attempt_id, transport.watch(created.sessionId, event => sink(created.sessionId, event)))
+      await transport.prompt({ requestId: `dispatch:${a.attempt_id}`, sessionId: created.sessionId, mode: 'queue', text: briefText(c) })
       if (!(await stillDispatchable(commitmentId, a.attempt_id))) return closedDuring()
       const now = attemptById(a.attempt_id)
       if (now?.state !== 'pending') {
-        deps.controller().cancel({ sessionId })
+        void Promise.resolve(transport.cancel(created.sessionId)).catch(() => undefined)
         return { failed: `attempt ${a.attempt_id} was cancelled during dispatch` }
       }
       write(tx => tx.updateAttempt(a.attempt_id, { state: 'running' }))
-      return { attemptId: a.attempt_id, sessionId }
+      return { attemptId: a.attempt_id, sessionId: created.sessionId }
     } catch (error) {
+      watchers.get(a.attempt_id)?.()
+      watchers.delete(a.attempt_id)
+      // A session that was created but never prompted must not linger on the host.
+      if (createdSessionId !== undefined) void Promise.resolve(dispatchTransport?.cancel(createdSessionId)).catch(() => undefined)
       return onDispatchFailure(attemptById(a.attempt_id) ?? a, profile, error)
     }
   }
@@ -304,8 +376,11 @@ export function createExecutors(deps: ExecutorDeps): Executors {
   async function cancel(attemptId: string, origin: CancelOrigin): Promise<void> {
     const a = attemptById(attemptId)
     if (!a || a.state === 'ended') return
+    cancelled.add(attemptId)
+    watchers.get(attemptId)?.()
+    watchers.delete(attemptId)
     if (a.session_id) {
-      try { await deps.controller().cancel({ sessionId: a.session_id }) } catch (error) {
+      try { await transportFor(commitmentById(a.commitment_id)?.target).cancel(a.session_id) } catch (error) {
         log.warn(`executors: cancel of ${a.session_id} failed: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
@@ -334,8 +409,8 @@ export function createExecutors(deps: ExecutorDeps): Executors {
     }
     const mode = open ? 'steer' : 'queue'
     try {
-      await deps.controller().prompt({ requestId, sessionId: a.session_id, mode,
-        content: [{ type: 'text', text: `${text}\n${inputMarker(requestId)}` }] }, AbortSignal.timeout(PROMPT_TIMEOUT_MS))
+      await transportFor(commitmentById(a.commitment_id)?.target).prompt({ requestId, sessionId: a.session_id, mode,
+        text: `${text}\n${inputMarker(requestId)}` })
     } catch (error) {
       log.warn(`executors: input ${requestId} not delivered: ${error instanceof Error ? error.message : String(error)}`)
       return { mode: 'queue' }
@@ -361,8 +436,22 @@ export function createExecutors(deps: ExecutorDeps): Executors {
       case 'turn/end': {
         const turn = typeof d.turn === 'number' ? d.turn : s.ranges.last() ?? 0
         s.ranges.close(turn, event.seq)
-        s.lastEnd = { turn, reason: parseEndReason(turnEndKind(d)) }
+        const reason = parseEndReason(turnEndKind(d))
+        s.lastEnd = { turn, reason }
+        // External stop (10 "外部取消"): an aborted turn this process did not cancel means
+        // somebody stopped the session in its own host (GUI, another client). The attempt
+        // ends; the commitment stays open and the agenda decides whether to re-dispatch.
+        if (reason === 'aborted' && !cancelled.has(a.attempt_id)) {
+          write(tx => tx.updateAttempt(a.attempt_id, { turn_open: 0, cancel_origin: 'external' }))
+          return
+        }
         write(tx => tx.updateAttempt(a.attempt_id, { turn_open: 0 }))
+        return
+      }
+      case 'assistant/message': {
+        // A host reached over HTTP cannot compose this process's report tool; the brief
+        // asks for one fenced JSON report as the last message, so keep the latest text.
+        s.lastText = contentText(d.message)
         return
       }
       case 'user/message': {
@@ -374,6 +463,10 @@ export function createExecutors(deps: ExecutorDeps): Executors {
       }
       case 'tool/call': {
         const sig = callSignature(d)
+        // A `report` call is the claim; the ledger write belongs to the host that composed
+        // the tool, so the claim is read from the stream and checked against the tool log.
+        const claimed = reportFromCall(String(d.name ?? ''), d.arguments)
+        if (claimed !== undefined) s.report = claimed
         s.calls.push({ callId: String(d.callId ?? ''), name: String(d.name ?? ''), arguments: String(d.arguments ?? '') })
         write(tx => tx.updateAttempt(a.attempt_id, {
           tool_calls: a.tool_calls + 1, last_tool_at: event.time ?? deps.clock.now(),
@@ -402,6 +495,15 @@ export function createExecutors(deps: ExecutorDeps): Executors {
 
   async function supervise(now: number): Promise<SuperviseAction[]> {
     const actions: SuperviseAction[] = []
+    // Attempts that ended outside `cancel` (closure, reconcile) stop their watchers here.
+    for (const [attemptId, stop] of [...watchers]) {
+      const row = attemptById(attemptId)
+      if (row === undefined || row.state === 'ended') {
+        stop()
+        watchers.delete(attemptId)
+        cancelled.delete(attemptId)
+      }
+    }
     const running = ledger.read.all<AttemptRow>(`SELECT * FROM ${A} WHERE state = 'running' ORDER BY attempt_id`)
     for (const a of running) {
       const c = commitmentById(a.commitment_id)
@@ -476,7 +578,10 @@ export function createExecutors(deps: ExecutorDeps): Executors {
     },
     lastReport(attemptId) {
       const a = attemptById(attemptId)
-      return a?.session_id ? sessions.get(a.session_id)?.report : undefined
+      if (!a?.session_id) return undefined
+      const s = sessions.get(a.session_id)
+      // The tool report wins (local executors); the text report is the HTTP fallback.
+      return s?.report ?? (s?.lastText === undefined ? undefined : reportFromText(s.lastText))
     },
     toolLog(attemptId) {
       const a = attemptById(attemptId)

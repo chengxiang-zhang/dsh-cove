@@ -1,5 +1,5 @@
 import { constants, openSync, fstatSync, closeSync, readFileSync, writeFileSync, mkdirSync, lstatSync, readdirSync, realpathSync, readlinkSync, symlinkSync, existsSync, rmSync, chmodSync } from 'node:fs'
-import { join, relative, dirname, isAbsolute, normalize, resolve } from 'node:path'
+import { join, relative, dirname, basename, isAbsolute, normalize, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 
 interface FileEntry { readonly path: string; readonly kind: 'file' | 'link' | 'excluded' | 'directory'; readonly digest: string; readonly bytes: number; readonly executable: boolean }
@@ -28,8 +28,10 @@ export function sealProjectInputs(input: {
   sourceAliases?: readonly { path: string; sourcePrefix: string }[]
   destination: string; provenance: { source: string; revision: string }
 }): ProjectSeal {
-  const source = realpathSync(input.sourceRoot), destination = input.destination
-  if (!isAbsolute(destination) || existsSync(destination) || within(source, destination) || input.sourceFiles.length > 50000 || input.dependencyRoots.length > 8 || input.tools.length > 16) throw new Error('PROJECT_SEAL_DESTINATION')
+  const source = realpathSync(input.sourceRoot)
+  if (!isAbsolute(input.destination) || existsSync(input.destination)) throw new Error('PROJECT_SEAL_DESTINATION')
+  const destination = join(realpathSync(dirname(input.destination)), basename(input.destination))
+  if (within(source, destination) || input.sourceFiles.length > 50000 || input.dependencyRoots.length > 8 || input.tools.length > 16) throw new Error('PROJECT_SEAL_DESTINATION')
   const unique = new Set<string>()
   for (const path of input.sourceFiles) { sourcePath(path); if (unique.has(path)) throw new Error('PROJECT_SOURCE_DUPLICATE'); unique.add(path) }
   const dependencies = input.dependencyRoots.map(x => ({ name: x.name, source: realpathSync(x.path), destination: join(destination, 'dependencies', x.name) }))
@@ -122,7 +124,8 @@ export function verifyProjectSeal(seal: ProjectSeal): boolean {
 /** Copy exact verified bytes, never recursively include a newly introduced entry. */
 export function copyVerifiedProjectSource(seal: ProjectSeal, destination: string): void {
   if (!verifyProjectSeal(seal)) throw new Error('PROJECT_SEAL_CHANGED')
-  if (realpathSync(destination) !== destination || readdirSync(destination).length) throw new Error('PROJECT_COPY_DESTINATION')
+  if (!lstatSync(destination).isDirectory() || readdirSync(destination).length) throw new Error('PROJECT_COPY_DESTINATION')
+  destination = realpathSync(destination)
   const entries = seal.manifest.filter(e => e.path.startsWith('source/'))
   for (const entry of entries.filter(e => e.kind === 'directory').sort((a,b) => a.path.length-b.path.length)) mkdirSync(join(destination, entry.path.slice(7)), { recursive: true })
   for (const entry of entries.filter(e => e.kind !== 'directory')) {

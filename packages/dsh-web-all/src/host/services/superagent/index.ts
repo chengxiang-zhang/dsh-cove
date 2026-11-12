@@ -72,9 +72,11 @@ import { openLedgerDb, PHYSICAL } from './protocol/db.ts'
 import type { InboundEvent } from './protocol/events.ts'
 import { parseEndReason, type AttemptRow, type CommitmentRow, type DeskRow, type WorkClassRow } from './protocol/objects.ts'
 import type { SayOutput, ToolResult } from './protocol/tools.ts'
+import { createClockWatchdog, type ClockWatchdog } from './recovery/clock-watchdog.ts'
 import { createRecovery, type Recovery, type StartupReport } from './recovery/startup.ts'
 import { createRuleRegistry } from './rules/registry.ts'
 import { createCommands, type CommandTrust } from './surface/commands/index.ts'
+import { SUPERAGENT_BUILD } from './surface/commands/status.ts'
 import { makeCommandRoutes } from './surface/routes.ts'
 import { createTickSignal } from './timing/agenda/index.ts'
 import type { AttentionContext } from './timing/attention.ts'
@@ -83,6 +85,7 @@ import { createOutletPolicy } from './timing/outlet-policy.ts'
 import { DEFAULT_TABLE } from './world/defaults.ts'
 import { applyWorldConfig, parseWorldConfig } from './world/adapters/config.ts'
 import { createWorldRegistry, type WorldRegistry } from './world/registry.ts'
+import { createTransportFactory, type ExecutorTransport } from './executors/transport/index.ts'
 
 export type { ManagedHostConfig } from './managed-runtime.ts'
 export type { DshNativeHostConfig } from './executors/engines/dsh.ts'
@@ -120,6 +123,7 @@ export interface AssemblyDeps {
 
 export interface Assembly {
   managedResult(event: InboundEvent, evaluate: () => DeliveryEvaluation): void
+  managedNotice(event: InboundEvent, text: string): void
   /** The channel's admission hook. Synchronous; 'responder' until startup is done. */
   admit(event: InboundEvent): AdmitResult
   /** Opens the ledger at `path`, builds the modules, runs startup, then opens admission. */
@@ -164,6 +168,12 @@ interface Machine {
   world: WorldRegistry
   memory: MemoryLog
   dispatcher: ReturnType<typeof createDispatcher>
+  /** Executor transport selection (T19 addendum). */
+  transport: ReturnType<typeof createTransportFactory>
+  /** Cancel a session on whichever host owns it. */
+  cancelSession: (sessionId: string) => void
+  /** The kernel clock (the agenda timer); the watchdog reads its last tick. */
+  kernelClock: ReturnType<typeof createClock>
   stopClock?: () => void
 }
 
@@ -179,6 +189,7 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
   let disposed = false
   let starting: Promise<StartupReport | undefined> | undefined
   const timers: unknown[] = []
+  let clockWatchdog: ClockWatchdog | undefined
   let lastBriefDay = ''
 
   const mode = (): SuperagentMode => deps.config().superagentMode
@@ -190,6 +201,36 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
     const h = deps.clock.setInterval(() => { try { fn() } catch (error) { log.warn(`superagent: timer: ${String(error)}`) } }, ms)
     ;(h as { unref?: () => void } | undefined)?.unref?.()
     timers.push(h)
+  }
+
+  /** One hook for every session event, local bus or transport-delivered (T19 addendum). */
+  const handleSessionEvent = (sessionId: string, event: unknown): void => {
+      const m = machine
+      if (!m) return
+      m.executors.onSessionEvent(sessionId, event)
+      m.presence.onSessionEvent(sessionId, event)
+      const e = (typeof event === 'object' && event !== null && 'event' in event && !('type' in event) ? (event as { event: unknown }).event : event) as { type?: unknown; data?: { reason?: { kind?: unknown } } }
+      if (e?.type !== 'turn/end') return
+      const a = m.ledger.read.get<AttemptRow>(`SELECT * FROM ${PHYSICAL.attempt} WHERE session_id = ? AND state <> 'ended'`, sessionId)
+      if (!a) return
+      try {
+        const reason = parseEndReason(e.data?.reason?.kind)
+        const report = m.executors.lastReport(a.attempt_id)
+        const result = m.closure.close(a.attempt_id, { reason }, report)
+        if (result.state === 'fulfilled' || result.state === 'unverified' || result.state === 'broken') {
+          // The host's report signal (10): one desk turn on the commitment says the delivery.
+          const requestId = `report:${a.attempt_id}`
+          const did = m.ledger.open(tx => tx.requestTurn({ trigger_kind: 'report', commitment_id: a.commitment_id, request_id: requestId }), { module: 'desk' })
+          if (did) void m.presence.runTurn({ deliberation_id: did, request_id: requestId, commitment_id: a.commitment_id, trigger_kind: 'report' })
+            .catch(err => log.warn(`superagent report turn: ${String(err)}`))
+        } else if (result.state === 'escalate') {
+          const why: EscalationReason = reason === 'completed' ? (report?.state === 'blocked' ? 'blocked_technical' : 'failed')
+            : reason === 'max-tokens' || reason === 'interrupted' || reason === 'error' ? reason : 'failed'
+          m.escalation.escalate(a.commitment_id, why)
+        }
+      } catch (error) {
+        log.warn(`superagent closure ${a.attempt_id}: ${String(error)}`)
+      }
   }
 
   function build(db: DatabaseSync): Machine {
@@ -211,6 +252,36 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
     })
     const profiles = createProfileRegistry()
     const world = createWorldRegistry({ read, clock: deps.clock, defaults: DEFAULT_TABLE, report: { warn: m => log.warn(m), degrade: e => diag(`world: ${e.reason} ${e.scope}`) } })
+
+    // Executor transport (T19 addendum): `http` drives a web host over its /api,
+    // `inproc` keeps the historical in-process session. The target of a commitment
+    // decides which host runs it.
+    const transport = createTransportFactory({ config: deps.config().superagentExecutor, controller: deps.controller })
+    /** The transport a session belongs to: its attempt names the commitment, the commitment names the target. */
+    const transportForSession = (sessionId: string): ExecutorTransport => {
+      const row = read.get<{ commitment_id: string }>(`SELECT commitment_id FROM ${PHYSICAL.attempt} WHERE session_id = ?`, sessionId)
+      const commitment = row === undefined ? undefined : read.get<{ target: string | null }>(`SELECT target FROM ${PHYSICAL.commitment} WHERE commitment_id = ?`, row.commitment_id)
+      return transport.forTarget(commitment?.target ?? null)
+    }
+    /** Cancel a session on its own host; the desk's own sessions stay on the controller. */
+    const cancelSession = (sessionId: string): void => {
+      if (!sessionId.startsWith('sa-x-')) {
+        void Promise.resolve(deps.controller().cancel({ sessionId })).catch(() => undefined)
+        return
+      }
+      void Promise.resolve(transportForSession(sessionId).cancel(sessionId)).catch(() => undefined)
+    }
+    /** Recovery reads executor sessions through the same transport at dispatch time. */
+    const transportController: SessionControllerFace = {
+      create: async () => { throw new Error('executor sessions are created by the transport') },
+      prompt: async () => { throw new Error('executor prompts go through the transport') },
+      cancel: () => { throw new Error('executor cancellation goes through the transport') },
+      inspect: async (sessionId: string) => {
+        const snapshot = await transportForSession(sessionId).snapshot(sessionId)
+        if (!snapshot.exists) throw new Error(`unknown session ${sessionId}`)
+        return { meta: { cwd: undefined }, events: snapshot.events }
+      },
+    }
 
     // World from configuration: parties, entities, mandates (only people grant).
     const cfg = deps.config().superagentWorld
@@ -300,7 +371,7 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       if (!r.ok) log.warn(`superagent outlet: ${p.moment} refused ${r.code}: ${r.message}`)
     }
 
-    const executors = createExecutors({ ledger, controller: deps.controller, world, profiles, clock: deps.clock, log, seatRoot: deps.seatRoot,
+    const executors = createExecutors({ ledger, controller: deps.controller, transport, onEvent: handleSessionEvent, world, profiles, clock: deps.clock, log, seatRoot: deps.seatRoot,
       speak: hostSpeak, askOwner: (id, q, d) => diag(`ask owner on ${id}: ${q} (default: ${d})`) })
     const closure = createClosure({ ledger, facts: executors, artifacts: { pathExists: p => existsSync(p), branchCommits: () => 0 } })
     hostSpeakToOwner = hostSpeak
@@ -361,15 +432,17 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       degrade: e => { recovery?.degrade(e.reason, e.scope) },
       recover: e => { recovery?.recover(e.reason, e.scope) },
     })
-    recovery = createRecovery({ ledger, lease, holder: deps.holder, clock: deps.clock, log, controller: deps.controller,
-      executors, closure, escalation, presence, outlet })
+    recovery = createRecovery({ ledger, lease, holder: deps.holder, clock: deps.clock, log,
+      controller: () => (transport.kind === 'http' ? transportController : deps.controller()),
+      executors, closure, escalation, presence, outlet, profiles, owner })
 
     const brief = createBrief({ read, promoteCandidates: () => [] })
     const briefNow = createBriefNow({ brief, now: () => ledger.nowMs(), day,
       submit: b => hostSpeak({ chat_id: '', moment: 'brief', audience: 'owner', payload: 'text', text: b.body, idem_key: `sa:brief:${day(ledger.nowMs())}` }) })
     const commands = createCommands({
       read, now: () => ledger.nowMs(),
-      release: id => releaseHost({ ledger, cancelSession: sid => { void Promise.resolve(deps.controller().cancel({ sessionId: sid })).catch(() => undefined) } }, id),
+      runtime: () => ({ transport: transport.kind, build: SUPERAGENT_BUILD }),
+      release: id => releaseHost({ ledger, cancelSession }, id),
       briefNow,
       docs: {
         add: path => ledger.open(tx => addDoc(tx, path, basename(path), 'handoff', 'human'), { module: 'memory' }),
@@ -383,15 +456,29 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       },
     })
     return { db, ledger, claim, policy, presence, executors, closure, escalation, outlet, outletPolicy, recovery, commands, briefNow, world, memory, dispatcher,
+      transport, cancelSession,
       fastDeps: { ...ar, dispatcher, profiles, defaultProfile: 'durable-full', rotateDesk: id => { presence.rotate(id, 'manual') } },
-      stopClock: undefined, kernelClock } as Machine & { kernelClock: ReturnType<typeof createClock> }
+      stopClock: undefined, kernelClock }
   }
 
-  function startTimers(m: Machine & { kernelClock?: ReturnType<typeof createClock> }): void {
+  function startTimers(m: Machine): void {
     const tickSignal = createTickSignal(m.ledger.read)
-    m.stopClock = m.kernelClock?.start(deps.clock, tickSignal, r => { void m.presence.runTurn(r).catch(e => log.warn(`superagent turn: ${String(e)}`)) })
+    m.stopClock = m.kernelClock.start(deps.clock, tickSignal, r => { void m.presence.runTurn(r).catch(e => log.warn(`superagent turn: ${String(e)}`)) })
+    // The lease heartbeat keeper rides with the clock: both are domain timers, so they
+    // start and stop atomically and a startup that aborts leaves neither running (11).
+    m.recovery.startLeaseKeeper()
+    // The clock is a separate interval from this reconcile loop; a reload that drops its
+    // handle stops the agenda silently, so watch its last tick and rewind it once if stale.
+    clockWatchdog ??= createClockWatchdog({
+      open: () => open,
+      leaseHeld: now => machine?.recovery.leaseHeld(now) ?? false,
+      lastTickAt: () => machine?.kernelClock.lastTickAt(),
+      repair: () => { const current = machine; if (current) startTimers(current) },
+      log, tickMs: TICK_MS,
+    })
     every(TICK_MS, () => {
       const now = deps.clock.now()
+      clockWatchdog?.check(now)
       void m.recovery.reconcile(now).catch(e => log.warn(`superagent reconcile: ${String(e)}`))
       m.closure.pendingSweep(now)
       void m.executors.supervise(now).catch(e => log.warn(`superagent supervise: ${String(e)}`))
@@ -422,6 +509,9 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
   }
 
   return {
+    managedNotice(event, text) {
+      hostSpeakToOwner?.({ chat_id: event.chat.id, reply_to: event.message_id, event_id: event.event_id, moment: 'answer', audience: 'owner', payload: 'text', idem_key: 'sa:managed-notice:' + createHash('sha256').update(event.event_id).digest('hex').slice(0, 24), text })
+    },
     managedResult(event, evaluate) {
       const m = machine
       if (!m) return
@@ -474,7 +564,12 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
         }
         machine = m
         const report = await m.recovery.startup()
-        if (disposed) return report
+        if (disposed) {
+          // Disposed while startup was in flight: tear the machine down here so no keeper
+          // or clock is started afterwards (the timers never ran, so there is nothing else to stop).
+          m.recovery.dispose()
+          return report
+        }
         open = true   // admission opens only after startup (11)
         startTimers(m)
         return report
@@ -482,34 +577,7 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       return starting
     },
     ready: () => open,
-    onSessionEvent(sessionId, event) {
-      const m = machine
-      if (!m) return
-      m.executors.onSessionEvent(sessionId, event)
-      m.presence.onSessionEvent(sessionId, event)
-      const e = (typeof event === 'object' && event !== null && 'event' in event && !('type' in event) ? (event as { event: unknown }).event : event) as { type?: unknown; data?: { reason?: { kind?: unknown } } }
-      if (e?.type !== 'turn/end') return
-      const a = m.ledger.read.get<AttemptRow>(`SELECT * FROM ${PHYSICAL.attempt} WHERE session_id = ? AND state <> 'ended'`, sessionId)
-      if (!a) return
-      try {
-        const reason = parseEndReason(e.data?.reason?.kind)
-        const report = m.executors.lastReport(a.attempt_id)
-        const result = m.closure.close(a.attempt_id, { reason }, report)
-        if (result.state === 'fulfilled' || result.state === 'unverified' || result.state === 'broken') {
-          // The host's report signal (10): one desk turn on the commitment says the delivery.
-          const requestId = `report:${a.attempt_id}`
-          const did = m.ledger.open(tx => tx.requestTurn({ trigger_kind: 'report', commitment_id: a.commitment_id, request_id: requestId }), { module: 'desk' })
-          if (did) void m.presence.runTurn({ deliberation_id: did, request_id: requestId, commitment_id: a.commitment_id, trigger_kind: 'report' })
-            .catch(err => log.warn(`superagent report turn: ${String(err)}`))
-        } else if (result.state === 'escalate') {
-          const why: EscalationReason = reason === 'completed' ? (report?.state === 'blocked' ? 'blocked_technical' : 'failed')
-            : reason === 'max-tokens' || reason === 'interrupted' || reason === 'error' ? reason : 'failed'
-          m.escalation.escalate(a.commitment_id, why)
-        }
-      } catch (error) {
-        log.warn(`superagent closure ${a.attempt_id}: ${String(error)}`)
-      }
-    },
+    onSessionEvent: handleSessionEvent,
     modelFor(sessionId) {
       const m = machine
       return m ? (m.presence.modelFor(sessionId) ?? m.executors.modelFor(sessionId)) : undefined
@@ -526,12 +594,16 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
     async dispose() {
       disposed = true
       open = false
+      const wait = (p: Promise<unknown>): Promise<unknown> => Promise.race([p, new Promise(r => { const h = setTimeout(r, DISPOSE_WAIT_MS); h.unref?.() })])
+      // A dispose that lands mid-startup must not race the keeper or clock into existence:
+      // wait for the in-flight start to settle (it tears its own machine down when disposed).
+      if (starting !== undefined) await wait(starting.catch(() => undefined))
       for (const h of timers.splice(0)) deps.clock.clearInterval(h)
       const m = machine
       if (!m) return
       m.stopClock?.()
+      m.transport.dispose()
       m.recovery.dispose()
-      const wait = (p: Promise<unknown>): Promise<unknown> => Promise.race([p, new Promise(r => { const h = setTimeout(r, DISPOSE_WAIT_MS); h.unref?.() })])
       await wait(Promise.all([m.presence.drain(), m.dispatcher.settle()]))
       try { m.db.close() } catch { /* already closed */ }
       machine = undefined
@@ -607,14 +679,13 @@ export function register(ctx: Context, nativeExecutors?: DshNativeHostConfig, ma
   }
   const home = dshHome(process.env)
   const inboxNamespace = () => familyNamespace<LarkInboxConfig>(LARK_INBOX_SETTINGS_NAMESPACE)
-  const managedEvents = new Map<string, InboundEvent>()
   let managed: ReturnType<typeof createManagedAdmission> | undefined
   const assembly = createSuperagent({
     ...(managedWork ? { managedAdmission: (event: InboundEvent) => {
       if (!managed) throw new Error('MANAGED_ADMISSION_NOT_READY')
-      const match = /^\/work\s+(\S+)\s+([\s\S]+)$/.exec(event.text)
-      managedEvents.set(event.event_id, event)
-      managed.enqueue({ requestId: 'feishu:' + event.event_id, ...(match ? { project: match[1], text: match[2]! } : { text: event.text }), origin: { kind: 'feishu', chatId: event.chat.id, messageId: event.message_id, eventId: event.event_id } })
+      const result = managed.message({ requestId: 'feishu:' + event.event_id, text: event.text, origin: { kind: 'feishu', chatId: event.chat.id, messageId: event.message_id, eventId: event.event_id, event } })
+      if (!result.duplicate && 'notice' in result && result.notice) assembly.managedNotice(event, result.notice)
+      else if (!result.duplicate && result.state === 'paused') assembly.managedNotice(event, '已暂停该事项，正在回收执行端。')
     } } : {}),
     config: () => parseSuperagentConfig(familyNamespace(LARK_INBOX_SETTINGS_NAMESPACE)),
     controller,
@@ -628,9 +699,9 @@ export function register(ctx: Context, nativeExecutors?: DshNativeHostConfig, ma
   })
   if (managedWork) {
     managed = createManagedAdmission(managedWork, (request, result) => {
-      const event = request.origin.eventId && managedEvents.get(request.origin.eventId)
+      const event = request.origin.event
       if (event) assembly.managedResult(event, result.evaluate)
-    })
+    }, { notice: (request, text) => { if (request.origin.event) assembly.managedNotice(request.origin.event, text) } })
     for (const route of managedWorkRoutes(managed, request => accessTrustOf(ctx).isTrusted(request))) own(ctx.webServer.register(route))
   }
   const disposeChannel = feishu.register(ctx, {}, {

@@ -71,6 +71,8 @@ function makeWorld(): World {
       owners: [{ union_id: OWNER, name: '老板' }], colleagues: [],
     },
     superagentAttention: { interruptQuota: 3, quiet: { from: '00:00', to: '00:00' }, briefAt: '23:59' },
+    // This spec composes the whole assembly in one process: the in-process transport.
+    superagentExecutor: { transport: 'inproc', hosts: [] },
   }
   const tools = new Map<string, DeskTool[]>()
   const toolface: ToolFacePort = {

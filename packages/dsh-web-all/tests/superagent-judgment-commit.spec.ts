@@ -61,7 +61,7 @@ function rig() {
     facts: (): CommitFacts => ({ g1_answered: state.answered, g3_mandate: () => state.mandate, g4_said: state.quotes }) }
   const commit = commitTool({ ...base, dispatcher })
   const ar = { ledger: t.ledger, executors, owner: OWNER, say: base.say }
-  return { t, controller, executors, dispatcher, said, state, commit, amend: amendTool(ar), release: releaseTool(ar),
+  return { t, controller, executors, dispatcher, said, state, commit, base, amend: amendTool(ar), release: releaseTool(ar),
     propose: proposeTool({ ledger: t.ledger, owner: OWNER, say: base.say }), fastDeps: { ...ar, dispatcher, profiles, defaultProfile: 'durable-full' } }
 }
 type Rig = ReturnType<typeof rig>
@@ -144,14 +144,42 @@ describe('judgment commit', () => {
     expect(one(r, 'SELECT budget_wall_ms FROM sa_commitment').budget_wall_ms).toBe(4 * 25 * 60_000)   // clamp(10 x 1 x 2.5) x 4
   })
 
-  it('6. a denied mandate is BOUNDARY_DENIED; a draft mandate makes a proposal on the owner with no attempt', () => {
+  it('6. a denied mandate is BOUNDARY_DENIED; a colleague draft mandate makes a proposal on the owner with no attempt', async () => {
     const r = rig()
     const e = arrive(r)
     r.state.mandate = 'deny'
     expect(r.commit(turn(e), input(e))).toMatchObject({ ok: false, code: 'BOUNDARY_DENIED' })
     r.state.mandate = 'draft'
-    expect(r.commit(turn(e), input(e))).toMatchObject({ ok: true, state: 'proposed', mandate: 'draft' })
-    expect(one(r, 'SELECT state, ball FROM sa_commitment')).toEqual({ state: 'proposed', ball: OWNER })
+    const c = arrive(r, { sender: COLLEAGUE })
+    expect(r.commit(turn(c, { sender: 'on_col' }), input(c))).toMatchObject({ ok: true, state: 'proposed', mandate: 'draft' })
+    expect(one(r, 'SELECT state, ball, creditor FROM sa_commitment')).toEqual({ state: 'proposed', ball: OWNER, creditor: 'on_col' })
+    expect(rows(r, 'SELECT * FROM sa_attempt')).toHaveLength(0)
+    await r.dispatcher.settle()
+    expect(calls(r, 'create')).toHaveLength(0)
+  })
+
+  it('6b. the owner\'s own request under a draft mandate is opened and dispatched, not parked for approval', async () => {
+    const r = rig()
+    r.state.mandate = 'draft'
+    const e = arrive(r)
+    expect(r.commit(turn(e), input(e))).toMatchObject({ ok: true, state: 'open', mandate: 'allow' })
+    expect(one(r, 'SELECT state, ball, creditor FROM sa_commitment')).toEqual({ state: 'open', ball: 'me', creditor: OWNER })
+    expect(rows(r, 'SELECT state FROM sa_attempt')).toHaveLength(1)
+    await r.dispatcher.settle()
+    expect(calls(r, 'create')).toHaveLength(1)
+    expect(rows(r, 'SELECT state FROM sa_attempt')).toEqual([{ state: 'running' }])
+    // The owner is still bound by deny: only draft is read as allow.
+    r.state.mandate = 'deny'
+    const d = arrive(r)
+    expect(r.commit(turn(d), input(d))).toMatchObject({ ok: false, code: 'BOUNDARY_DENIED' })
+  })
+
+  it('6c. with no owner configured, a draft mandate is never read as allow', () => {
+    const r = rig()
+    r.state.mandate = 'draft'
+    const e = arrive(r)
+    const commit = commitTool({ ...r.base, owner: '', dispatcher: r.dispatcher })
+    expect(commit({ ...turn(e), sender: '' }, input(e))).toMatchObject({ ok: true, state: 'proposed', mandate: 'draft' })
     expect(rows(r, 'SELECT * FROM sa_attempt')).toHaveLength(0)
   })
 

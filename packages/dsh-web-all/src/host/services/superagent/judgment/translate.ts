@@ -186,8 +186,12 @@ export function translateToCommit(ctx: JudgmentTurn, input: CommitInput, deps: T
   }
   const facts = deps.facts(ctx, event)
   const need = capabilityOf(input, profile)
-  const mandate = facts.g3_mandate(need.capability, need.path)
-  if (mandate === 'deny') return fail('BOUNDARY_DENIED', `${need.capability} on ${need.path} is denied for ${sender}`)
+  const graded = facts.g3_mandate(need.capability, need.path)
+  if (graded === 'deny') return fail('BOUNDARY_DENIED', `${need.capability} on ${need.path} is denied for ${sender}`)
+  // The owner's own request is not a proposal for the owner to approve: draft means
+  // "ask before doing" for everyone else, so an owner's draft is read as allow. The
+  // mandate the spec carries is the one that governs the work.
+  const mandate: Strength = graded === 'draft' && deps.owner !== '' && sender === deps.owner ? 'allow' : graded
   const last = read.get<AttemptRow>(`SELECT a.* FROM ${PHYSICAL.attempt} a JOIN ${PHYSICAL.commitment} c ON c.commitment_id = a.commitment_id
     WHERE c.thread_key = ? ORDER BY a.created_at DESC, a.n DESC LIMIT 1`, key)
   if (!candidates(input, cls, last, deps.profiles).includes(profile.id)) return fail('EXECUTOR_MISMATCH', `${profile.id} cannot do ${input.kind}/${input.check_kind} work`)

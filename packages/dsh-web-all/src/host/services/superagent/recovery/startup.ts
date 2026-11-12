@@ -21,7 +21,7 @@
  */
 
 import type { Ledger } from '../kernel/ledger.ts'
-import type { Lease } from '../kernel/lease.ts'
+import { holds, type Lease } from '../kernel/lease.ts'
 import type { Outlet } from '../kernel/outlet.ts'
 import type { HostClock, HostLog, SessionControllerFace } from '../host-ports.ts'
 import type { Executors } from '../executors/attempts.ts'
@@ -30,6 +30,9 @@ import type { Escalation } from '../executors/escalate.ts'
 import type { Presence } from '../desk/presence.ts'
 import { createDegrades, type DegradeRegistry } from './degrade.ts'
 import { createLeaseKeeper } from './lease-keeper.ts'
+import type { ProfileRegistry } from '../executors/profiles/index.ts'
+import { promoteOwnerProposals } from './owner-ball.ts'
+import { flushPendingDispatch } from './pending-flush.ts'
 import { createReconciler, type ReconcileResult } from './reconcile.ts'
 import { createSecondVoice, type HistoryRow, type SecondVoiceResult } from './second-voice.ts'
 import { propose } from './speak.ts'
@@ -65,6 +68,10 @@ export interface RecoveryDeps {
   closure: RecoveryClosure
   escalation: RecoveryEscalation
   presence: RecoveryPresence
+  /** Executor profiles, to give a lifted owner request the executor its brief names. */
+  profiles: ProfileRegistry
+  /** The owner's union id; the owner's own proposals are lifted, never left for approval. */
+  owner: () => string
   /** Message history reader; absent until P6 is verified (N17). */
   channelHistory?: (chatId: string, limit: number) => Promise<readonly HistoryRow[]>
   outlet: Outlet
@@ -80,6 +87,18 @@ export interface StartupReport {
 
 export interface Recovery {
   startup(): Promise<StartupReport>
+  /**
+   * Start the lease heartbeat keeper.
+   *
+   * Startup acquires the lease once and reconciles; the heartbeat that keeps the
+   * lease ours is a timer, and a timer belongs with the other domain timers so it
+   * starts and stops atomically with them (the composition root calls this inside
+   * `startTimers`). A startup that aborts before timers start therefore leaves no
+   * orphan keeper renewing a lease its process no longer serves.
+   */
+  startLeaseKeeper(): void
+  /** True when this process holds an unexpired outlet lease at `now` (the clock watchdog's guard). */
+  leaseHeld(now: number): boolean
   reconcile(now: number): Promise<ReconcileResult>
   selfCheck(deskId: string): Promise<'ok' | 'fail-closed'>
   secondVoice(eventId: string): Promise<SecondVoiceResult>
@@ -88,8 +107,8 @@ export interface Recovery {
   /**
    * Stop the heartbeat interval.
    *
-   * The seventh method, and the one addition to 11's six: `startup` starts a 15
-   * second interval, and a domain that is unloaded (a settings change, a rebuild)
+   * The seventh method, and the one addition to 11's six: `startLeaseKeeper` starts a
+   * 15 second interval, and a domain that is unloaded (a settings change, a rebuild)
    * must not leave that interval running - the orphaned keeper would keep
    * renewing a lease its process no longer serves, which is the exact shape of
    * the "HMR transactions cannot be nested" incident this domain exists to avoid.
@@ -117,6 +136,8 @@ export function createRecovery(deps: RecoveryDeps): Recovery {
     escalation: deps.escalation,
     presence: deps.presence,
     log,
+    liftOwnerProposals: (at) => promoteOwnerProposals({ ledger, profiles: deps.profiles, executors: deps.executors, log, lease, holder, owner: deps.owner }, at),
+    flushPending: (at) => flushPendingDispatch({ ledger, executors: deps.executors, log, lease, holder }, at),
     speak,
   })
 
@@ -178,8 +199,18 @@ export function createRecovery(deps: RecoveryDeps): Recovery {
         log.warn(`superagent/recovery: ${finding.code} on ${finding.subject} ${JSON.stringify(finding.detail)}`)
       }
 
-      keeper.start()
+      // The heartbeat keeper is started by the composition root alongside the other
+      // domain timers (`startLeaseKeeper`), not here, so a startup that aborts before
+      // timers run never leaves the keeper renewing a lease nobody serves.
       return { leaseHeld: acquired.held, reconciled, degraded }
+    },
+
+    startLeaseKeeper(): void {
+      keeper.start()
+    },
+
+    leaseHeld(now: number): boolean {
+      return holds(lease.current(), holder, now)
     },
 
     async reconcile(now: number): Promise<ReconcileResult> {

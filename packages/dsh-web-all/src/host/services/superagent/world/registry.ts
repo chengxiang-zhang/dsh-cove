@@ -499,9 +499,12 @@ export function createWorldRegistry(deps: WorldDeps): WorldRegistry {
       const mandateRow = tx.get<MandateRow>(
         `SELECT * FROM ${MANDATE} WHERE mandate_id = ? AND revoked_at IS NULL`, workspace.mandate_id)
       if (mandateRow === undefined) throw new WorldError('MANDATE_NOT_LIVE', `mandate ${workspace.mandate_id}`)
-      // 04's reading is exact: a workspace with no mandate on that same path is an
-      // unowned directory, so the mandate has to name this path.
-      if (normalizePath(mandateRow.scope_path) !== path) {
+      // 04: a workspace is owned by a mandate whose scope covers it. Mandates
+      // inherit strictly downward (mandate.ts), and `place` returns the covering
+      // parent mandate for a child target, so the scope only has to be this path
+      // or a segment-wise ancestor of it - the same `isPrefix` reading the
+      // decision used. An unrelated or narrower grant still owns nothing here.
+      if (!isPrefix(normalizePath(mandateRow.scope_path), path)) {
         throw new WorldError('MANDATE_NOT_LIVE', `mandate ${workspace.mandate_id} is not for ${path}`)
       }
       const at = tx.now

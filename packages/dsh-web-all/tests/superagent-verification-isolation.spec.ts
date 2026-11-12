@@ -25,6 +25,21 @@ afterEach(() => {
   for (const fn of clean.splice(0)) fn()
 })
 
+it('resolves the platform alias of its own scratch without reading data outside the candidate domain', async () => {
+  const f = setup(`import {realpathSync,readFileSync} from 'node:fs';
+    export function inspect(outside) {
+      const cwd=realpathSync(process.cwd()), alias=cwd.replace(/^\\/private\\/var/, '/var').replace(/^\\/private\\/tmp/, '/tmp');
+      let denied=false;try{readFileSync(outside)}catch{denied=true}
+      return {sameScratch:realpathSync(alias)===cwd,outsideDenied:denied};
+    }`)
+  const outside = join(f.root, 'outside.txt'); writeFileSync(outside, 'synthetic outside data')
+  const context = await f.service.sealVerificationContext({ candidate: f.candidate, qualification: f.qualification, cases: [{ criterion: 'requirement', input: outside, expected: { sameScratch: true, outsideDenied: true } }] })
+  const evidence = await f.run(context)
+  expect(f.ledger.get(evidence.id)?.data.complete, JSON.stringify(f.ledger.get(evidence.id)?.data)).toBe(true)
+  const evaluation = f.service.assessCandidate({ id: 'contract', revision: 1 }, f.candidate, [evidence])
+  expect(f.ledger.get(evaluation.id)?.data.verdict).toBe('pass')
+})
+
 it('calibrates good, bad and missing evidence with an external collector', async () => {
   for (const [code, wanted] of [
     ['export function inspect(v) { return v }', 'pass'],

@@ -143,6 +143,10 @@ export async function collectVerification(
       ancestors.add(parent)
       parent = dirname(parent)
     }
+    // Node realpath walks the lexical /var or /tmp ancestors before resolving
+    // macOS aliases. Permit their metadata, keeping all data/write roots exact.
+    const alias = leaf.replace(/^\/private(?=\/(?:var|tmp)(?:\/|$))/, '')
+    if (alias !== leaf) for (let parent = dirname(alias); parent !== '/'; parent = dirname(parent)) ancestors.add(parent)
   }
   const metadata = `(allow file-read-metadata ${[...ancestors].map((path) => `(literal ${lit(path)})`).join(' ')})`
   const profile = `(version 1)(deny default)${metadata}(allow process-exec process-info*)(allow sysctl-read)(allow mach-lookup (global-name "com.apple.system.logger"))(allow file-read* (literal "/") (subpath "/usr/lib") (subpath "/System") (subpath "/Library/Apple") (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom") (literal ${lit(executable)}) (literal ${lit(wrapper)}) (subpath ${lit(root)}) (subpath ${lit(scratch)}))(allow file-write* (subpath ${lit(scratch)}) (literal "/dev/null"))`

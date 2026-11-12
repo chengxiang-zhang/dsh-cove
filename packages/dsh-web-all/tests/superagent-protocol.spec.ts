@@ -55,7 +55,7 @@ describe('superagent protocol', () => {
     expect(TIERS.length).toBe(4)
     expect(CAPABILITIES.length).toBe(8)
     expect(RULE_PREDICATES.length).toBe(11)
-    expect(CANCEL_ORIGINS.length).toBe(7)
+    expect(CANCEL_ORIGINS.length).toBe(8)
   })
 
   it('4. canTransition agrees with COMMITMENT_TRANSITIONS on the full 9x9 matrix', () => {

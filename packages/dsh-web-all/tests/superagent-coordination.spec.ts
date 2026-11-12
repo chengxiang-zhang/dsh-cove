@@ -8,6 +8,25 @@ import { fixture as controlledFixture } from './fixtures/superagent/controlled.t
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+
+it('amends the same paused commitment and retires its old contracts without adopting a live writer', async () => {
+  const f = await coordinationFixture()
+  const team = f.service.planProfessionalTeam(f.commitment, f.assignments)
+  f.ledger.transact([f.commitment], [{ kind: 'control', id: f.commitment.id, control_state: 'paused', reason: 'Owner added a requirement', evidence_refs: ['message:update'] }])
+  const paused = { id: f.commitment.id, revision: f.ledger.get(f.commitment.id)!.revision }
+  const next = { ...requirement(), id: 'r2' }
+  f.ledger.transact([], [{ kind: 'create', object: next },
+    { kind: 'create', object: { ...f.ledger.get('contract')!, id: 'contract2', data: { ...f.ledger.get('contract')!.data, requirement_refs: [{ id: 'r2', revision: 1 }] }, scope_revision_refs: [{ id: 'r2', revision: 1 }] } },
+    { kind: 'create', object: { ...f.ledger.get('delivery')!, id: 'delivery2', data: { ...f.ledger.get('delivery')!.data, requirement_refs: [{ id: 'r2', revision: 1 }] }, scope_revision_refs: [{ id: 'r2', revision: 1 }] } }])
+  const amended = f.service.host.amendManagedIntent(paused, { id: f.commitment.id, intent: 'Preserve successful answers with the additional case', requirements: [{ id: 'r2', revision: 1 }], acceptanceContract: { id: 'contract2', revision: 1 }, deliveryContract: { id: 'delivery2', revision: 1 }, projects: [f.project], boundary: String(f.ledger.get('work')!.data.boundary), accountable: 'coordinator:owner', policy: f.policy, nextReviewAt: Date.now() + 60000 }, ['message:update'])
+  expect(amended.id).toBe(f.commitment.id)
+  expect(f.ledger.get('work')!.data).toMatchObject({ control_state: 'autonomous', requirement_revision: 2, acceptance_contract: { id: 'contract2', revision: 1 } })
+  expect(f.ledger.applicability(team[0]!.id)).toBe('recheck_required')
+  expect(f.service.dispatchReadiness('work').ready).toBe(false)
+  expect(f.service.host.replanProfessionalTeam(amended, f.assignments)).toHaveLength(3)
+  expect(f.ledger.get(team[0]!.id)!.revision).toBe(2)
+  f.ledger.close()
+})
 const requirement = (): ManagedObject => ({ id: 'r', kind: 'requirement', revision: 1,
   data: { intent: 'Preserve successful answers', source_refs: [{ id: 'user-message', revision: 1 }], wish_refs: [], observable_results: ['Successful diagnostic answers remain successful'], constraints: ['Real authentication failures stay failures'], criterion_sources: ['original user intent'] }, scope_revision_refs: [], extensions: {} })
 

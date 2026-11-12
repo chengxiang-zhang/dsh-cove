@@ -76,6 +76,8 @@ export interface BriefOutcome {
 export interface CommandDeps {
   read: LedgerReader
   now(): number
+  /** Which executor transport this process composes; the status probe reads it. */
+  runtime?: () => { transport: string; build: string }
   release(commitmentId: string): ReleaseOutcome
   briefNow(): Promise<BriefOutcome | null>
   docs: {

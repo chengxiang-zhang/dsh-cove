@@ -1,3 +1,4 @@
+import { deliveryActionSpec as deliveryRecoverySpec } from '../protocol/delivery.ts'
 import { inspectNativeDomainAbsence } from './native-domain.ts'
 import type { ExpectedDevTransition } from '../protocol/delivery.ts'
 import { managedLaunchScope } from './coordination-ledger.ts'
@@ -104,6 +105,7 @@ export interface ExecutionEnvelope {
   spec: ActionSpec
 }
 export interface CapabilityFence {
+  deliveryRecovery?: Ref
   expectedDevTransition?: ExpectedDevTransition
   nativeRuntime?: NativeRuntimePolicy
   id: string
@@ -138,6 +140,7 @@ interface ReadLedger {
 }
 const hostTokens = new WeakSet<object>()
 type HostCommand =
+  | { kind: 'retire_partial_delivery'; actionRef: Ref; specDigest: string; journalDigest: string }
   | { kind: 'native_domain_absence'; actionRef: Ref }
   | { kind: 'request_claim'; ownerRef: Ref; key: string }
   | { kind: 'native'; actionRef: Ref; stream: string; observation: Json }
@@ -261,7 +264,10 @@ function check(
   if (!w || w.role !== s.purpose || !w.resources.every((r) => s.resourceIds.includes(r)))
     return deny('WORKSPACE_SCOPE', s.workspaceId)
   try {
-    const transition = sent && s.kind === 'deliver' && s.executable === '/dsh-host/local-git-delivery@1' &&
+    const recovery=capability.deliveryRecovery&&l.get(capability.deliveryRecovery.id),p=recovery?.data.payload as any
+    const predecessor=p?.before?.action?.id&&l.get(p.before.action.id),oldCap=predecessor&&(predecessor.data.execution_spec as any)?.capabilityRef
+    const recoveryCurrent=!!recovery&&recovery.revision===capability.deliveryRecovery?.revision&&recovery.kind==='coordination_runtime_event'&&recovery.data.event==='local_delivery_reauthorization'&&predecessor?.data.state==='failed'&&(predecessor.data.receipt as any)?.stopped===true&&(predecessor.data.receipt as any)?.reason==='DELIVERY_PUBLISHED_ALIGNMENT_PENDING'&&state.capabilities.some(c=>c.id===oldCap?.id&&c.revoked)&&JSON.stringify(p.after?.action)===JSON.stringify((({kind,executable,args,payloadDigest,expectedDevTransition,...action})=>action)(s))&&JSON.stringify(p.after&&deliveryRecoverySpec(p.after))===JSON.stringify(s)
+    const transition = (sent || recoveryCurrent) && s.kind === 'deliver' && s.executable === '/dsh-host/local-git-delivery@1' &&
       s.expectedDevTransition && JSON.stringify(s.expectedDevTransition) === JSON.stringify(capability.expectedDevTransition)
       ? s.expectedDevTransition : undefined
     if (transition && transition.before !== w.baseline) return deny('DELIVERY_TRANSITION_BASELINE', w.id)
@@ -315,7 +321,14 @@ export function controlledTransaction(
     if (cmd.kind === 'host') {
       assertRefs([cmd.source])
       const h = cmd.command
-      if (h.kind === 'native_domain_absence') {
+      if (h.kind === 'retire_partial_delivery') {
+        const o=l.get(h.actionRef.id),a=o&&record(o),s=a?.spec
+        const c=s&&state.controls.find(c=>c.target.id===s.target.id),cap=s&&state.capabilities.find(c=>c.id===s.capabilityRef.id),m=s&&state.mandates.find(m=>m.id===s.mandateRef.id)
+        if(!o||o.revision!==h.actionRef.revision||a?.state!=='sent'||s?.kind!=='deliver'||s.executable!=='/dsh-host/local-git-delivery@1'||!s.expectedDevTransition||createHash('sha256').update(JSON.stringify(s)).digest('hex')!==h.specDigest||! /^[a-f0-9]{64}$/.test(h.journalDigest)||state.opened?.includes(o.id)||!c||c.epoch!==s.epoch||c.target.revision!==s.target.revision||c.holder!==s.subject||c.revoked||!cap||cap.revision!==s.capabilityRef.revision||cap.revoked||!m||m.revision!==s.mandateRef.revision||m.revoked)throw Error('DELIVERY_PREDECESSOR_CHANGED')
+        cap.revoked=true;cap.revision++;m.revoked=true;m.revision++;c.revoked=true
+        for(const lease of state.resources)if(lease.actionRef.id===o.id&&lease.status==='held')lease.status='released'
+        o.data.state='failed';o.data.receipt={status:'failed',stopped:true,reason:'DELIVERY_PUBLISHED_ALIGNMENT_PENDING',evidenceRefs:['delivery-journal:'+h.journalDigest]};o.revision++;changed=o;result=record(o)
+      } else if (h.kind === 'native_domain_absence') {
         const object = l.get(h.actionRef.id)
         if (!object || object.kind !== 'action' || object.revision !== h.actionRef.revision) throw Error('NATIVE_DOMAIN_STALE_ACTION')
         const action = record(object), capability = state.capabilities.find(c => c.id === action.spec.capabilityRef.id && c.revision === action.spec.capabilityRef.revision), workspace = state.workspaces.find(w => w.id === action.spec.workspaceId)
@@ -886,6 +899,7 @@ export function createControlledKernel(ledger: ManagedLedger, trustedSource: Ref
   return {
     actions,
     host: {
+      retirePartialDelivery: (actionRef: Ref, specDigest: string, journalDigest: string) => hostCommand({kind:'retire_partial_delivery',actionRef,specDigest,journalDigest}) as ActionRecord,
       claimNativeRequest: (ownerRef: Ref, key: string) =>
         (hostCommand({ kind: 'request_claim', ownerRef, key }) as { claimed: boolean }).claimed,
       async executeSessionHelper(ref: Ref): Promise<ActionRecord | Denial> {

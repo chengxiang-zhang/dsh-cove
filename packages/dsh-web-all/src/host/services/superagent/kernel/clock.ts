@@ -8,7 +8,7 @@
  * kernel never waits for the desk; a crashed turn is simply looked at again.
  */
 
-import { PHYSICAL } from '../protocol/db.ts'
+import { PHYSICAL, type OwnerModule } from '../protocol/db.ts'
 import { OPEN_STATES } from '../protocol/objects.ts'
 import type { Ledger, TurnFinish } from './ledger.ts'
 import type { Signal, TickSignal, TurnRequest } from './ports.ts'
@@ -30,6 +30,10 @@ export interface Clock {
 
 export const TICK_MS = 60_000
 export const MIN_PUSH_MS = 300_000
+/** Journal note key the clock writes when it requests a `late` warning turn: the "already warned" mark. */
+export const LATE_WARNED_KEY = 'late_warned'
+/** Turn endings that count as progress by themselves; any other ending leaves a still-due commitment looked at again. */
+const PROGRESSED_END_REASONS: ReadonlySet<string> = new Set(['completed', 'forked'])
 const OPEN_LIST = OPEN_STATES.map(s => `'${s}'`).join(', ')
 
 function safeSignal(signal: TickSignal, id: string, now: number): Signal | null {
@@ -39,6 +43,36 @@ function safeSignal(signal: TickSignal, id: string, now: number): Signal | null 
     // A broken signal must not stall the round; treat it as "nothing new".
     return null
   }
+}
+
+/** The next look for a commitment nothing new happened to: at least MIN_PUSH_MS, or half the time left to its ETA. */
+function pushedLook(now: number, eta: number | null): number {
+  const remaining = Math.max(0, (eta ?? now) - now)
+  return now + Math.max(MIN_PUSH_MS, remaining / 2)
+}
+
+/**
+ * Finishes a turn and, when it ended without progress, pushes its commitment's look.
+ *
+ * A turn that errors, is blocked or times out leaves the commitment exactly as due as
+ * before; without a push the next 60-second round requests the same turn again and
+ * the failure repeats once a minute (the agenda storm). A turn that moved the
+ * commitment (a transition or a patched look) already left it not due, and a
+ * completed turn is not touched, so only the still-due failure case is pushed.
+ * Every owner that closes an agenda turn goes through here, whichever module it is.
+ */
+export function finishTurnAndPush(ledger: Ledger, module: OwnerModule, deliberationId: string, readings: TurnFinish): void {
+  ledger.open((tx) => {
+    tx.finishTurn(deliberationId, readings)
+    if (PROGRESSED_END_REASONS.has(readings.end_reason)) return
+    const id = tx.get<{ commitment_id: string | null }>(
+      `SELECT commitment_id FROM ${PHYSICAL.deliberation} WHERE deliberation_id = ?`, deliberationId)?.commitment_id
+    if (id === null || id === undefined) return
+    const row = tx.get<{ eta_at: number | null; next_look_at: number | null }>(
+      `SELECT eta_at, next_look_at FROM ${PHYSICAL.commitment} WHERE commitment_id = ? AND state IN (${OPEN_LIST})`, id)
+    if (row === undefined || row.next_look_at === null || row.next_look_at > tx.now) return
+    tx.touch(id, pushedLook(tx.now, row.eta_at))
+  }, { module })
 }
 
 export function createClock(ledger: Ledger): Clock {
@@ -53,13 +87,20 @@ export function createClock(ledger: Ledger): Clock {
     for (const { commitment_id: id, eta_at: eta } of due) {
       // One transaction per commitment: one bad row cannot roll back the round.
       try {
-        if (safeSignal(signal, id, now) === null) {
-          const remaining = Math.max(0, (eta ?? now) - now)
-          ledger.open(tx => tx.touch(id, now + Math.max(MIN_PUSH_MS, remaining / 2)), { module: 'kernel' })
+        const fired = safeSignal(signal, id, now)
+        if (fired === null) {
+          ledger.open(tx => tx.touch(id, pushedLook(now, eta)), { module: 'kernel' })
           continue
         }
         const requestId = `tick:${id}:${now}`
-        const deliberationId = ledger.open(tx => tx.requestTurn({ trigger_kind: 'agenda', commitment_id: id, request_id: requestId }), { module: 'kernel' })
+        const deliberationId = ledger.open((tx) => {
+          const requested = tx.requestTurn({ trigger_kind: 'agenda', commitment_id: id, request_id: requestId })
+          // The warning is requested once: the mark is written with the request, not with the turn's outcome.
+          if (requested !== undefined && fired.kind === 'late') {
+            tx.append(id, { actor: 'host', kind: 'note', body: { [LATE_WARNED_KEY]: true, detail: fired.detail } })
+          }
+          return requested
+        }, { module: 'kernel' })
         if (deliberationId === undefined) deferred.push(id)
         else requested.push({ deliberation_id: deliberationId, request_id: requestId, commitment_id: id, trigger_kind: 'agenda' })
       } catch {
@@ -85,7 +126,7 @@ export function createClock(ledger: Ledger): Clock {
       return () => host.clearInterval(handle)
     },
     finish(deliberationId, readings) {
-      ledger.open(tx => tx.finishTurn(deliberationId, readings), { module: 'kernel' })
+      finishTurnAndPush(ledger, 'kernel', deliberationId, readings)
     },
   }
 }

@@ -26,6 +26,29 @@ export interface SuperagentWorldConfig {
   colleagues: { union_id: string; name: string }[]
 }
 
+/** One dispatchable machine for the HTTP executor transport. */
+export interface SuperagentExecutorHost {
+  host: string
+  addr?: string
+  baseUrl?: string
+  trustedHost?: string
+}
+
+/**
+ * Executor transport (T19 addendum). Defaults keep the historical behaviour: an
+ * unset `transport` means `http` (the design's primary path), and `inproc` remains
+ * available for a single-process composition.
+ */
+export interface SuperagentExecutorConfig {
+  transport?: 'http' | 'inproc'
+  localBaseUrl?: string
+  hosts: SuperagentExecutorHost[]
+  probeTtlMs?: number
+  pollMs?: number
+  timeoutMs?: number
+  maxEventPage?: number
+}
+
 export interface SuperagentAttentionConfig {
   interruptQuota: number
   quiet: { from: string; to: string }
@@ -37,6 +60,7 @@ export interface SuperagentConfig {
   superagentDesk: SuperagentDeskConfig
   superagentWorld: SuperagentWorldConfig
   superagentAttention: SuperagentAttentionConfig
+  superagentExecutor: SuperagentExecutorConfig
 }
 
 export const DEFAULT_SUPERAGENT_CONFIG: SuperagentConfig = Object.freeze({
@@ -44,6 +68,7 @@ export const DEFAULT_SUPERAGENT_CONFIG: SuperagentConfig = Object.freeze({
   superagentDesk: {},
   superagentWorld: { entities: [], mandates: [], owners: [], colleagues: [] },
   superagentAttention: { interruptQuota: 3, quiet: { from: '22:00', to: '08:00' }, briefAt: '18:30' },
+  superagentExecutor: { hosts: [] },
 }) as SuperagentConfig
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
@@ -88,6 +113,36 @@ function attention(raw: unknown): SuperagentAttentionConfig {
   return { interruptQuota: quota, quiet: { from, to }, briefAt }
 }
 
+function executor(raw: unknown): SuperagentExecutorConfig {
+  if (!isObject(raw)) return { hosts: [] }
+  const out: SuperagentExecutorConfig = { hosts: [] }
+  if (raw.transport === 'http' || raw.transport === 'inproc') out.transport = raw.transport
+  const localBaseUrl = str(raw.localBaseUrl)
+  if (localBaseUrl) out.localBaseUrl = localBaseUrl
+  if (Array.isArray(raw.hosts)) {
+    out.hosts = raw.hosts.flatMap(item => {
+      if (!isObject(item)) return []
+      const host = str(item.host)
+      if (!host) return []
+      const addr = str(item.addr)
+      const baseUrl = str(item.baseUrl)
+      const trustedHost = str(item.trustedHost)
+      return [{ host, ...(addr ? { addr } : {}), ...(baseUrl ? { baseUrl } : {}), ...(trustedHost ? { trustedHost } : {}) }]
+    })
+  }
+  const probeTtlMs = integer(raw.probeTtlMs)
+  const pollMs = integer(raw.pollMs)
+  const timeoutMs = integer(raw.timeoutMs)
+  const maxEventPage = integer(raw.maxEventPage)
+  if (probeTtlMs !== undefined) out.probeTtlMs = probeTtlMs
+  if (pollMs !== undefined) out.pollMs = pollMs
+  if (timeoutMs !== undefined) out.timeoutMs = timeoutMs
+  if (maxEventPage !== undefined) out.maxEventPage = maxEventPage
+  return out
+}
+
+const integer = (v: unknown): number | undefined => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : undefined)
+
 /** Read the superagent keys out of the `lark-inbox` namespace value. */
 export function parseSuperagentConfig(namespace: unknown): SuperagentConfig {
   const ns = isObject(namespace) ? namespace : {}
@@ -103,5 +158,6 @@ export function parseSuperagentConfig(namespace: unknown): SuperagentConfig {
       colleagues: people(world.colleagues),
     },
     superagentAttention: attention(ns.superagentAttention),
+    superagentExecutor: executor(ns.superagentExecutor),
   }
 }

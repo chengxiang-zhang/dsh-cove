@@ -237,7 +237,7 @@ const TABLE_SPECS: readonly TableSpec[] = [
       ['attempt_id', TEXT_NN], ['commitment_id', TEXT_NN], ['n', 'INTEGER NOT NULL CHECK ("n" BETWEEN 1 AND 3)'],
       ['executor', TEXT_NN], ['provider', TEXT], ['model', TEXT], ['effort', TEXT],
       ['reason', `TEXT NOT NULL CHECK (length(trim("reason")) > 0)`], ['lifetime', enumNN('lifetime', LIFETIMES)],
-      ['session_id', TEXT], ['cwd', TEXT], ['branch', TEXT], ['state', enumNN('state', ATTEMPT_STATES)],
+      ['session_id', TEXT], ['cwd', TEXT], ['host', TEXT], ['branch', TEXT], ['state', enumNN('state', ATTEMPT_STATES)],
       ['turn_open', flagNN('turn_open', 0)], ['turns', COUNT], ['tool_calls', COUNT], ['last_tool_at', INT],
       ['repeat_sig', TEXT], ['repeat_count', COUNT], ['end_reason', enumNull('end_reason', END_REASONS)],
       ['cancel_origin', enumNull('cancel_origin', CANCEL_ORIGINS)], ['started_at', INT], ['ended_at', INT],

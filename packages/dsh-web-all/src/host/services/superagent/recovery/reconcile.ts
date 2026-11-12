@@ -17,7 +17,8 @@
  *    and re-dispatches inside the attempt budget, or asks and parks the scene;
  * 3. a session that is there and finished its last turn -> closure runs;
  * 4. a session that is there and still working -> untouched;
- * 5. a desk pointing at a session that no longer exists -> rotated and rebuilt.
+ * 5. a desk pointing at a session that no longer exists -> rotated and rebuilt;
+ * 6. the owner's own request parked as `proposed` -> opened and dispatched (owner-ball).
  *
  * A failed `inspect` is not proof of death. Only an answer that says the session does
  * not exist is; anything else is logged and skipped, because treating "the controller
@@ -51,6 +52,10 @@ export interface ReconcileResult {
   closed: number
   /** Orphans repaired: re-dispatched, or their session came back. */
   healed: number
+  /** Owner requests parked as `proposed` that were opened and dispatched. */
+  lifted: number
+  /** Commitments whose pending attempt had no live seat and was dispatched this round. */
+  flushed: number
 }
 
 export interface ReconcileDeps {
@@ -61,6 +66,10 @@ export interface ReconcileDeps {
   escalation: Pick<Escalation, 'escalate'>
   presence: Pick<Presence, 'rotate' | 'settleStaleTurns'>
   log: HostLog
+  /** Step 6: open and dispatch the owner's own requests parked as proposals; returns their ids. */
+  liftOwnerProposals: (now: number) => Promise<readonly string[]>
+  /** Step 7: dispatch commitments whose latest attempt is pending with no live seat; returns their ids. */
+  flushPending: (now: number) => Promise<readonly string[]>
   /** One line through the outlet; returns whether it was written. */
   speak(speech: RecoverySpeech): boolean
 }
@@ -193,7 +202,7 @@ export function createReconciler(deps: ReconcileDeps): Reconciler {
 
   return {
     async reconcile(now: number): Promise<ReconcileResult> {
-      const result: ReconcileResult = { orphaned: 0, closed: 0, healed: 0 }
+      const result: ReconcileResult = { orphaned: 0, closed: 0, healed: 0, lifted: 0, flushed: 0 }
 
       // Step 0: a desk turn whose `turn/end` was lost (crash, hot-reload window) is
       // still marked running. Left alone it mutes the desk for every later message.
@@ -234,6 +243,13 @@ export function createReconciler(deps: ReconcileDeps): Reconciler {
         deps.presence.rotate(desk.desk_id, 'manual')
         log.warn(`superagent/recovery: desk ${desk.desk_id} pointed at a missing session; rotated`)
       }
+
+      // Step 6: what the owner asked for is not the owner's to approve.
+      result.lifted = (await deps.liftOwnerProposals(now)).length
+
+      // Step 7: a pending attempt with no live seat is a seat the agenda never hands
+      // out; dispatch it here so a queued retry (and a durable holding the slot) moves.
+      result.flushed = (await deps.flushPending(now)).length
 
       return result
     },

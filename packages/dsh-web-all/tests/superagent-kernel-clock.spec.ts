@@ -106,6 +106,52 @@ describe('kernel clock', () => {
     expect(seen.map(r => r.commitment_id)).toEqual([first.commitment_id, second.commitment_id])
   })
 
+  it('9. a failed turn pushes a still-due commitment back by at least MIN_PUSH_MS; no 1/min storm', () => {
+    const t = openTestLedger()
+    const c = dueCommitment(t, { eta_at: t.clock.now() })   // overdue, so the push is the floor
+    const clock = createClock(t.ledger)
+    const requests: number[] = []
+    for (const reason of ['error', 'blocked']) {
+      t.clock.advance(MIN)
+      const round = clock.tick(t.clock.now(), ALWAYS)
+      expect(round.requested).toHaveLength(1)
+      requests.push(t.clock.now())
+      clock.finish(round.requested[0]!.deliberation_id, { ops: 0, tool_errors: 0, tokens: 0, end_reason: reason, rule_trace: {} })
+      expect(lookOf(t, c.commitment_id)).toBe(t.clock.now() + MIN_PUSH_MS)
+      // The next four rounds see nothing due.
+      for (let i = 0; i < 4; i += 1) {
+        t.clock.advance(MIN)
+        expect(clock.tick(t.clock.now(), ALWAYS)).toEqual({ requested: [], deferred: [] })
+      }
+    }
+    expect(requests).toHaveLength(2)
+    expect(deliberations(t)).toBe(2)
+  })
+
+  it('10. a turn that moved the commitment is not pushed again; a completed turn is left alone', () => {
+    const t = openTestLedger()
+    const clock = createClock(t.ledger)
+    const failed = { ops: 0, tool_errors: 0, tokens: 0, end_reason: 'error', rule_trace: {} }
+
+    // Moved: the turn already set a later look, so the failure must not shorten or rewrite it.
+    const moved = dueCommitment(t)
+    t.clock.advance(MIN)
+    const round = clock.tick(t.clock.now(), ALWAYS)
+    t.ledger.open(tx => tx.touch(moved.commitment_id, t.clock.now() + 3 * 60 * MIN))
+    const movedLook = lookOf(t, moved.commitment_id)
+    clock.finish(round.requested[0]!.deliberation_id, failed)
+    expect(lookOf(t, moved.commitment_id)).toBe(movedLook)
+
+    // Completed: not a failure, so the cadence of a turn that finished is unchanged.
+    const done = dueCommitment(t)
+    t.clock.advance(MIN)
+    const next = clock.tick(t.clock.now(), ALWAYS)
+    const before = lookOf(t, done.commitment_id)
+    clock.finish(next.requested.find(r => r.commitment_id === done.commitment_id)!.deliberation_id,
+      { ops: 1, tool_errors: 0, tokens: 0, end_reason: 'completed', rule_trace: {} })
+    expect(lookOf(t, done.commitment_id)).toBe(before)
+  })
+
   it('8. terminal commitments are never selected, even with an old next_look_at', () => {
     const t = openTestLedger()
     const c = dueCommitment(t)

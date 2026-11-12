@@ -20,7 +20,7 @@ export const DISPOSITIONS = ['answer', 'commit', 'amend', 'check', 'nudge', 'rel
   'decline', 'ask', 'acknowledge', 'route', 'passthrough'] as const
 export const ATTEMPT_STATES = ['pending', 'running', 'ended'] as const
 export const LIFETIMES = ['oneshot', 'durable'] as const
-export const CANCEL_ORIGINS = ['release', 'budget', 'deadline', 'stall', 'loop', 'dispatch', 'reconcile'] as const
+export const CANCEL_ORIGINS = ['release', 'budget', 'deadline', 'stall', 'loop', 'dispatch', 'reconcile', 'external'] as const
 // Session turn/end kinds plus two host values (NEEDS-DECISION N6). Unknown values
 // parse to 'unknown' and are treated as failure.
 export const END_REASONS = ['completed', 'aborted', 'blocked', 'error', 'max-tokens', 'interrupted', 'forked',
@@ -264,6 +264,8 @@ export interface AttemptRow extends Mutable {
   lifetime: Lifetime
   session_id: string | null
   cwd: string | null
+  /** Machine canonical for a dispatched session; null/absent means this host. */
+  host?: string | null
   branch: string | null
   state: AttemptState
   turn_open: Flag
