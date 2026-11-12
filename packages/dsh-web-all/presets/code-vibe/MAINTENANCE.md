@@ -178,3 +178,11 @@
     - 判据（新增 `packages/dsh-web-all/tests/preset-persona-budget.spec.ts`）：persona ≤6000 字符、六条与三门 marker 必须存在、八段被删长文不许回来、turn-contract 行必须挂载、corpus 里的真实辱骂问句必须被 `isLaunchQuestion` 命中；连同 `turn-contract.spec.ts` 13 条全绿。
     - 回归口径：27 条会话是基线（rage/asks/long-loop 已在 `.harvest/wish-preset-review/2026-11-07T01-30-57-610Z/REPORT.md` 与 2 天增量报告里）；发版 rollout 后按同一 7 天窗口复跑 `pnpm wish-review` 对比——判据 rage/session→0、asks≤1、maxTurn≤1800s、无「宣称完成后收回」。
     - 回滚：`git revert` 本提交恢复 21.5k persona（不推荐：它就是这次减法的对象）；预算测试会拦住无意回涨。
+
+26. **验证仪器分档：端到端闸门不做内循环（2026-11-12，自迭代定时任务 `preset-self-review`）**：同一 7 天窗口里两条顶层 `code-vibe` 会话的两个反方向失败，指向同一个缺失概念——"这条改动该跑哪一层验证、能跑几次"。
+    - `session-e691986c`（pc-tower，33 轮 / 单轮 8129s / 917 次工具 / 8 条辱骂）：每修一处就跑 20–40 分钟冷重建当验证尺子；用户连问「你他妈为什么不能分不修复验证，为什么每次都要用冷启来验证」「我不理解验证为什么要用冷启」，并在模型自称"已改"后又问两次「你他妈又开始冷启了吗」；模型自认「你把最终验收和单点验证混了」。
+    - `session-79505767`（pc-tower，同一 workspace，11-06→11-08）：反方向——改动后没跑项目自己的冷重建就宣称完成，用户质问「我的问题是你修改完之后，有没有做冷启动重建」。
+    - **文本形状（可复现探针，不依赖会话数）**：现有预设只有单边约束。`grep -rn "端到端" skills/*/SKILL.md` ⇒ 4 处：`wish-programming:74`（E2E 三件套，缺了不得宣称验收完成）、`quality-review:45`、`release-gate:50` 都是"必须做"方向，第 4 处 `measurement-evidence:61` 是延迟指标（无关）；`grep -rniE "只跑一次|最多一次|不做内循环|不要每次都|重复重建|重复冷启" skills/` ⇒ **0 命中**。唯一一句"为一行改动重启服务/重建环境"在 `fix-loop`，被限定 T1，而这两条会话是 T2-ops/T3 的 deliver，落在禁令之外。
+    - 改动：`skills/task-router/SKILL.md` 新增 §6.1（3 条：先跑便宜档 / 端到端只做最终闸门且同一处修复最多一次 / 收尾仍必须回到端到端）。放 task-router 而非 persona，因为每次 DELIVERY 必载、不进常驻窗口，符合 #2 与 #25 的减法方向；第三条是刻意保留的双边约束，防止 #25 之后的规则被读成"可以跳过端到端"（那正是 `79505767` 的失败）。
+    - 定性：**方向性改动，未行为验证**。散文无运行时强制，可复核判据只有上面的文本探针（旧文本确实只朝一个方向）；真机验证要等发版 + 机队 rollout 后，在同一 7 天窗口复跑 `pnpm wish-review`，看 rage/session 与 maxTurn 是否下降、以及"跳过端到端"是否复发。
+    - 回滚：`git revert` 本提交，然后 `node scripts/render-preset.mjs`。
