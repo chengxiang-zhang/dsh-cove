@@ -270,7 +270,7 @@ export function runFixedNativeProbe(root: string): void {
   if (!existsSync(script) || existsSync(result)) return
   const directory = lstatSync(root), stat = lstatSync(script)
   if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid?.() || directory.mode & 0o077 || !stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || stat.mode & 0o077) throw Error('NATIVE_PROBE_PRIVATE_FILE_REQUIRED')
-  if (createHash('sha256').update(readFileSync(script)).digest('hex') !== '09d552e7c2d08aba42d8f195572c052aacc54153d1552ca4abfacd42e1780201') throw Error('NATIVE_PROBE_DIGEST_MISMATCH')
+  if (createHash('sha256').update(readFileSync(script)).digest('hex') !== 'e64a75ef1c26ff06c288b7c86a45d2ca6cc172e6e0197db4448dad0d1b89dcb7') throw Error('NATIVE_PROBE_DIGEST_MISMATCH')
   writeFileSync(result, JSON.stringify({ status: 'started', hostPid: process.pid }), { flag: 'wx', mode: 0o600 })
   const child = spawn('/usr/bin/python3', [script], { cwd: root, env: process.env, stdio: 'ignore' })
   child.once('error', error => writeFileSync(result, JSON.stringify({ status: 'spawn-failed', hostPid: process.pid, code: (error as NodeJS.ErrnoException).code ?? null }), { mode: 0o600 }))
