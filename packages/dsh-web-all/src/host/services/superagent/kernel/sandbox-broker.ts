@@ -5,7 +5,7 @@ import { relative, isAbsolute } from 'node:path'
 import { materializeFixtureResources, type OwnedFixtureResources } from './sandbox-fixture-pool.ts'
 import { SandboxFrameDecoder, decodeSandboxBytes } from './sandbox-wire.ts'
 import { constrainSandboxPolicy, type SandboxDomain } from './sandbox-policy.ts'
-import { SANDBOX_WIRE_LIMIT, SANDBOX_WRITE_LIMIT, type SandboxLaunchRequest } from './sandbox-launch-port.ts'
+import { SANDBOX_WIRE_LIMIT, SANDBOX_WRITE_LIMIT, NATIVE_CONNECT_LOG, type SandboxLaunchRequest } from './sandbox-launch-port.ts'
 
 export interface SandboxBrokerGrant {
   readonly runId: string
@@ -37,10 +37,11 @@ function admitRequest(value: unknown, domain: SandboxDomain, directoryNames: rea
   if (!within(cwd, domain.writeRoots) || !within(executable, domain.executableRoots)) throw new Error('SANDBOX_REQUEST_OUTSIDE_GRANT')
   if (!Array.isArray(r.args) || r.args.length > 256 || r.args.some(x => typeof x !== 'string' || x.length > 8192 || x.includes('\0')) || Buffer.byteLength(JSON.stringify(r.args)) > 65536) throw new Error('SANDBOX_ARGUMENT_LIMIT')
   if (!['single', 'children'].includes(r.processPolicy) || !Number.isSafeInteger(r.timeoutMs) || r.timeoutMs < 1 || r.timeoutMs > 300000) throw new Error('SANDBOX_REQUEST_LIMIT')
-  if (!r.env || typeof r.env !== 'object' || Array.isArray(r.env) || Object.keys(r.env).some(k => !['PATH', 'HOME', 'TMPDIR', 'LANG', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'DSH_HOME', 'DSH_DATA_DIR', ...directoryNames].includes(k))) throw new Error('SANDBOX_ENV_SCHEMA')
+  if (!r.env || typeof r.env !== 'object' || Array.isArray(r.env) || Object.keys(r.env).some(k => !['PATH', 'HOME', 'TMPDIR', 'LANG', 'RUST_LOG', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'DSH_HOME', 'DSH_DATA_DIR', ...directoryNames].includes(k))) throw new Error('SANDBOX_ENV_SCHEMA')
+  if (r.env.RUST_LOG !== undefined && (r.env.RUST_LOG !== NATIVE_CONNECT_LOG || !r.env.CODEX_HOME)) throw new Error('SANDBOX_ENV_VALUE')
   if (r.env.PATH !== '/usr/bin:/bin' || r.env.LANG !== 'en_US.UTF-8') throw new Error('SANDBOX_ENV_VALUE')
   for (const [key, value] of Object.entries(r.env)) {
-    if (key === 'PATH' || key === 'LANG') continue
+    if (key === 'PATH' || key === 'LANG' || key === 'RUST_LOG') continue
     if (!within(canonical(value), domain.writeRoots)) throw new Error('SANDBOX_ENV_OUTSIDE_GRANT')
   }
   if (!r.env.HOME || !r.env.TMPDIR) throw new Error('SANDBOX_ENV_VALUE')

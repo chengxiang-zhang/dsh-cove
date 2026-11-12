@@ -27,6 +27,8 @@ export interface SandboxChild extends EventEmitter {
 }
 export interface SandboxLaunchPort { open(request: SandboxLaunchRequest): SandboxChild }
 export interface SandboxBrokerAddress { socketPath: string; runId: string; epoch: number }
+// Temporary connection-only diagnostics for the live native transport investigation.
+export const NATIVE_CONNECT_LOG = 'error,reqwest::connect=debug,hyper_util::client::legacy::connect=debug'
 export const SANDBOX_WIRE_LIMIT = 2 * 1024 * 1024
 export const SANDBOX_WRITE_LIMIT = 1024 * 1024
 

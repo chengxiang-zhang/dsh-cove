@@ -1,6 +1,6 @@
 import { dirname } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { configuredSandboxLaunchPort, sandboxFixtureProfile } from './sandbox-launch-port.ts'
+import { configuredSandboxLaunchPort, sandboxFixtureProfile, NATIVE_CONNECT_LOG } from './sandbox-launch-port.ts'
 import { existsSync, realpathSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import type { ActionReceipt, ExecutionEnvelope } from './actions.ts'
@@ -51,7 +51,7 @@ export function openSandboxProcess<Result>(
   const profile = `(version 1)(deny default)(allow process-exec process-info*)${e.spec.processPolicy === 'children' ? '(allow process-fork)' : ''}(allow sysctl-read)(allow mach-lookup (global-name "com.apple.system.logger"))(allow file-read* (literal "/") (subpath "/usr") (subpath "/bin") (subpath "/private/etc") (subpath "/sbin") (subpath "/System") (subpath "/Library/Apple") (subpath "/opt/homebrew") (subpath "/private/var/db") (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom") (subpath ${literal(root)}) (literal ${literal(executable)}))(allow file-write* (subpath ${literal(root)}) (literal "/dev/null"))${runtimeProfile}${metadata}${runtimeReads}${loopback}`
   const child = configuredSandboxLaunchPort().open({
     profile: sandboxFixtureProfile(profile), executable, args: e.spec.args, cwd: root,
-    env: { PATH: '/usr/bin:/bin', HOME: root, TMPDIR: root, LANG: 'en_US.UTF-8', ...(runtime ? { [runtime.stateDirectoryVariable]: runtime.root } : {}) },
+    env: { PATH: '/usr/bin:/bin', HOME: root, TMPDIR: root, LANG: 'en_US.UTF-8', ...(runtime ? { [runtime.stateDirectoryVariable]: runtime.root, RUST_LOG: NATIVE_CONNECT_LOG } : {}) },
     processPolicy: e.spec.processPolicy, timeoutMs: e.spec.timeoutMs,
   })
   const MAX_FRAME_BYTES = 1048576,
