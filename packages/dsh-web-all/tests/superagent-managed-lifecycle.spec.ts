@@ -238,3 +238,38 @@ it('does not stop an unrelated active task when replying to a completed task thr
   expect(port.read('other').state).toBe('running')
   expect(d.calls.map(c => c.kind)).toEqual(['start'])
 })
+
+it('never announces an old published delivery as satisfying pending added input', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+  const f = fixture(), d = driver(), results: string[] = [], notices: string[] = []
+  const addition = { ...f.request, requestId: 'addition', text: 'Also support empty input' }
+  f.save({ request: f.request, state: 'running', startedAt: 1, runtimeRoot: join(f.root, 'original-job'), inputs: [addition] })
+  const port = createManagedAdmission({ bootstrapFile: f.bootstrapFile }, (_request, result) => results.push(result.evaluate().verdict), {
+    runtime: () => ({ ...d.runtime, reconcile: async () => ({ state: 'delivered' }), deliveryEvaluation: () => ({ verdict: 'pass', reason: '', receipt: null }), resultReport: () => 'Original delivery verified' }),
+    notice: (_request, text) => notices.push(text),
+  })
+  cleanup.push(() => port.dispose())
+  await vi.advanceTimersByTimeAsync(60000); await port.settle()
+  expect(port.read(f.request.requestId)).toMatchObject({ state: 'needs-attention', inputs: [addition] })
+  expect(results).toEqual([])
+  expect(notices).toEqual([expect.stringContaining('additional input')])
+  expect(d.calls).toEqual([])
+})
+
+it('retains added input arriving while published delivery reconciliation is in flight', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+  const f = fixture(), d = driver(), results: string[] = []
+  let reconcileStarted = false, finishReconcile: (() => void) | undefined
+  f.save({ request: f.request, state: 'running', startedAt: 1, runtimeRoot: join(f.root, 'original-job') })
+  const port = createManagedAdmission({ bootstrapFile: f.bootstrapFile }, (_request, result) => results.push(result.evaluate().verdict), {
+    runtime: () => ({ ...d.runtime, reconcile: async () => { reconcileStarted = true; await new Promise<void>(resolve => { finishReconcile = resolve }); return { state: 'delivered' } }, deliveryEvaluation: () => ({ verdict: 'pass', reason: '', receipt: null }) }),
+  })
+  cleanup.push(() => port.dispose())
+  await vi.advanceTimersByTimeAsync(60000)
+  expect(reconcileStarted).toBe(true)
+  port.message({ ...f.request, requestId: 'during-reconcile', text: 'Also support empty input' })
+  await vi.waitFor(() => expect(d.calls.some(c => c.kind === 'interrupt')).toBe(true))
+  finishReconcile!(); await port.settle()
+  expect(port.read(f.request.requestId)).toMatchObject({ state: 'needs-attention', inputs: [expect.objectContaining({ requestId: 'during-reconcile' })] })
+  expect(results).toEqual([])
+})

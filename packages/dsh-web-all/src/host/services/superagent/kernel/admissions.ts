@@ -83,10 +83,14 @@ export function createAdmissions(options: AdmissionOptions) {
           if (proof.state === 'paused') { persist({ ...read(id), state: 'paused', nextReviewAt: undefined }); return }
           if (proof.state === 'pending') { persist({ ...read(id), state: 'needs-reconciliation', error: proof.reason, nextReviewAt: Date.now() + 60000 }); return }
           if (proof.state === 'delivered') {
+            const latest = read(id)
+            if (latest.state === 'paused') return
+            const pending = (latest.inputs ?? []).filter(i => !(latest.consumedInputs ?? []).includes(i.requestId))
             const evaluation = runtime.deliveryEvaluation()
             if (evaluation.verdict !== 'pass') throw Error('RECOVERED_DELIVERY_NOT_VERIFIED')
             persist({ ...read(id), state: pending.length ? 'needs-attention' : 'fulfilled-local', report: runtime.resultReport() ?? null, nextReviewAt: undefined, endedAt: Date.now(), ...(pending.length ? { error: 'Original delivery reconciled; additional input requires a new linked responsibility.' } : {}) })
-            options.onResult(record.request, { state: pending.length ? 'needs-attention' : 'fulfilled-local', evaluate: runtime.deliveryEvaluation })
+            if (pending.length) options.onNotice?.(record.request, 'Original delivery reconciled; additional input requires a new linked responsibility.')
+            else options.onResult(record.request, { state: 'fulfilled-local', evaluate: runtime.deliveryEvaluation })
             return
           }
           if (proof.state === 'unstarted') record.startedAt = undefined
