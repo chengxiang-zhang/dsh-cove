@@ -85,7 +85,7 @@ it('does not accept an old epoch or candidate-requested credential environment',
   for (const mode of ['epoch', 'credentials', 'log-trace', 'log-without-native']) {
     const p = api!.createExternalSandboxLaunchPort({ ...c, epoch: mode === 'epoch' ? c.epoch - 1 : c.epoch }).open({ profile: profile(c.root), executable: '/bin/bash', args: ['-c', 'printf unsafe'], cwd: c.root, env: { PATH: '/usr/bin:/bin', HOME: c.root, TMPDIR: c.root, LANG: 'en_US.UTF-8', ...(mode === 'credentials' ? { AWS_SECRET_ACCESS_KEY: 'candidate' } : mode === 'log-trace' ? { CODEX_HOME: c.root, RUST_LOG: 'trace' } : mode === 'log-without-native' ? { RUST_LOG: 'error' } : {}) }, processPolicy: 'single', timeoutMs: 1000 })
     const errors: string[] = []; p.on('error', e => errors.push(e.message)); await new Promise<void>(resolve => p.once('close', resolve))
-    expect(p.mayHaveStarted).toBe(false); expect(errors).toContain(mode === 'epoch' ? 'SANDBOX_OPEN_FENCED' : mode === 'credentials' ? 'SANDBOX_ENV_SCHEMA' : 'SANDBOX_ENV_VALUE')
+    expect(p.mayHaveStarted).toBe(false); expect(errors).toContain(mode === 'epoch' ? 'SANDBOX_OPEN_FENCED' : 'SANDBOX_ENV_SCHEMA')
   }
 })
 it('records real nested direct sandbox failure instead of silently running without isolation', async () => {
