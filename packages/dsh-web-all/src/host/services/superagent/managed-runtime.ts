@@ -744,6 +744,38 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
       if (!launches.length) throw Error('MANAGED_CONTINUATION_WRITER_UNKNOWN')
       if (frameworkOnly && ledger.snapshot('action').some(o => (o.data.execution_spec as any) && (o.data.receipt as any)?.stopped !== true && !ledger.retiredNativeDomain({ id: o.id, revision: o.revision }))) throw Error('MANAGED_CONTINUATION_NOT_QUIESCENT')
+      const transition = config.frameworkBaselineTransition, head = git(config.projectRoot, ['rev-parse', 'HEAD'])
+      const boundEvent = ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound', latest: true })[0]
+      const boundCommand = (boundEvent?.body as any)?.coordination
+      const previous = boundCommand?.payload.payload
+      if (!transition || transition.commitmentId !== work.id || !transition.evidenceRefs.length || transition.after !== head || (previous && previous.after !== transition.before && previous.after !== transition.after)) throw Error('MANAGED_BASELINE_TRANSITION_REQUIRED')
+      const baselineEvent = ledger.eventEntries({ runtimeEvent: 'job_baseline', latest: true })[0]
+      const baselineCommand = (baselineEvent?.body as any)?.coordination
+      const baseline = baselineCommand?.payload.payload
+      const alreadyBound = frameworkOnly
+        && baseline?.parent === transition.after
+        && baseline?.previousParent === transition.before
+        && baseline?.commitment?.id === work.id
+        && isDeepStrictEqual(baseline.commitment, previous?.commitment)
+        && previous?.commitmentId === work.id
+        && previous?.before === transition.before
+        && previous?.after === transition.after
+        && isDeepStrictEqual(previous?.evidenceRefs, transition.evidenceRefs)
+        && baseline?.proofRef?.id === boundCommand?.payload.id
+        && baseline?.proofRef?.revision === 1
+        && (boundEvent?.sequence ?? Infinity) < (baselineEvent?.sequence ?? 0)
+        && isDeepStrictEqual(baselineCommand?.source, boundCommand?.source)
+        && isDeepStrictEqual(baselineCommand?.payload.evidenceRefs, [baseline.proofRef.id])
+        && ledger.get(baseline.proofRef.id)?.revision === baseline.proofRef.revision
+      if (frameworkOnly && !alreadyBound && baseline?.parent !== transition.before) throw Error('MANAGED_BASELINE_TRANSITION_REQUIRED')
+      if (frameworkOnly) {
+        const qualified = config.verification?.qualification, registered = ledger.get(profile.id)
+        if (!qualified || qualified.runtimeDigest !== verificationRuntimeDigest() || qualified.methodAssetsDigest !== methodAssetDigest(JSON.stringify(method.assets)) || qualified.expiresAt <= Date.now() || !qualified.evidenceRefs.length || launches.some(o => (o.data.execution_spec as any)?.executable !== config.engine.executable)) throw Error('CURRENT_VERIFICATION_QUALIFICATION_REQUIRED')
+        const registration = (ledger.eventEntries({ profileRegistration: profile })[0]?.body as any)?.coordination.payload.input
+        if (!registered || registered.revision !== profile.revision || registered.data.revoked === true || !registration || !isDeepStrictEqual(registration.capabilities, registered.data.capabilities) || !isDeepStrictEqual(registration.limitations, registered.data.limitations)) throw Error('PROFILE_RENEWAL_DENIED')
+        // Once bound, ordinary candidate progress is governed by wake and verification.
+        if (alreadyBound) { initialParent = head; return { head, materialDigest: supplemental.digest } }
+      }
       const domainQuiescenceProofs: string[] = []
       for (const action of launches.filter(o => (o.data.receipt as any)?.stopped !== true)) {
         if (frameworkOnly && ledger.retiredNativeDomain({ id: action.id, revision: action.revision })) continue
@@ -765,12 +797,6 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       if (unresolved.length && JSON.stringify(unresolved.map(o => ({ id: o.id, revision: o.revision }))) !== JSON.stringify(partition?.operations ?? (handoff ? [handoff.operation] : []))) throw Error('MANAGED_CONTINUATION_NOT_QUIESCENT')
       if (partition && (partition.commitment.id !== work.id || partition.candidateRoot !== workspaces.get('implementation')!.workspace.root || JSON.stringify(partition.candidate.map(x => x.path).sort()) !== JSON.stringify([...config.publicFiles].sort()))) throw Error('PARTITION_CANDIDATE_SCOPE')
       if (partition) verifyPartitionCandidate(partition)
-      const transition = config.frameworkBaselineTransition, head = git(config.projectRoot, ['rev-parse', 'HEAD'])
-      const previous = latestFrameworkBaseline(ledger)
-      if (!transition || transition.commitmentId !== work.id || !transition.evidenceRefs.length || transition.after !== head || (previous && previous.after !== transition.before && previous.after !== transition.after)) throw Error('MANAGED_BASELINE_TRANSITION_REQUIRED')
-      const baseline = (ledger.eventEntries({ runtimeEvent: 'job_baseline', latest: true })[0]?.body as any)?.coordination.payload.payload
-      const alreadyBound = frameworkOnly && baseline?.parent === transition.after && baseline?.previousParent === transition.before && baseline?.commitment?.id === work.id && previous?.commitmentId === work.id && previous?.before === transition.before && previous?.after === transition.after && isDeepStrictEqual(previous?.evidenceRefs, transition.evidenceRefs)
-      if (frameworkOnly && !alreadyBound && baseline?.parent !== transition.before) throw Error('MANAGED_BASELINE_TRANSITION_REQUIRED')
       if (git(config.projectRoot, ['merge-base', transition.before, head]) !== transition.before) throw Error('MANAGED_BASELINE_NOT_DESCENDANT')
       for (const role of ['coordinator','implementation','quality']) {
         const prepared = workspaces.get(role)!
@@ -782,14 +808,10 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
         for (const sourceRoot of [config.projectRoot, ...['coordinator','implementation','quality'].map(role => workspaces.get(role)!.workspace.root)]) { if ((partition && sourceRoot === partition.candidateRoot) || (handoff && [handoff.candidateRoot, workspaces.get('quality')!.workspace.root].includes(sourceRoot))) continue; const entry = file(sourceRoot, path); if (!entry || entry.blob !== before.blob || entry.mode !== before.mode) throw Error('MANAGED_CANDIDATE_NOT_UNCHANGED') }
       }
       if (frameworkOnly) {
-        const qualified = config.verification?.qualification, registered = ledger.get(profile.id)
-        if (!qualified || qualified.runtimeDigest !== verificationRuntimeDigest() || qualified.methodAssetsDigest !== methodAssetDigest(JSON.stringify(method.assets)) || qualified.expiresAt <= Date.now() || !qualified.evidenceRefs.length || launches.some(o => (o.data.execution_spec as any)?.executable !== config.engine.executable)) throw Error('CURRENT_VERIFICATION_QUALIFICATION_REQUIRED')
-        const registration = (ledger.eventEntries({ profileRegistration: profile })[0]?.body as any)?.coordination.payload.input
-        if (!registered || registered.revision !== profile.revision || registered.data.revoked === true || !registration || !isDeepStrictEqual(registration.capabilities, registered.data.capabilities) || !isDeepStrictEqual(registration.limitations, registered.data.limitations)) throw Error('PROFILE_RENEWAL_DENIED')
-        if (alreadyBound) { initialParent = head; return { head, materialDigest: supplemental.digest } }
+        const qualified = config.verification!.qualification
         // Every proof is checked before any baseline or qualification write.
         coordination.host.renewProfileQualification(profile, [...transition.evidenceRefs, ...qualified.evidenceRefs], Math.min(Date.now() + 30 * 60_000, qualified.expiresAt))
-        const proofRef = record('framework_baseline_bound', { ...transition, materialDigest: supplemental.digest, stoppedLaunches: launches.map(o => ({ id: o.id, revision: o.revision })) }, [project], transition.evidenceRefs)
+        const proofRef = record('framework_baseline_bound', { ...transition, commitment: work, materialDigest: supplemental.digest, stoppedLaunches: launches.map(o => ({ id: o.id, revision: o.revision })) }, [project], transition.evidenceRefs)
         record('job_baseline', { parent: head, previousParent: transition.before, commitment: work, proofRef }, [project], [proofRef.id])
         initialParent = head
         return { head, materialDigest: supplemental.digest }

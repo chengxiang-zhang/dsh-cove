@@ -437,11 +437,18 @@ it('framework wake adopts the trusted baseline without amending the original bus
   expect(runtime.ledger.eventEntries({ runtimeEvent: 'authenticated_amendment' })).toHaveLength(0)
   expect((runtime.ledger.eventEntries({ runtimeEvent: 'job_baseline', latest: true })[0]!.body as any).coordination.payload.payload).toMatchObject({ parent: f.after, previousParent: f.before, commitment: { id: 'work' }, proofRef: { revision: 1 } })
   expect(runtime.ledger.snapshot('profile_qualification')[0]!.data.expires_at).toBe(f.config.verification.qualification.expiresAt)
-  await runtime.prepareContinuation(true)
+  const qualification = runtime.ledger.snapshot('profile_qualification')
+  writeFileSync(join(f.config.root, 'implementation', 'input.ts'), 'export const value = 2\n')
+  await managedAdmissionRuntime(runtime, f.config).wake('Review the legitimate candidate')
+  expect(wake).toHaveBeenCalledTimes(2); expect(amend).not.toHaveBeenCalled()
+  expect(runtime.ledger.snapshot('profile_qualification')).toEqual(qualification)
   expect(runtime.ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound' })).toHaveLength(1)
   const loaded = createManagedRuntime(f.config); cleanup.push(() => loaded.dispose())
   vi.spyOn(loaded.ledger, 'snapshot').mockImplementation(kind => kind === 'action' ? [f.launch] as any : runtime.ledger.snapshot(kind))
-  await loaded.prepareContinuation(true)
+  vi.spyOn(loaded, 'wake').mockResolvedValue({ requestId: 'same-thread-after-reload', proposals: { proposals: [] } })
+  vi.spyOn(loaded, 'advance').mockResolvedValue([])
+  await managedAdmissionRuntime(loaded, f.config).wake('Continue candidate QA after reload')
+  expect(loaded.ledger.snapshot('profile_qualification')).toEqual(qualification)
   expect(loaded.ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound' })).toHaveLength(1)
   expect(loaded.ledger.get('work')).toEqual(work)
 })
@@ -496,4 +503,33 @@ it.each(['missing-action', 'live-native', 'live-helper', 'wrong-source', 'wrong-
     }))
   }
   expect(retiredInterruptedOperation(runtime.ledger, operation, 'work')).toBe(false)
+})
+
+it.each(['proof-id', 'proof-revision', 'commitment', 'commitment-revision', 'source', 'transition', 'head', 'expired', 'revoked', 'owner-stop'])('does not reuse an adopted framework binding with %s mismatch', async failure => {
+  const f = await continuationFixture(), { runtime } = f
+  await runtime.reconcile(); await runtime.prepareContinuation(true)
+  const qualifications = runtime.ledger.snapshot('profile_qualification'), baselines = runtime.ledger.eventEntries({ runtimeEvent: 'job_baseline' })
+  writeFileSync(join(f.config.root, 'implementation', 'input.ts'), 'export const value = 2\n')
+  if (['proof-id', 'proof-revision', 'commitment', 'commitment-revision', 'source'].includes(failure)) {
+    const entries = runtime.ledger.eventEntries.bind(runtime.ledger)
+    vi.spyOn(runtime.ledger, 'eventEntries').mockImplementation(filter => entries(filter).map(e => {
+      if (filter.runtimeEvent !== 'job_baseline' || !filter.latest) return e
+      const body = JSON.parse(JSON.stringify(e.body)), command = body.coordination
+      if (failure === 'proof-id') command.payload.payload.proofRef.id = 'forged'
+      if (failure === 'proof-revision') command.payload.payload.proofRef.revision++
+      if (failure === 'commitment') command.payload.payload.commitment.id = 'other'
+      if (failure === 'commitment-revision') command.payload.payload.commitment.revision++
+      if (failure === 'source') command.source.id = 'other-host'
+      return { ...e, body }
+    }))
+  }
+  if (failure === 'transition') f.config.frameworkBaselineTransition.evidenceRefs = ['different-transition']
+  if (failure === 'head') f.config.frameworkBaselineTransition.after = f.before
+  if (failure === 'expired') f.config.verification.qualification.expiresAt = Date.now() - 1
+  if (failure === 'revoked') { const get = runtime.ledger.get.bind(runtime.ledger); vi.spyOn(runtime.ledger, 'get').mockImplementation(id => { const o = get(id); return id === 'profile:codex-controlled' && o ? { ...o, data: { ...o.data, revoked: true } } : o }) }
+  if (failure === 'owner-stop') runtime.interrupt('owner stopped after candidate progress')
+  await expect(runtime.prepareContinuation(true)).rejects.toThrow()
+  expect(runtime.ledger.snapshot('profile_qualification')).toEqual(qualifications)
+  expect(runtime.ledger.eventEntries({ runtimeEvent: 'job_baseline' })).toEqual(baselines)
+  expect(runtime.ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound' })).toHaveLength(1)
 })
