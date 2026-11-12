@@ -958,6 +958,7 @@ export function createManagedAdmission(config: ManagedHostConfig, onResult: (req
     const matches = !!qualification && calibration?.state === 'pass' && qualification.runtimeDigest === identity.runtimeDigest && qualification.methodAssetsDigest === calibration.evidence?.methodAssetsDigest && qualification.expiresAt > Date.now() && qualification.evidenceRefs.length > 0
     return { id, ready: matches, methodId: verification?.methodId ?? null, calibration: calibration?.state ?? 'unconfigured', methodAssetsDigest: calibration?.evidence?.methodAssetsDigest ?? null, qualificationMatches: matches, expiresAt: qualification?.expiresAt ?? null, controls: calibration?.evidence?.results ?? [], error: calibration?.error ?? null }
   }
+  let admissionDisposed = false
   const admission = createAdmissions({
     root: realpathSync(raw.root), projects: Object.keys(raw.projects), defaultProject: raw.defaultProject, onResult, onNotice: ports?.notice,
     projectsView: () => Object.entries(raw.projects).map(([id, project]) => ({ id, default: id === raw.defaultProject, verificationMethod: project.verification?.methodId ?? null })),
@@ -966,14 +967,17 @@ export function createManagedAdmission(config: ManagedHostConfig, onResult: (req
       const settings = raw.projects[project]!
       const runtime = createManagedRuntime({ ...settings, root, engine: { ...settings.engine, stateRoot: join(root, 'native') } })
       const port = managedAdmissionRuntime(runtime, settings)
+      let startInterrupted = false
       const waitReady = async () => {
+        if (admissionDisposed) throw Error('MANAGED_ADMISSION_DISPOSED')
         if (!settings.verification) return
         const item = calibrations.get(settings.verification.settings?.entryPath ?? '')
         if (item) await item.done
+        if (admissionDisposed) throw Error('MANAGED_ADMISSION_DISPOSED')
         if (!projectReadiness(project).ready) throw Error('MANAGED_VERIFICATION_NOT_READY')
       }
-      return { ...port, start: async text => { await waitReady(); return port.start(text) }, wake: async text => { await waitReady(); return port.wake(text) }, amend: async text => { await waitReady(); return port.amend(text) } }
+      return { ...port, interrupt: (...args: Parameters<typeof port.interrupt>) => { startInterrupted = true; return port.interrupt(...args) }, start: async text => { await waitReady(); if (startInterrupted) throw Error('MANAGED_START_INTERRUPTED'); return port.start(text) }, wake: async text => { await waitReady(); return port.wake(text) }, amend: async text => { await waitReady(); return port.amend(text) } }
     }),
   })
-  return { ...admission, readiness: () => ({ ...identity, ready: Object.keys(raw.projects).every(id => projectReadiness(id).ready), projects: Object.keys(raw.projects).map(projectReadiness) }), dispose: async () => { await admission.dispose(); await Promise.all([...calibrations.values()].map(item => item.done)) } }
+  return { ...admission, readiness: () => ({ ...identity, ready: !admissionDisposed && Object.keys(raw.projects).every(id => projectReadiness(id).ready), projects: Object.keys(raw.projects).map(projectReadiness) }), dispose: async () => { admissionDisposed = true; await admission.dispose(); await Promise.all([...calibrations.values()].map(item => item.done)) } }
 }

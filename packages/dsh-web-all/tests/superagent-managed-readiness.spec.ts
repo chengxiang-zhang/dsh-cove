@@ -46,3 +46,23 @@ it('keeps pending owner input durable and blocks native launch on a mismatched q
     expect(port.readiness()).toMatchObject({ready:false,projects:[{qualificationMatches:false}]})
   } finally {await port.dispose();rmSync(root,{recursive:true,force:true})}
 },30000)
+
+it('prevents a delayed native start when the host disposes during calibration', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { createManagedAdmission } = await import('../src/host/services/superagent/managed-runtime.ts')
+  const root=mkdtempSync(join(tmpdir(),'readiness-admission-')),source=join(root,'source'),bootstrap=join(root,'bootstrap.json')
+  mkdirSync(source);writeFileSync(join(source,'dispose-control.mjs'),'export function probe(){return true}')
+  writeFileSync(bootstrap,JSON.stringify({root:join(root,'host'),defaultProject:'project',projects:{project:{projectRoot:source,publicFiles:['dispose-control.mjs'],implementationWritePaths:['dispose-control.mjs'],engine:{executable:'/must-not-launch',authFile:'/must-not-read',model:'fixture'},verification:{methodId:'javascript-module@1',settings:{entryPath:'dispose-control.mjs'},qualification:{runtimeDigest:'wrong',methodAssetsDigest:'wrong',expiresAt:Date.now()+60000,evidenceRefs:['fixture']}}}}}),{mode:0o600})
+  const port=createManagedAdmission({bootstrapFile:bootstrap},()=>{})
+  try {
+    const result=port.message({requestId:'real-owner-event',text:'/work project requested work',origin:{kind:'trusted-host'}})
+    expect(result.state).toBe('queued')
+    expect(port.read('real-owner-event').request.text).toBe('requested work')
+    await new Promise(resolve => setTimeout(resolve, 10))
+    await port.dispose()
+    expect(port.read('real-owner-event')).toMatchObject({state:'recovering',error:'MANAGED_ADMISSION_DISPOSED'})
+    expect(port.readiness()).toMatchObject({ready:false,projects:[{qualificationMatches:false}]})
+  } finally {await port.dispose();rmSync(root,{recursive:true,force:true})}
+},30000)
