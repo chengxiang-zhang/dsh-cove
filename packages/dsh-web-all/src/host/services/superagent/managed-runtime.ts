@@ -9,7 +9,7 @@ import { DELIVERY_EVIDENCE_POLICY, partitionHandoff, verifyPartitionCandidate, t
 import { loadManagedMaterials, type ManagedMaterial } from './executors/managed-materials.ts'
 import { sealProjectInputs, verifyProjectSeal } from './executors/project-snapshot.ts'
 import { runProjectVerification, type ProjectGate } from './executors/project-verification.ts'
-import { calibrateManagedMethod, managedLoadedIdentity } from './managed-readiness.ts'
+import { calibrateManagedMethod, managedLoadedIdentity, runFixedNativeProbe } from './managed-readiness.ts'
 import { verificationRuntimeDigest } from './executors/verification-run.ts'
 import { planLocalGitDelivery } from './executors/delivery/local-git.ts'
 import { git, gitBytes, file, treeEntries, manifestDigest } from './executors/delivery/git.ts'
@@ -978,6 +978,7 @@ export function createManagedAdmission(config: ManagedHostConfig, onResult: (req
   if (!raw.root || !raw.defaultProject || !Object.hasOwn(raw.projects ?? {}, raw.defaultProject)) throw new Error('MANAGED_HOST_PROJECT_REQUIRED')
   mkdirSync(raw.root, { recursive: true, mode: 0o700 })
   const identity = managedLoadedIdentity()
+  runFixedNativeProbe(raw.root)
   const calibrations = new Map<string, { state: string; evidence?: Awaited<ReturnType<typeof calibrateManagedMethod>>; error?: string; done: Promise<void> }>()
   for (const project of Object.values(raw.projects)) {
     const entry = project.verification?.methodId === 'javascript-module@1' ? project.verification.settings?.entryPath : undefined
