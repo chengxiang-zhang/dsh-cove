@@ -35,3 +35,46 @@ it('reads exact recovery facts and ordered refs without parsing unrelated native
   expect(k.host.nativeFacts('s',undefined,6).map(x=>x.ref)).toEqual(['native-event:7'])
  } finally {spy.mockRestore();db.close();ledger.close();rmSync(root,{recursive:true,force:true})}
 })
+
+it('indexes coordination reads without changing complete results or reopen behavior', () => {
+ const root=mkdtempSync(join(tmpdir(),'coordination-reads-')),path=join(root,'ledger')
+ let ledger=new ManagedLedger(path)
+ let db=new DatabaseSync(path)
+ try {
+  // Represent an existing generation-2 ledger before the new read index.
+  db.exec('DROP INDEX IF EXISTS sa_coordination_kind_read')
+  const rows=[
+   {coordination:{payload:{kind:'profile',input:{id:'p'}}},refs:[{id:'p',revision:2}]},
+   {controlled:{kind:'host',command:{kind:'native',stream:'unrelated'}}},
+   {coordination:{payload:{kind:'profile',input:{id:'p'}}},refs:[{id:'p',revision:1}]},
+   {coordination:{payload:{kind:'runtime_event',event:'proof',payload:{value:1}}}},
+   {coordination:{payload:{kind:'profile',input:{id:'other'}}},refs:[{id:'p',revision:2}]},
+   {coordination:{payload:{kind:'profile',input:{id:'p'}}},refs:[{id:'p',revision:2}]},
+   {coordination:{payload:{kind:'runtime_event',event:'other'}}},
+   {coordination:{payload:{kind:'runtime_event',event:'proof',payload:{value:2}}}},
+  ]
+  rows.forEach((row,i)=>db.prepare('INSERT INTO sa_managed_event VALUES(?,?)').run(i+1,JSON.stringify(row)))
+  const filters=[{profileRegistration:{id:'p',revision:2}},{runtimeEvent:'proof'}]
+  const queries:string[]=[]
+  const prepare=DatabaseSync.prototype.prepare
+  const spy=vi.spyOn(DatabaseSync.prototype,'prepare').mockImplementation(function(this:DatabaseSync,sql:string) {
+   if(sql.startsWith('SELECT sequence,body_json FROM sa_managed_event')) queries.push(sql)
+   return prepare.call(this,sql)
+  })
+  let before:ReturnType<ManagedLedger['eventEntries']>[]
+  try { before=filters.map(filter=>ledger.eventEntries(filter)) } finally {spy.mockRestore()}
+  const args=[['p','p',2],['proof']]
+  const plans=()=>queries.map((sql,i)=>db.prepare('EXPLAIN QUERY PLAN '+sql).all(...args[i]!).map(row=>String(row.detail)).join('\n'))
+  expect(before.map(entries=>entries.map(entry=>entry.sequence))).toEqual([[1,6],[4,8]])
+  expect(plans().every(plan=>plan.includes('SCAN sa_managed_event'))).toBe(true)
+  const logicalBefore=db.prepare('SELECT sequence,body_json FROM sa_managed_event ORDER BY sequence').all()
+  ledger.close(); ledger=new ManagedLedger(path); db.close(); db=new DatabaseSync(path)
+  expect(plans().every(plan=>plan.includes('SEARCH sa_managed_event USING INDEX sa_coordination_kind_read'))).toBe(true)
+  expect(filters.map(filter=>ledger.eventEntries(filter))).toEqual(before)
+  expect(ledger.eventEntries({runtimeEvent:'proof',latest:true})).toEqual([before[1]![1]])
+  ledger.close(); ledger=new ManagedLedger(path); db.close(); db=new DatabaseSync(path)
+  expect(filters.map(filter=>ledger.eventEntries(filter))).toEqual(before)
+  expect(plans().every(plan=>plan.includes('SEARCH sa_managed_event USING INDEX sa_coordination_kind_read'))).toBe(true)
+  expect(db.prepare('SELECT sequence,body_json FROM sa_managed_event ORDER BY sequence').all()).toEqual(logicalBefore)
+ } finally {db.close();ledger.close();rmSync(root,{recursive:true,force:true})}
+})

@@ -32,6 +32,7 @@ export class ManagedLedger {
    if (managedGeneration(this.#db) === undefined) migrateManagedWork(this.#db, 0)
    if (managedGeneration(this.#db) !== 2) throw new Error('PROTOCOL_GENERATION')
    this.#db.exec("CREATE INDEX IF NOT EXISTS sa_native_stream_read ON sa_managed_event(json_extract(body_json,'$.controlled.command.stream')) WHERE json_extract(body_json,'$.controlled.kind')='host' AND json_extract(body_json,'$.controlled.command.kind')='native'; CREATE INDEX IF NOT EXISTS sa_worker_registration_read ON sa_managed_event(json_extract(body_json,'$.coordination.payload.input.id')) WHERE json_extract(body_json,'$.coordination.payload.kind')='worker'")
+   this.#db.exec("CREATE INDEX IF NOT EXISTS sa_coordination_kind_read ON sa_managed_event(json_extract(body_json,'$.coordination.payload.kind'),sequence) WHERE json_extract(body_json,'$.coordination.payload.kind') IS NOT NULL")
    for (const name of ['sa_managed_object','sa_managed_event']) if (!this.#db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)) throw new Error('MANAGED_SCHEMA_INCOMPLETE')
   } catch (e) { this.#db.close(); throw e }
  }
