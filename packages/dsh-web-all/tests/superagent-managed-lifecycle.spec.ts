@@ -554,7 +554,7 @@ async function borrowedContinuationFixture(orphan = false) {
     if (name === 'confirmed-attach') kernel.host.completeOperation(sent.actionRef, { ownerRef: parent.actionRef, payloadDigest, nativeRequestId, responseDigest: createHash('sha256').update('response').digest('hex') }, ['native-response'])
     else kernel.actions.recordActionResult(sent.actionRef, { status: 'unknown', stopped: false, evidenceRefs: [], reason })
   }
-  const receipt = { status: 'failed' as const, stopped: true, evidenceRefs: ['native-cessation'], reason: 'LIVE_FENCE_REVOKED' }
+  const receipt = { status: 'failed' as const, stopped: true, evidenceRefs: ['native-cessation'], reason: 'LIVE_FENCE_REVOKED', observation: { stdout: 'synthetic stdout', stderr: 'synthetic stderr', observedAt: 1700000000000 } }
   if (orphan) {
     kernel.actions.planAction({ ...spec, id: 'orphan-rpc', idempotencyKey: 'orphan-rpc', kind: 'collect', payloadDigest: createHash('sha256').update('pending-rpc').digest('hex') })
     kernel.host.observeNative(parent.actionRef, 'execution:' + parent.actionRef.id, { kind: 'process_exit', launchRef: parent.actionRef, executionDigest: createHash('sha256').update(JSON.stringify(spec)).digest('hex'), receipt } as never)
@@ -612,6 +612,12 @@ it.each(['unowned', 'missing-borrow-event', 'forged-owner', 'parent-live', 'diff
 
 it('continues after an exact canonical RPC plan lost its parent before borrowing without fabricating a receipt', async () => {
   const f = await borrowedContinuationFixture(true), original = f.runtime.ledger.get('orphan-rpc')
+  const receipt = f.runtime.ledger.get('native-parent')!.data.receipt
+  expect(receipt).toEqual({ status: 'failed', stopped: true, evidenceRefs: ['native-cessation'], reason: 'LIVE_FENCE_REVOKED', observation: { stdout: 'synthetic stdout', stderr: 'synthetic stderr', observedAt: 1700000000000 } })
+  const exit = f.runtime.ledger.eventEntries({ nativeKind: 'process_exit' })[0]!.body as any
+  const result = f.runtime.ledger.events().find((event: any) => event.controlled?.kind === 'result' && event.controlled.ref.id === 'native-parent') as any
+  expect(exit.controlled.command.observation.receipt).toEqual(receipt)
+  expect(result.controlled.receipt).toEqual(receipt)
   await expect(f.runtime.prepareContinuation(true)).resolves.toMatchObject({ head: f.after })
   expect(f.runtime.ledger.get('orphan-rpc')).toEqual(original)
   expect(original).toMatchObject({ revision: 1, data: { state: 'planned' } })
@@ -619,6 +625,50 @@ it('continues after an exact canonical RPC plan lost its parent before borrowing
   expect(()=>f.runtime.kernel.host.borrowSessionResources({id:'orphan-rpc',revision:1},f.parent.actionRef)).toThrow('SESSION_OWNER_FENCED')
   expect(f.runtime.kernel.host.reserveNativeExchange({id:'orphan-rpc',revision:1},f.parent.actionRef,'pending-rpc')).toMatchObject({kind:'denial'})
   expect(f.runtime.ledger.get('orphan-rpc')).toEqual(original)
+})
+
+it.each(['parent', 'exit', 'result'])('rejects a never-started RPC when any field of the %s receipt differs', async source => {
+  const f = await borrowedContinuationFixture(true), { runtime } = f
+  let field = ''
+  const change = (original: any) => {
+    const receipt = structuredClone(original)
+    if (field === 'stdout' || field === 'stderr') receipt.observation[field] = 'different output'
+    else if (field === 'observedAt') receipt.observation.observedAt++
+    else if (field === 'missing-observation') delete receipt.observation
+    else receipt[field] = ({ status: 'confirmed', stopped: false, evidenceRefs: ['different-evidence'], reason: 'DIFFERENT_REASON', exitCode: 1, cessation: { kind: 'stopped', evidenceRefs: ['different-cessation'] }, operation: { ownerRef: f.parent.actionRef, payloadDigest: 'different-digest' }, extra: 'unmatched-field' } as Record<string, unknown>)[field]
+    return receipt
+  }
+  if (source === 'parent') vi.mocked(runtime.ledger.snapshot).mockImplementation(kind => f.originalSnapshot(kind).map(o => o.id === 'native-parent' ? { ...o, data: { ...o.data, receipt: change(o.data.receipt) } } : o))
+  if (source === 'exit') {
+    const entries = runtime.ledger.eventEntries.bind(runtime.ledger)
+    vi.spyOn(runtime.ledger, 'eventEntries').mockImplementation(filter => entries(filter).map(event => {
+      if (filter.nativeKind !== 'process_exit') return event
+      const body = structuredClone(event.body) as any
+      body.controlled.command.observation.receipt = change(body.controlled.command.observation.receipt)
+      return { ...event, body }
+    }))
+  }
+  if (source === 'result') {
+    const { DatabaseSync } = await import('node:sqlite'), prepare = DatabaseSync.prototype.prepare
+    const read = vi.spyOn(DatabaseSync.prototype, 'prepare').mockImplementation(function (this: InstanceType<typeof DatabaseSync>, sql: string) {
+      const statement = prepare.call(this, sql)
+      if (!sql.includes("json_extract(body_json,'$.controlled.kind')='result'")) return statement
+      const all = statement.all.bind(statement)
+      vi.spyOn(statement, 'all').mockImplementation((...args) => all(...args).map(row => {
+        const body = JSON.parse(String(row.body_json))
+        body.controlled.receipt = change(body.controlled.receipt)
+        return { ...row, body_json: JSON.stringify(body) }
+      }))
+      return statement
+    })
+    cleanup.push(() => read.mockRestore())
+  }
+  for (field of ['stdout', 'stderr', 'observedAt', 'missing-observation', 'status', 'stopped', 'evidenceRefs', 'reason', 'exitCode', 'cessation', 'operation', 'extra']) {
+    await expect(runtime.prepareContinuation(true), field).rejects.toThrow('MANAGED_CONTINUATION_NOT_QUIESCENT')
+    expect(runtime.ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound' }), field).toHaveLength(0)
+    expect(runtime.ledger.eventEntries({ runtimeEvent: 'job_baseline' }), field).toHaveLength(1)
+    expect(runtime.ledger.snapshot('profile_qualification'), field).toHaveLength(0)
+  }
 })
 
 async function retainedContinuationFixture() {

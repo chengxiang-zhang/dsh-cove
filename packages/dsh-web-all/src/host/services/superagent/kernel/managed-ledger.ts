@@ -120,7 +120,7 @@ export class ManagedLedger {
     if (!capability?.nativeRuntime || capability.externalTools!=='blocked' || !isDeepStrictEqual(capability.launch,{executable:parent.executable,args:parent.args,processPolicy:parent.processPolicy}) || !['confirmed','failed'].includes(String(owner.data.state)) || receipt?.stopped !== true || state.resources.some((lease:any)=>lease.actionRef.id===owner.id && lease.status==='held')) continue
     const digest=createHash('sha256').update(JSON.stringify(parent)).digest('hex')
     if (!exits.some(({sequence,source,command})=>{
-     const {observation: _observation,...observedReceipt}=command.observation.receipt ?? {}
+     const observedReceipt=command.observation.receipt
      return sequence>plan[0]!.sequence && command.stream==='execution:'+owner.id && command.actionRef.id===owner.id && command.actionRef.revision+1===owner.revision && isDeepStrictEqual(command.actionRef,command.observation.launchRef) && command.observation.executionDigest===digest && isDeepStrictEqual(observedReceipt,receipt) && results.some(result=>result.sequence>sequence && isDeepStrictEqual(result.body.controlled.ref,command.actionRef) && isDeepStrictEqual(result.body.controlled.source,source) && isDeepStrictEqual(result.body.controlled.receipt,receipt) && isDeepStrictEqual(result.body.refs,[{id:owner.id,revision:owner.revision}]))
     })) continue
     ceased.add(action.id)
