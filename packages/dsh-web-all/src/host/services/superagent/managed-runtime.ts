@@ -931,6 +931,23 @@ export function managedAdmissionRuntime(runtime: ReturnType<typeof createManaged
     dispose: runtime.dispose, deliveryEvaluation: runtime.deliveryEvaluation, resultReport: runtime.resultReport,
   }
 }
+/** Bind delayed readiness to the authorization of this invocation. */
+export function gateManagedAdmissionRuntime(port: AdmissionRuntime, waitReady: () => Promise<void>): AdmissionRuntime {
+  let epoch = 0, disposed = false
+  const invoke = async (method: 'start' | 'wake' | 'amend', text: string) => {
+    const authorizedEpoch = epoch
+    if (disposed) throw Error('MANAGED_ADMISSION_DISPOSED')
+    await waitReady()
+    if (disposed) throw Error('MANAGED_ADMISSION_DISPOSED')
+    if (epoch !== authorizedEpoch) throw Error('MANAGED_INVOCATION_INTERRUPTED')
+    return port[method](text)
+  }
+  return { ...port,
+    interrupt: (...args) => { epoch++; return port.interrupt(...args) },
+    start: text => invoke('start', text), wake: text => invoke('wake', text), amend: text => invoke('amend', text),
+    dispose: async () => { if (disposed) return; disposed = true; epoch++; await port.dispose() },
+  }
+}
 /** Host-only factory injection also lets lifecycle contracts run without a model or credentials. */
 export function createManagedAdmission(config: ManagedHostConfig, onResult: (request: ManagedAdmissionRequest, result: { state: string; reason?: string; evaluate: () => import('./protocol/delivery.ts').DeliveryEvaluation }) => void, ports?: { runtime?(project: string, root: string): AdmissionRuntime; notice?(request: ManagedAdmissionRequest, text: string): void }) {
   const stat = statSync(config.bootstrapFile)
@@ -967,7 +984,6 @@ export function createManagedAdmission(config: ManagedHostConfig, onResult: (req
       const settings = raw.projects[project]!
       const runtime = createManagedRuntime({ ...settings, root, engine: { ...settings.engine, stateRoot: join(root, 'native') } })
       const port = managedAdmissionRuntime(runtime, settings)
-      let startInterrupted = false
       const waitReady = async () => {
         if (admissionDisposed) throw Error('MANAGED_ADMISSION_DISPOSED')
         if (!settings.verification) return
@@ -976,7 +992,7 @@ export function createManagedAdmission(config: ManagedHostConfig, onResult: (req
         if (admissionDisposed) throw Error('MANAGED_ADMISSION_DISPOSED')
         if (!projectReadiness(project).ready) throw Error('MANAGED_VERIFICATION_NOT_READY')
       }
-      return { ...port, interrupt: (...args: Parameters<typeof port.interrupt>) => { startInterrupted = true; return port.interrupt(...args) }, start: async text => { await waitReady(); if (startInterrupted) throw Error('MANAGED_START_INTERRUPTED'); return port.start(text) }, wake: async text => { await waitReady(); return port.wake(text) }, amend: async text => { await waitReady(); return port.amend(text) } }
+      return gateManagedAdmissionRuntime(port, waitReady)
     }),
   })
   return { ...admission, readiness: () => ({ ...identity, ready: !admissionDisposed && Object.keys(raw.projects).every(id => projectReadiness(id).ready), projects: Object.keys(raw.projects).map(projectReadiness) }), dispose: async () => { admissionDisposed = true; await admission.dispose(); await Promise.all([...calibrations.values()].map(item => item.done)) } }

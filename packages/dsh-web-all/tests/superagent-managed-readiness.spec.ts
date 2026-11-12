@@ -66,3 +66,54 @@ it('prevents a delayed native start when the host disposes during calibration', 
     expect(port.readiness()).toMatchObject({ready:false,projects:[{qualificationMatches:false}]})
   } finally {await port.dispose();rmSync(root,{recursive:true,force:true})}
 },30000)
+
+it('allows a reconciled resume after owner stop interrupted calibration', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { createManagedAdmission } = await import('../src/host/services/superagent/managed-runtime.ts')
+  const { verificationRuntimeDigest } = await import('../src/host/services/superagent/executors/verification-run.ts')
+  const { managedVerificationMethod, methodAssetDigest } = await import('../src/host/services/superagent/executors/managed-verification-method.ts')
+  const root=mkdtempSync(join(tmpdir(),'readiness-admission-')),source=join(root,'source'),bootstrap=join(root,'bootstrap.json')
+  mkdirSync(source);writeFileSync(join(source,'resume-control.mjs'),'export function probe(){return true}')
+  writeFileSync(bootstrap,JSON.stringify({root:join(root,'host'),defaultProject:'project',projects:{project:{projectRoot:source,publicFiles:['resume-control.mjs'],implementationWritePaths:['resume-control.mjs'],engine:{executable:'/must-not-launch',authFile:'/must-not-read',model:'fixture'},verification:{methodId:'javascript-module@1',settings:{entryPath:'resume-control.mjs'},qualification:{runtimeDigest:verificationRuntimeDigest(),methodAssetsDigest:methodAssetDigest(JSON.stringify(managedVerificationMethod('javascript-module@1',{entryPath:'resume-control.mjs'}).assets)),expiresAt:Date.now()+60000,evidenceRefs:['fixture']}}}}}),{mode:0o600})
+  const port=createManagedAdmission({bootstrapFile:bootstrap},()=>{})
+  try {
+    const result=port.message({requestId:'real-owner-event',text:'/work project requested work',origin:{kind:'trusted-host'}})
+    expect(result.state).toBe('queued')
+    expect(port.read('real-owner-event').request.text).toBe('requested work')
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(port.message({requestId:'owner-stop',text:'stop',origin:{kind:'trusted-host'}}).state).toBe('paused')
+    await port.settle()
+    expect(port.read('real-owner-event').state).toBe('paused')
+    expect(port.message({requestId:'owner-resume',text:'resume',origin:{kind:'trusted-host'}}).state).toBe('queued')
+    await port.settle()
+    expect(port.read('real-owner-event')).toMatchObject({state:'recovering',error:expect.stringContaining('ENOENT')})
+  } finally {await port.dispose();rmSync(root,{recursive:true,force:true})}
+},30000)
+
+it('fences every pending invocation on stop, retains its text, and permits a later authorized resume', async () => {
+  const { gateManagedAdmissionRuntime }=await import('../src/host/services/superagent/managed-runtime.ts')
+  let release!:()=>void;const ready=new Promise<void>(resolve=>{release=resolve}),calls:string[][]=[]
+  const target={interrupt(){},dispose:async()=>{},...Object.fromEntries(['start','wake','amend'].map(name=>[name,async(text:string)=>{calls.push([name,text]);return text}]))}
+  const gated=gateManagedAdmissionRuntime(target as any,()=>ready),original='original owner requirement',amendment=JSON.stringify({originalRequest:original,additionalInputs:['resume']})
+  const started=gated.start(original);gated.interrupt('stop','owner')
+  const resumed=gated.amend(amendment);gated.interrupt('stop again','owner')
+  const waking=gated.wake(original);gated.interrupt('remain stopped','owner')
+  const results=Promise.allSettled([started,resumed,waking]);release()
+  expect((await results).map(r=>r.status)).toEqual(['rejected','rejected','rejected'])
+  expect(calls).toEqual([])
+  gated.interrupt('authorized resume','amendment')
+  await gated.start(original);await gated.amend(amendment)
+  expect(calls).toEqual([['start',original],['amend',amendment]])
+})
+
+it('disposal prevents all qualified pending entries from launching', async () => {
+  const { gateManagedAdmissionRuntime }=await import('../src/host/services/superagent/managed-runtime.ts')
+  let release!:()=>void;const ready=new Promise<void>(resolve=>{release=resolve}),calls:string[]=[]
+  const target={interrupt(){},dispose:async()=>{},...Object.fromEntries(['start','wake','amend'].map(name=>[name,async()=>{calls.push(name)}]))}
+  const gated=gateManagedAdmissionRuntime(target as any,()=>ready),results=Promise.allSettled([gated.start('original'),gated.amend('original plus update'),gated.wake('original')])
+  await gated.dispose();release()
+  expect((await results).map(r=>r.status)).toEqual(['rejected','rejected','rejected'])
+  expect(calls).toEqual([])
+})
