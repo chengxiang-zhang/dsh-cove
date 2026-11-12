@@ -1,3 +1,4 @@
+import { sandboxProcessLaunchParameters } from './kernel/sandbox-process.ts'
 /** Composition-only fixed calibration: coordinates kernel, workspace and verifier; not an executor plugin. */
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -266,11 +267,16 @@ export function alias(outside) { const cwd=realpathSync(process.cwd()); const al
 
 /** Temporary owner-provisioned raw app-server probe; never a business execution fallback. */
 export function runFixedNativeProbe(root: string): void {
-  const script = join(root, 'native-appserver-state-probe.py'), result = join(root, 'native-appserver-state-probe-result.json')
+  const script = join(root, 'native-appserver-pair-probe.py'), result = join(root, 'native-appserver-pair-probe-result.json')
   if (!existsSync(script) || existsSync(result)) return
   const directory = lstatSync(root), stat = lstatSync(script)
   if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid?.() || directory.mode & 0o077 || !stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || stat.mode & 0o077) throw Error('NATIVE_PROBE_PRIVATE_FILE_REQUIRED')
-  if (createHash('sha256').update(readFileSync(script)).digest('hex') !== '79acca4d2fdee26338a71364cbb3ea04089c244448a900e04473100e45a9337e') throw Error('NATIVE_PROBE_DIGEST_MISMATCH')
+  if (createHash('sha256').update(readFileSync(script)).digest('hex') !== 'eb6022697bcb4afc4a9e04cf9672fa19a25e3945e3e99dc955fc70187697bc38') throw Error('NATIVE_PROBE_DIGEST_MISMATCH')
+  const executable = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'
+  for (const stage of ['C3b', 'C4', 'C5']) {
+    const launch = sandboxProcessLaunchParameters({ workspace: { root: '/Users/leo/.codex/worktrees/superagent-unattended-sdd/dsh-web' }, spec: { executable, args: [], processPolicy: 'single', timeoutMs: 60000 }, nativeRuntime: { root: join(root, `native-appserver-pair-${stage}-home`), stateDirectoryVariable: 'CODEX_HOME', readonlyRuntimeRoots: [dirname(executable)], maxProcessMs: 600000, network: 'engine-transport', evidenceRefs: ['fixed-private-probe'] } })
+    writeFileSync(join(root, `native-appserver-pair-${stage}-launch.json`), JSON.stringify(launch), { flag: 'wx', mode: 0o600 })
+  }
   writeFileSync(result, JSON.stringify({ status: 'started', hostPid: process.pid }), { flag: 'wx', mode: 0o600 })
   const child = spawn('/usr/bin/python3', [script], { cwd: root, env: process.env, stdio: 'ignore' })
   child.once('error', error => writeFileSync(result, JSON.stringify({ status: 'spawn-failed', hostPid: process.pid, code: (error as NodeJS.ErrnoException).code ?? null }), { mode: 0o600 }))

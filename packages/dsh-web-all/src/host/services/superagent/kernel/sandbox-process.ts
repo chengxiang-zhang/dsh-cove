@@ -24,36 +24,7 @@ export function openSandboxProcess<Result>(
     executable = realpathSync(e.spec.executable)
   if (root !== e.workspace.root || signal.aborted || e.expiresAt <= Date.now() || !liveFence())
     throw new Error('EXECUTION_FENCED')
-  const literal = JSON.stringify
-  const runtime = e.nativeRuntime
-  if (runtime && realpathSync(runtime.root) !== runtime.root) throw new Error('NATIVE_RUNTIME_IDENTITY')
-  const ancestors = new Set<string>()
-  if (runtime)
-    for (const leaf of [runtime.root, root, executable, ...(runtime.readonlyRuntimeRoots ?? [])]) {
-      let parent = dirname(leaf)
-      while (parent !== '/') {
-        ancestors.add(parent)
-        parent = dirname(parent)
-      }
-    }
-  const metadata = runtime
-    ? `(allow file-read-metadata (literal \"/var\") (literal \"/etc\") (literal \"/tmp\") ${[...ancestors].map((path) => `(literal ${literal(path)})`).join(' ')})`
-    : ''
-  const loopback = runtime?.loopbackServer
-    ? '(allow network-bind (local ip \"localhost:*\"))(allow network-inbound (local ip \"localhost:*\"))'
-    : ''
-  const runtimeReads = runtime?.readonlyRuntimeRoots?.length
-    ? `(allow file-read* ${runtime.readonlyRuntimeRoots.map((path) => `(subpath ${literal(path)})`).join(' ')})`
-    : ''
-  const runtimeProfile = runtime
-    ? `(allow file-read* file-write* (subpath ${literal(runtime.root)}))(allow network-outbound)(allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))(allow file-read* (literal "/Library/Preferences/com.apple.networkd.plist") (literal "/Library/Preferences/com.apple.security.plist") (literal "/Library/Preferences/.GlobalPreferences.plist"))(allow mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.networkd") (global-name "com.apple.dnssd.service") (global-name \"com.apple.system.opendirectoryd.libinfo\") (global-name \"com.apple.trustd.agent\") (global-name \"com.apple.SystemConfiguration.configd\"))`
-    : ''
-  const profile = `(version 1)(deny default)(allow process-exec process-info*)${e.spec.processPolicy === 'children' ? '(allow process-fork)' : ''}(allow sysctl-read)(allow mach-lookup (global-name "com.apple.system.logger"))(allow file-read* (literal "/") (subpath "/usr") (subpath "/bin") (subpath "/private/etc") (subpath "/sbin") (subpath "/System") (subpath "/Library/Apple") (subpath "/opt/homebrew") (subpath "/private/var/db") (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom") (subpath ${literal(root)}) (literal ${literal(executable)}))(allow file-write* (subpath ${literal(root)}) (literal "/dev/null"))${runtimeProfile}${metadata}${runtimeReads}${loopback}`
-  const child = configuredSandboxLaunchPort().open({
-    profile: sandboxFixtureProfile(profile), executable, args: e.spec.args, cwd: root,
-    env: { PATH: '/usr/bin:/bin', HOME: root, TMPDIR: root, LANG: 'en_US.UTF-8', ...(runtime ? { [runtime.stateDirectoryVariable]: runtime.root, ...(runtime.stateDirectoryVariable === 'CODEX_HOME' ? { RUST_LOG: NATIVE_CONNECT_LOG } : {}) } : {}) },
-    processPolicy: e.spec.processPolicy, timeoutMs: e.spec.timeoutMs,
-  })
+  const child = configuredSandboxLaunchPort().open(sandboxProcessLaunchParameters(e))
   const MAX_FRAME_BYTES = 1048576,
     MAX_PENDING_FRAMES = 4,
     MAX_PENDING_BYTES = 2 * (MAX_FRAME_BYTES + 1)
@@ -218,4 +189,38 @@ export function openSandboxProcess<Result>(
       })
     }
   })
+}
+
+export function sandboxProcessLaunchParameters(e: Pick<ExecutionEnvelope, 'nativeRuntime'> & { workspace: Pick<ExecutionEnvelope['workspace'], 'root'>; spec: Pick<ExecutionEnvelope['spec'], 'executable' | 'args' | 'processPolicy' | 'timeoutMs'> }) {
+  const root = realpathSync(e.workspace.root), executable = realpathSync(e.spec.executable)
+  const literal = JSON.stringify
+  const runtime = e.nativeRuntime
+  if (runtime && realpathSync(runtime.root) !== runtime.root) throw new Error('NATIVE_RUNTIME_IDENTITY')
+  const ancestors = new Set<string>()
+  if (runtime)
+    for (const leaf of [runtime.root, root, executable, ...(runtime.readonlyRuntimeRoots ?? [])]) {
+      let parent = dirname(leaf)
+      while (parent !== '/') {
+        ancestors.add(parent)
+        parent = dirname(parent)
+      }
+    }
+  const metadata = runtime
+    ? `(allow file-read-metadata (literal \"/var\") (literal \"/etc\") (literal \"/tmp\") ${[...ancestors].map((path) => `(literal ${literal(path)})`).join(' ')})`
+    : ''
+  const loopback = runtime?.loopbackServer
+    ? '(allow network-bind (local ip \"localhost:*\"))(allow network-inbound (local ip \"localhost:*\"))'
+    : ''
+  const runtimeReads = runtime?.readonlyRuntimeRoots?.length
+    ? `(allow file-read* ${runtime.readonlyRuntimeRoots.map((path) => `(subpath ${literal(path)})`).join(' ')})`
+    : ''
+  const runtimeProfile = runtime
+    ? `(allow file-read* file-write* (subpath ${literal(runtime.root)}))(allow network-outbound)(allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))(allow file-read* (literal "/Library/Preferences/com.apple.networkd.plist") (literal "/Library/Preferences/com.apple.security.plist") (literal "/Library/Preferences/.GlobalPreferences.plist"))(allow mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.networkd") (global-name "com.apple.dnssd.service") (global-name \"com.apple.system.opendirectoryd.libinfo\") (global-name \"com.apple.trustd.agent\") (global-name \"com.apple.SystemConfiguration.configd\"))`
+    : ''
+  const profile = `(version 1)(deny default)(allow process-exec process-info*)${e.spec.processPolicy === 'children' ? '(allow process-fork)' : ''}(allow sysctl-read)(allow mach-lookup (global-name "com.apple.system.logger"))(allow file-read* (literal "/") (subpath "/usr") (subpath "/bin") (subpath "/private/etc") (subpath "/sbin") (subpath "/System") (subpath "/Library/Apple") (subpath "/opt/homebrew") (subpath "/private/var/db") (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom") (subpath ${literal(root)}) (literal ${literal(executable)}))(allow file-write* (subpath ${literal(root)}) (literal "/dev/null"))${runtimeProfile}${metadata}${runtimeReads}${loopback}`
+  return {
+    profile: sandboxFixtureProfile(profile), executable, args: e.spec.args, cwd: root,
+    env: { PATH: '/usr/bin:/bin', HOME: root, TMPDIR: root, LANG: 'en_US.UTF-8', ...(runtime ? { [runtime.stateDirectoryVariable]: runtime.root, ...(runtime.stateDirectoryVariable === 'CODEX_HOME' ? { RUST_LOG: NATIVE_CONNECT_LOG } : {}) } : {}) },
+    processPolicy: e.spec.processPolicy, timeoutMs: e.spec.timeoutMs,
+  }
 }
