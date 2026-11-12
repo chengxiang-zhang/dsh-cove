@@ -122,6 +122,25 @@ export function latestFrameworkBaseline(ledger: ManagedLedger): any {
   return event?.coordination.payload.payload
 }
 
+/** A state label is insufficient: recheck the exact host retirement and its cessation evidence. */
+export function retiredInterruptedOperation(ledger: ManagedLedger, operation: import('./protocol/managed-work.ts').ManagedObject, commitmentId: string): boolean {
+  if (operation.data.state !== 'superseded' || (operation.data.result as any)?.status !== 'interrupted') return false
+  const events = ledger.eventEntries({ operationRetirement: { id: operation.id, revision: operation.revision } })
+  return events.some(event => {
+    const command = (event.body as any).coordination, retirement = command?.payload
+    if (retirement?.commitmentId !== commitmentId || !retirement.evidenceRefs?.length || !isDeepStrictEqual(retirement.evidenceRefs, operation.data.evidence_refs)) return false
+    if (!retirement.evidenceRefs.every((id: string) => ledger.eventEntries({ runtimeEvent: 'recovery_observed' }).some(e => {
+      const observed = (e.body as any).coordination
+      return e.sequence < event.sequence && observed?.payload.id === id && observed.payload.payload.commitment?.id === commitmentId && isDeepStrictEqual(observed.source, command.source)
+    }))) return false
+    const executions = operation.data.executions as any[]
+    return Array.isArray(executions) && executions.every(execution => {
+      const ref = execution.kind === 'native' ? execution.launch : execution.action, action = ref && ledger.get(ref.id)
+      return action?.kind === 'action' && (execution.kind === 'native' || (execution.kind === 'controlled' && (action.data.execution_spec as any)?.kind === 'collect')) && ((action.data.receipt as any)?.stopped === true || (execution.kind === 'native' && !!ledger.retiredNativeDomain({ id: action.id, revision: action.revision })))
+    })
+  })
+}
+
 /** The normal publication boundary: receipt persisted, proposal completion still pending. */
 export function persistManagedDeliveryResult(root: string, result: { step: DeliveryStep; receipt: DeliveryReceipt; binding: DeliveryAcceptanceBinding }) {
   const { step, receipt, binding } = result
@@ -712,16 +731,22 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       coordination.host.recordRuntimeEvent(requestId + ':proposals', 'coordinator_proposals', proposals as unknown as Json, [project], kernel.host.nativeFactRefs(session.io.stream))
       return { requestId, proposals, identity: session.engine.identity }
     },
-    async prepareContinuation() {
+    async prepareContinuation(frameworkOnly = false) {
       if (!work || native.size) throw Error('MANAGED_CONTINUATION_NOT_QUIESCENT')
+      if (frameworkOnly) {
+        if (ledger.get(work.id)?.data.control_state !== 'autonomous' || amending) throw Error('CONTROL_LOST')
+        if (config.contractPartition || config.interruptedVerificationHandoff) throw Error('MANAGED_FRAMEWORK_ONLY_REQUIRED')
+      }
       const partition = config.contractPartition && !ledger.get('contract-partition:' + work.id + ':' + config.contractPartition.acceptance.revision) ? config.contractPartition : undefined
       const handoff = config.interruptedVerificationHandoff
       if (handoff && (handoff.commitment.id !== work.id || handoff.candidateRoot !== workspaces.get('implementation')!.workspace.root || JSON.stringify(handoff.candidate.map(x => x.path).sort()) !== JSON.stringify([...config.publicFiles].sort()))) throw Error('VERIFY_HANDOFF_CANDIDATE_SCOPE')
       if (handoff) { verifyPartitionCandidate(handoff); verifyPartitionCandidate({ ...handoff, candidateRoot: workspaces.get('quality')!.workspace.root }) }
       const launches = ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch')
       if (!launches.length) throw Error('MANAGED_CONTINUATION_WRITER_UNKNOWN')
+      if (frameworkOnly && ledger.snapshot('action').some(o => (o.data.execution_spec as any) && (o.data.receipt as any)?.stopped !== true && !ledger.retiredNativeDomain({ id: o.id, revision: o.revision }))) throw Error('MANAGED_CONTINUATION_NOT_QUIESCENT')
       const domainQuiescenceProofs: string[] = []
       for (const action of launches.filter(o => (o.data.receipt as any)?.stopped !== true)) {
+        if (frameworkOnly && ledger.retiredNativeDomain({ id: action.id, revision: action.revision })) continue
         const spec = action.data.execution_spec as any
         const binding = ledger.snapshot('session_binding').find(o => (o.data.worker_ref as any)?.id === workers.get('quality')!.id)
         if (binding && (binding.data.launch_ref as any)?.id !== action.id) {
@@ -736,13 +761,16 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       // Completed native input is reconciled by the existing exact-terminal guard.
       // Domain absence alone never completes an operation or claims business acceptance.
       reconcileOperations()
-      const unresolved = ledger.snapshot('coordination_operation').filter(o => o.data.state !== 'completed' && !partitionHandoff(ledger, o, contract ? [contract] : []))
+      const unresolved = ledger.snapshot('coordination_operation').filter(o => o.data.state !== 'completed' && !(frameworkOnly && retiredInterruptedOperation(ledger, o, work!.id)) && !(!frameworkOnly && partitionHandoff(ledger, o, contract ? [contract] : [])))
       if (unresolved.length && JSON.stringify(unresolved.map(o => ({ id: o.id, revision: o.revision }))) !== JSON.stringify(partition?.operations ?? (handoff ? [handoff.operation] : []))) throw Error('MANAGED_CONTINUATION_NOT_QUIESCENT')
       if (partition && (partition.commitment.id !== work.id || partition.candidateRoot !== workspaces.get('implementation')!.workspace.root || JSON.stringify(partition.candidate.map(x => x.path).sort()) !== JSON.stringify([...config.publicFiles].sort()))) throw Error('PARTITION_CANDIDATE_SCOPE')
       if (partition) verifyPartitionCandidate(partition)
       const transition = config.frameworkBaselineTransition, head = git(config.projectRoot, ['rev-parse', 'HEAD'])
       const previous = latestFrameworkBaseline(ledger)
       if (!transition || transition.commitmentId !== work.id || !transition.evidenceRefs.length || transition.after !== head || (previous && previous.after !== transition.before && previous.after !== transition.after)) throw Error('MANAGED_BASELINE_TRANSITION_REQUIRED')
+      const baseline = (ledger.eventEntries({ runtimeEvent: 'job_baseline', latest: true })[0]?.body as any)?.coordination.payload.payload
+      const alreadyBound = frameworkOnly && baseline?.parent === transition.after && baseline?.previousParent === transition.before && baseline?.commitment?.id === work.id && previous?.commitmentId === work.id && previous?.before === transition.before && previous?.after === transition.after && isDeepStrictEqual(previous?.evidenceRefs, transition.evidenceRefs)
+      if (frameworkOnly && !alreadyBound && baseline?.parent !== transition.before) throw Error('MANAGED_BASELINE_TRANSITION_REQUIRED')
       if (git(config.projectRoot, ['merge-base', transition.before, head]) !== transition.before) throw Error('MANAGED_BASELINE_NOT_DESCENDANT')
       for (const role of ['coordinator','implementation','quality']) {
         const prepared = workspaces.get(role)!
@@ -752,6 +780,19 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
         const before = treeEntries(config.projectRoot, transition.before).get(path), after = treeEntries(config.projectRoot, head).get(path)
         if (!before || !after || before.blob !== after.blob || before.mode !== after.mode) throw Error('MANAGED_BASELINE_BUSINESS_CHANGED')
         for (const sourceRoot of [config.projectRoot, ...['coordinator','implementation','quality'].map(role => workspaces.get(role)!.workspace.root)]) { if ((partition && sourceRoot === partition.candidateRoot) || (handoff && [handoff.candidateRoot, workspaces.get('quality')!.workspace.root].includes(sourceRoot))) continue; const entry = file(sourceRoot, path); if (!entry || entry.blob !== before.blob || entry.mode !== before.mode) throw Error('MANAGED_CANDIDATE_NOT_UNCHANGED') }
+      }
+      if (frameworkOnly) {
+        const qualified = config.verification?.qualification, registered = ledger.get(profile.id)
+        if (!qualified || qualified.runtimeDigest !== verificationRuntimeDigest() || qualified.methodAssetsDigest !== methodAssetDigest(JSON.stringify(method.assets)) || qualified.expiresAt <= Date.now() || !qualified.evidenceRefs.length || launches.some(o => (o.data.execution_spec as any)?.executable !== config.engine.executable)) throw Error('CURRENT_VERIFICATION_QUALIFICATION_REQUIRED')
+        const registration = (ledger.eventEntries({ profileRegistration: profile })[0]?.body as any)?.coordination.payload.input
+        if (!registered || registered.revision !== profile.revision || registered.data.revoked === true || !registration || !isDeepStrictEqual(registration.capabilities, registered.data.capabilities) || !isDeepStrictEqual(registration.limitations, registered.data.limitations)) throw Error('PROFILE_RENEWAL_DENIED')
+        if (alreadyBound) { initialParent = head; return { head, materialDigest: supplemental.digest } }
+        // Every proof is checked before any baseline or qualification write.
+        coordination.host.renewProfileQualification(profile, [...transition.evidenceRefs, ...qualified.evidenceRefs], Math.min(Date.now() + 30 * 60_000, qualified.expiresAt))
+        const proofRef = record('framework_baseline_bound', { ...transition, materialDigest: supplemental.digest, stoppedLaunches: launches.map(o => ({ id: o.id, revision: o.revision })) }, [project], transition.evidenceRefs)
+        record('job_baseline', { parent: head, previousParent: transition.before, commitment: work, proofRef }, [project], [proofRef.id])
+        initialParent = head
+        return { head, materialDigest: supplemental.digest }
       }
       record('framework_baseline_bound', { ...transition, materialDigest: supplemental.digest, stoppedLaunches: launches.filter(o => (o.data.receipt as any)?.stopped === true).map(o => ({ id: o.id, revision: o.revision })), domainQuiescenceProofs }, [project], transition.evidenceRefs)
       coordination.host.renewProfileQualification(profile, transition.evidenceRefs, Date.now() + 30 * 60_000)
@@ -941,6 +982,7 @@ export function managedAdmissionRuntime(runtime: ReturnType<typeof createManaged
       if (proof.state === 'delivered') return { status: 'delivery-reconciled' }
       if (proof.state === 'paused') throw Error('CONTROL_LOST')
       if (proof.state === 'pending') throw Error('RECOVERY_PENDING:' + proof.reason)
+      if (settings.frameworkBaselineTransition) await runtime.prepareContinuation(true)
       return runtime.advance(await runtime.wake(text))
     },
     amend: async text => {

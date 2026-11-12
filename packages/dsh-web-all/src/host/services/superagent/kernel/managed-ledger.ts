@@ -18,7 +18,7 @@ export interface ManagedEventFilter {
  nativeStream?: string; nativeKind?: string; nativeThreadId?: string; workerRegistration?: Ref
  profileRegistration?: Ref; workspaceRoot?: string; workspaceRole?: string; runtimeEvent?: string; deliveryStep?: Ref
  latest?: boolean; afterSequence?: number; nativeKinds?: string[]; nativeRpcMethod?: string
- operationClaim?: string; controlledPlanKind?: string; controlledPlans?: boolean; nativeTurnId?: string; nativeInputText?: string
+ operationRetirement?: Ref; operationClaim?: string; controlledPlanKind?: string; controlledPlans?: boolean; nativeTurnId?: string; nativeInputText?: string
 }
 export class ManagedLedger {
  readonly #db: DatabaseSync
@@ -65,6 +65,7 @@ export class ManagedLedger {
   if (filter.profileRegistration) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='profile' AND json_extract(body_json,'$.coordination.payload.input.id')=? AND EXISTS(SELECT 1 FROM json_each(body_json,'$.refs') WHERE json_extract(value,'$.id')=? AND json_extract(value,'$.revision')=?)"); values.push(filter.profileRegistration.id, filter.profileRegistration.id, filter.profileRegistration.revision) }
   for (const [key, value] of [['root', filter.workspaceRoot], ['role', filter.workspaceRole]] as const) if (value !== undefined) { clauses.push("json_extract(body_json,'$.controlled.kind')='host' AND json_extract(body_json,'$.controlled.command.kind')='workspace' AND json_extract(body_json,'$.controlled.command.workspace."+key+"')=?"); values.push(value) }
   if (filter.runtimeEvent !== undefined) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='runtime_event' AND json_extract(body_json,'$.coordination.payload.event')=?"); values.push(filter.runtimeEvent) }
+  if (filter.operationRetirement) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='retire_interrupted' AND EXISTS(SELECT 1 FROM json_each(body_json,'$.refs') WHERE json_extract(value,'$.id')=? AND json_extract(value,'$.revision')=?)"); values.push(filter.operationRetirement.id, filter.operationRetirement.revision) }
   if (filter.operationClaim !== undefined) { clauses.push("json_extract(body_json,'$.coordination.payload.kind')='operation_claim' AND json_extract(body_json,'$.coordination.payload.input.id')=?"); values.push(filter.operationClaim) }
   if (filter.controlledPlanKind !== undefined) { clauses.push("json_extract(body_json,'$.controlled.kind')='plan' AND json_extract(body_json,'$.controlled.spec.kind')=?"); values.push(filter.controlledPlanKind) }
   if (filter.controlledPlans) clauses.push("json_extract(body_json,'$.controlled.kind')='plan'")

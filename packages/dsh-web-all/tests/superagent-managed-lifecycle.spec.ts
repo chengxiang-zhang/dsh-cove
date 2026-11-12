@@ -399,3 +399,101 @@ it.each(['near-expiry', 'expired', 'guard-failed'])('bounds pre-intake profile r
     }
   } finally { clock.mockRestore() }
 })
+
+async function continuationFixture() {
+  const f = runtimeFixture(), runtime = f.runtime
+  const r = { id: 'requirement', revision: 1 }, a = { id: 'acceptance', revision: 1 }, d = { id: 'delivery', revision: 1 }, base = { revision: 1, extensions: {}, scope_revision_refs: [] }
+  runtime.ledger.transact([], [
+    { kind: 'create', object: { ...base, id: r.id, kind: 'requirement', data: { intent: 'Keep result', source_refs: [runtime.source], wish_refs: [], observable_results: ['Keep result'], constraints: [], criterion_sources: ['owner'] } } },
+    { kind: 'create', object: { ...base, id: a.id, kind: 'acceptance_contract', scope_revision_refs: [r], data: { intent: 'Keep result', requirement_refs: [r], criterion_refs: [r], source_refs: [runtime.source] } } },
+    { kind: 'create', object: { ...base, id: d.id, kind: 'delivery_contract', scope_revision_refs: [r], data: { intent: 'Local commit', requirement_refs: [r], step_refs: [], source_refs: [runtime.source] } } },
+  ] as never)
+  runtime.coordination.acceptManagedIntent(runtime.source, { id: 'work', intent: 'Keep result', requirements: [r], acceptanceContract: a, deliveryContract: d, projects: [runtime.project], boundary: 'Local only', accountable: 'worker:coordinator', policy: runtime.policy, nextReviewAt: Date.now() + 60000 })
+  runtime.coordination.host.claimOperation({ id: 'interrupted', inputRef: 'original-native-input', proposal: { kind: 'look' }, domainKeys: ['seat:worker:coordinator'], scopeRefs: runtime.coordination.semanticScopes('work'), executionSlots: [] })
+  await runtime.dispose()
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: f.config.projectRoot, encoding: 'utf8', stdio: 'pipe' }).trim(), before = git('rev-parse', 'HEAD')
+  writeFileSync(join(f.config.projectRoot, 'framework.txt'), 'framework only\n'); git('add', '.'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost', 'commit', '-m', 'chore: framework')
+  const after = git('rev-parse', 'HEAD')
+  const { managedVerificationMethod, methodAssetDigest } = await import('../src/host/services/superagent/executors/managed-verification-method.ts'), { verificationRuntimeDigest } = await import('../src/host/services/superagent/executors/verification-run.ts')
+  const config = { ...f.config, frameworkBaselineTransition: { before, after, commitmentId: 'work', evidenceRefs: ['trusted-framework-review'] }, verification: { methodId: 'codex-runTurn-replay@1', qualification: { runtimeDigest: verificationRuntimeDigest(), methodAssetsDigest: methodAssetDigest(JSON.stringify(managedVerificationMethod('codex-runTurn-replay@1').assets)), evidenceRefs: ['current-method'], expiresAt: Date.now() + 600000 } } }
+  const restored = createManagedRuntime(config)
+  // The fixture has no model process; this isolates the stopped launch boundary without external calls.
+  const originalSnapshot = restored.ledger.snapshot.bind(restored.ledger)
+  const launch = { id: 'stopped-native', revision: 2, kind: 'action', data: { execution_spec: { kind: 'dispatch', executable: config.engine.executable }, receipt: { stopped: true } } }
+  vi.spyOn(restored.ledger, 'snapshot').mockImplementation(kind => kind === 'action' ? [launch] as any : originalSnapshot(kind))
+  cleanup.push(() => restored.dispose())
+  return { runtime: restored, config, before, after, launch, git, originalSnapshot }
+}
+
+it('framework wake adopts the trusted baseline without amending the original business and persists it across reload', async () => {
+  const f = await continuationFixture(), { runtime } = f
+  const work = runtime.ledger.get('work'), contract = runtime.ledger.get('acceptance'), workers = [...runtime.workers.values()]
+  const wake = vi.spyOn(runtime, 'wake').mockResolvedValue({ requestId: 'original-thread-turn', proposals: { proposals: [] } })
+  vi.spyOn(runtime, 'advance').mockResolvedValue([])
+  const amend = vi.spyOn(runtime, 'amend')
+  await managedAdmissionRuntime(runtime, f.config).wake('Continue original request')
+  expect(wake).toHaveBeenCalledOnce(); expect(amend).not.toHaveBeenCalled()
+  expect(runtime.ledger.get('work')).toEqual(work); expect(runtime.ledger.get('acceptance')).toEqual(contract); expect([...runtime.workers.values()]).toEqual(workers)
+  expect(runtime.ledger.eventEntries({ runtimeEvent: 'authenticated_amendment' })).toHaveLength(0)
+  expect((runtime.ledger.eventEntries({ runtimeEvent: 'job_baseline', latest: true })[0]!.body as any).coordination.payload.payload).toMatchObject({ parent: f.after, previousParent: f.before, commitment: { id: 'work' }, proofRef: { revision: 1 } })
+  expect(runtime.ledger.snapshot('profile_qualification')[0]!.data.expires_at).toBe(f.config.verification.qualification.expiresAt)
+  await runtime.prepareContinuation(true)
+  expect(runtime.ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound' })).toHaveLength(1)
+  const loaded = createManagedRuntime(f.config); cleanup.push(() => loaded.dispose())
+  vi.spyOn(loaded.ledger, 'snapshot').mockImplementation(kind => kind === 'action' ? [f.launch] as any : runtime.ledger.snapshot(kind))
+  await loaded.prepareContinuation(true)
+  expect(loaded.ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound' })).toHaveLength(1)
+  expect(loaded.ledger.get('work')).toEqual(work)
+})
+
+it.each(['running', 'forged', 'stale-retirement', 'unstopped', 'native-live', 'public', 'candidate', 'head', 'before', 'binding', 'expired', 'method', 'binary', 'revoked', 'owner-stop'])('framework continuation refuses %s without baseline or qualification writes', async failure => {
+  const f = await continuationFixture(), { runtime } = f
+  if (failure !== 'running') await runtime.reconcile()
+  if (failure === 'forged') { const entries = runtime.ledger.eventEntries.bind(runtime.ledger); vi.spyOn(runtime.ledger, 'eventEntries').mockImplementation(filter => filter.operationRetirement ? [] : entries(filter)) }
+  if (failure === 'stale-retirement') {
+    const old = runtime.ledger.get.bind(runtime.ledger)
+    vi.spyOn(runtime.ledger, 'get').mockImplementation(id => { const o = old(id); return id === 'interrupted' && o ? { ...o, revision: o.revision + 1 } : o })
+    const snapshot = (kind?: string) => kind === 'action' ? [f.launch] as any : f.originalSnapshot(kind)
+    vi.spyOn(runtime.ledger, 'snapshot').mockImplementation(kind => snapshot(kind).map(o => o.id === 'interrupted' ? { ...o, revision: o.revision + 1 } : o))
+  }
+  if (failure === 'unstopped') f.launch.data.receipt.stopped = false
+  if (failure === 'native-live') runtime.native.set('implementation', {} as never)
+  if (failure === 'public') { writeFileSync(join(f.config.projectRoot, 'input.ts'), 'changed'); f.git('add', '.'); f.git('-c','user.name=Fixture','-c','user.email=fixture@localhost','commit','-m','test: changed'); f.config.frameworkBaselineTransition.after = f.git('rev-parse','HEAD') }
+  if (failure === 'candidate') writeFileSync(join(f.config.root, 'implementation', 'input.ts'), 'changed')
+  if (failure === 'head') f.config.frameworkBaselineTransition.after = f.before
+  if (failure === 'before') f.config.frameworkBaselineTransition.before = f.after
+  if (failure === 'binding') f.config.frameworkBaselineTransition.commitmentId = 'other'
+  if (failure === 'expired') f.config.verification.qualification.expiresAt = Date.now() - 1
+  if (failure === 'method') f.config.verification.qualification.runtimeDigest = 'stale'
+  if (failure === 'binary') f.launch.data.execution_spec.executable = '/different'
+  if (failure === 'revoked') { const old = runtime.ledger.get.bind(runtime.ledger); vi.spyOn(runtime.ledger,'get').mockImplementation(id => { const o = old(id); return id === 'profile:codex-controlled' && o ? { ...o, data: { ...o.data, revoked: true } } : o }) }
+  if (failure === 'owner-stop') runtime.interrupt('owner stop')
+  try { await expect(runtime.prepareContinuation(true)).rejects.toThrow() } finally { runtime.native.clear() }
+  expect(runtime.ledger.eventEntries({ runtimeEvent: 'framework_baseline_bound' })).toHaveLength(0)
+  expect(runtime.ledger.eventEntries({ runtimeEvent: 'job_baseline' })).toHaveLength(1)
+  expect(runtime.ledger.snapshot('profile_qualification')).toHaveLength(0)
+})
+
+it.each(['missing-action', 'live-native', 'live-helper', 'wrong-source', 'wrong-commitment', 'wrong-evidence'])('revalidates interrupted retirement proof against %s', async failure => {
+  const f = await continuationFixture(), { runtime } = f
+  await runtime.reconcile()
+  const { retiredInterruptedOperation } = await import('../src/host/services/superagent/managed-runtime.ts')
+  const operation = runtime.ledger.get('interrupted')!
+  expect(retiredInterruptedOperation(runtime.ledger, operation, 'work')).toBe(true)
+  if (failure.endsWith('action') || failure.startsWith('live-')) {
+    operation.data.executions = [{ kind: failure === 'live-helper' ? 'controlled' : 'native', launch: { id: 'proof-action', revision: 1 }, action: { id: 'proof-action', revision: 1 } }] as any
+    const original = runtime.ledger.get.bind(runtime.ledger)
+    vi.spyOn(runtime.ledger, 'get').mockImplementation(id => id === 'proof-action' ? failure === 'missing-action' ? undefined : { kind: 'action', id, revision: 2, data: { execution_spec: { kind: failure === 'live-helper' ? 'collect' : 'dispatch' }, receipt: { stopped: false } } } as any : original(id))
+  } else {
+    const original = runtime.ledger.eventEntries.bind(runtime.ledger)
+    vi.spyOn(runtime.ledger, 'eventEntries').mockImplementation(filter => original(filter).map(e => {
+      if (!filter.operationRetirement) return e
+      const body = JSON.parse(JSON.stringify(e.body))
+      if (failure === 'wrong-source') body.coordination.source.id = 'unauthenticated'
+      if (failure === 'wrong-commitment') body.coordination.payload.commitmentId = 'other'
+      if (failure === 'wrong-evidence') body.coordination.payload.evidenceRefs = ['forged']
+      return { ...e, body }
+    }))
+  }
+  expect(retiredInterruptedOperation(runtime.ledger, operation, 'work')).toBe(false)
+})
