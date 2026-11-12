@@ -370,3 +370,32 @@ it.each(['public-source', 'public-mode', 'workspace', 'unceased', 'operation'])(
   })
   try { expect(() => createManagedRuntime(f.config)).toThrow(/MANAGED_PREINTAKE_/ ) } finally { spy.mockRestore() }
 })
+
+it.each(['near-expiry', 'expired', 'guard-failed'])('bounds pre-intake profile renewal by current method qualification: %s', async mode => {
+  const f = runtimeFixture(), started = Date.now(), originalProfile = f.runtime.ledger.get('profile:codex-controlled')!, originalWorkers = [...f.runtime.workers.values()]
+  await f.runtime.dispose()
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: f.config.projectRoot, stdio: 'pipe' })
+  writeFileSync(join(f.config.projectRoot, mode === 'guard-failed' ? 'input.ts' : 'framework.txt'), 'framework\n'); git('add', '.'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost', 'commit', '-m', 'chore: framework')
+  const now = started + (mode === 'near-expiry' ? 29 : 31) * 60000, expiresAt = now + 10 * 60000
+  const { managedVerificationMethod, methodAssetDigest } = await import('../src/host/services/superagent/executors/managed-verification-method.ts')
+  const { verificationRuntimeDigest } = await import('../src/host/services/superagent/executors/verification-run.ts')
+  const config = { ...f.config, verification: { methodId: 'codex-runTurn-replay@1', qualification: { runtimeDigest: verificationRuntimeDigest(), methodAssetsDigest: methodAssetDigest(JSON.stringify(managedVerificationMethod('codex-runTurn-replay@1').assets)), evidenceRefs: ['host-method-qualification'], expiresAt } } }
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+  try {
+    if (mode === 'guard-failed') {
+      expect(() => createManagedRuntime(config)).toThrow('MANAGED_PREINTAKE_PUBLIC_CHANGED')
+      const { ManagedLedger } = await import('../src/host/services/superagent/kernel/managed-ledger.ts'), ledger = new ManagedLedger(join(config.root, 'managed.sqlite'))
+      try { expect(ledger.snapshot('profile_qualification')).toHaveLength(0) } finally { ledger.close() }
+    } else {
+      const runtime = createManagedRuntime(config); cleanup.push(() => runtime.dispose())
+      const qualification = runtime.ledger.snapshot('profile_qualification')[0]!
+      expect(qualification?.data.expires_at).toBe(expiresAt)
+      expect(qualification?.data.profile_ref).toEqual({ id: originalProfile.id, revision: originalProfile.revision })
+      expect(runtime.ledger.get(originalProfile.id)).toEqual(originalProfile)
+      expect([...runtime.workers.values()]).toEqual(originalWorkers)
+      const baseline = runtime.ledger.eventEntries({ runtimeEvent: 'job_baseline', latest: true })[0]!
+      expect(qualification?.data.evidence_refs).toContain((baseline.body as any).coordination.payload.id)
+      expect(config.verification.qualification.expiresAt).toBe(expiresAt)
+    }
+  } finally { clock.mockRestore() }
+})

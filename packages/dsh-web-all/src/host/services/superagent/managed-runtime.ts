@@ -191,7 +191,11 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
           if (!actual || actual.blob !== prior.blob || actual.mode !== prior.mode) throw Error('MANAGED_PREINTAKE_PUBLIC_CHANGED')
         }
       }
-      record('job_baseline', { parent: initialParent, previousParent, stoppedLaunches: launches.map(o => ({ id: o.id, revision: o.revision })), publicInputs: config.publicFiles.map(path => before.get(path)!) }, [project], ['preintake-framework-public-inputs-unchanged'])
+      const qualified = config.verification?.qualification
+      if (qualified && (qualified.runtimeDigest !== verificationRuntimeDigest() || qualified.methodAssetsDigest !== methodAssetDigest(JSON.stringify(method.assets)) || qualified.expiresAt <= Date.now() || !qualified.evidenceRefs.length || launches.some(o => (o.data.execution_spec as any)?.executable !== config.engine.executable))) throw Error('CURRENT_VERIFICATION_QUALIFICATION_REQUIRED')
+      const adopted = record('job_baseline', { parent: initialParent, previousParent, stoppedLaunches: launches.map(o => ({ id: o.id, revision: o.revision })), publicInputs: config.publicFiles.map(path => before.get(path)!) }, [project], ['preintake-framework-public-inputs-unchanged'])
+      // Renewal writes a qualification for this exact profile revision, not a new profile or worker.
+      if (qualified) coordination.host.renewProfileQualification(profile, [adopted.id, ...qualified.evidenceRefs], Math.min(Date.now() + 30 * 60_000, qualified.expiresAt))
     } catch (error) { ledger.close(); throw error }
   }
   const pendingEvent = (ledger.eventEntries({ runtimeEvent: 'authenticated_amendment', latest: true })[0]?.body as any)?.coordination.payload
