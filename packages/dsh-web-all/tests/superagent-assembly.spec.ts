@@ -49,14 +49,14 @@ interface Rig {
   rows(sql: string, ...p: Array<string | number>): Array<Record<string, unknown>>
 }
 
-function rig(opts: { managedAdmission?: AssemblyDeps['managedAdmission']; mode?: SuperagentConfig['superagentMode']; openDb?: (path: string) => DatabaseSync; start?: boolean } = {}): Rig {
+function rig(opts: { managedAdmission?: AssemblyDeps['managedAdmission']; mode?: SuperagentConfig['superagentMode']; openDb?: (path: string) => DatabaseSync; start?: boolean; clock?: ManualClock } = {}): Rig {
   const root = mkdtempSync(join(tmpdir(), 'sa-asm-'))
   dirs.push(root)
   const store = InboxStore.open({ rootDir: root })
   const cfg: SuperagentConfig = { ...structuredClone(DEFAULT_SUPERAGENT_CONFIG), superagentMode: opts.mode ?? 'responder',
     superagentWorld: { entities: [], mandates: [], owners: [{ union_id: OWNER, name: '老板' }], colleagues: [] },
     superagentExecutor: { transport: 'inproc', hosts: [] } }
-  const clock = createManualClock(Date.UTC(2026, 10, 6, 2, 0, 0))
+  const clock = opts.clock ?? createManualClock(Date.UTC(2026, 10, 6, 2, 0, 0))
   const controller = createFakeController()
   const sent: Rig['sent'] = []
   const sender: SenderPort = {
@@ -289,4 +289,27 @@ describe('superagent assembly', () => {
     const live = await started({ mode: 'superagent' })
     expect(live.clock.pending()).toBe(5)
   })
+})
+
+it('replaces only the stale clock on repeated watchdog repairs and disposes every callback', async () => {
+  const clock = createManualClock(Date.UTC(2026, 10, 6, 2, 0, 0))
+  const setInterval = clock.setInterval.bind(clock)
+  let registered = 0, stall = false, callbacks = 0
+  clock.setInterval = (fn, ms) => {
+    const kernel = registered++ === 0 || registered > 5
+    return setInterval(() => { callbacks++; if (!kernel || !stall) fn() }, ms)
+  }
+  const r = await started({ mode: 'superagent', clock })
+  clock.advance(60000); await settle()
+  stall = true
+  clock.advance(180000); await settle()
+  expect(clock.pending()).toBe(5)
+  // Each replacement is stalled too; reconcile/watchdog and lease keeper stay alive.
+  clock.advance(180000); await settle()
+  expect(clock.pending()).toBe(5)
+  expect(registered).toBeGreaterThan(6)
+  await r.asm.dispose()
+  expect(clock.pending()).toBe(0)
+  const prior = callbacks; clock.advance(300000); await settle()
+  expect(callbacks).toBe(prior)
 })

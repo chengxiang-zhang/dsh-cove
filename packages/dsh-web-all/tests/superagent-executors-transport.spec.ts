@@ -10,7 +10,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { AddressInfo } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ensureExecutorSession } from '../src/host/services/superagent/executors/transport/bind-executor-session.ts'
 import { EndpointError, realmOfTarget, resolveEndpoint, scopePathOf } from '../src/host/services/superagent/executors/transport/endpoint.ts'
 import { createHttpTransport } from '../src/host/services/superagent/executors/transport/http.ts'
@@ -63,7 +63,7 @@ describe('transport endpoints', () => {
 interface Wire { method: string; args: Record<string, unknown> }
 
 /** A loopback stand-in for the web host's Remote surface. */
-function fakeHost(options: { presets?: string[]; cursor?: number; events?: unknown[] } = {}) {
+function fakeHost(options: { presets?: string[]; cursor?: number; events?: unknown[]; refuseModel?: boolean; holdProjection?: (release: () => void) => void; duplicateCreate?: boolean } = {}) {
   const calls: Wire[] = []
   const state = {
     presets: options.presets ?? ['standard', 'superagent-executor'],
@@ -88,14 +88,16 @@ function fakeHost(options: { presets?: string[]; cursor?: number; events?: unkno
       switch (body.method) {
         case 'agentPresets/list': ok({ presets: state.presets.map(id => ({ id })) }); return
         case 'session/create': {
-          const request = body.payload.args.request as { sessionId: string; agentPreset?: string }
+          const request = body.payload.args.request as { sessionId: string; agentPreset?: string; cwd: string }
+          if (options.duplicateCreate && calls.filter(c => c.method === 'session/create').length === 1) { res.end(JSON.stringify({ result: { ok: false, error: { code: 'SESSION_CWD_CONFLICT', message: `session "${request.sessionId}" belongs to "/stale", not "${request.cwd}"` } } })); return }
           ok({ sessionId: request.sessionId, agentPreset: request.agentPreset ?? 'standard' }); return
         }
         case 'session/selectModel': {
+          if (options.refuseModel) { res.end(JSON.stringify({ result: { ok: false, error: { code: 'MODEL_UNAVAILABLE', message: 'required route refused' } } })); return }
           const request = body.payload.args.request as { provider: string; model: string }
           ok({ selected: { provider: request.provider, model: request.model } }); return
         }
-        case 'session/projections': ok(state.exists ? { asOfSeq: state.cursor, values: {} } : null); return
+        case 'session/projections': { const reply = () => ok(state.exists ? { asOfSeq: state.cursor, values: {} } : null); if (options.holdProjection) options.holdProjection(reply); else reply(); return }
         case 'session/page': {
           const request = body.payload.args.request as { throughSeq: number }
           const events = state.events.filter((e) => {
@@ -117,7 +119,7 @@ function fakeHost(options: { presets?: string[]; cursor?: number; events?: unkno
 }
 
 const closers: (() => Promise<void>)[] = []
-afterEach(async () => { for (const close of closers.splice(0)) await close() })
+afterEach(async () => { vi.useRealTimers(); for (const close of closers.splice(0)) await close() })
 
 async function serve(options: Parameters<typeof fakeHost>[0] = {}) {
   const host = fakeHost(options)
@@ -250,7 +252,7 @@ describe('http executor transport', () => {
 })
 
 describe('ensureExecutorSession', () => {
-  it('12. engine belongs-to text heals even when snapshot has no cwd (HTTP shape)', async () => {
+  it('12. engine cwd-conflict text cannot authorize cancelling a session without ownership attestation', async () => {
     const wanted = '/Users/leo/.dsh/superagent/work/C-3'
     const stale = '/var/folders/x/sa-e2e-tmp/seat/work/C-3'
     const calls: string[] = []
@@ -273,8 +275,79 @@ describe('ensureExecutorSession', () => {
       watch() { return () => undefined },
       dispose() { /* unused */ },
     }
-    const out = await ensureExecutorSession(transport, { sessionId: 'sa-x-C-3-a1', cwd: wanted, preset: 'superagent-executor' })
-    expect(out).toEqual({ sessionId: 'sa-x-C-3-a1', agentPreset: 'superagent-executor' })
-    expect(calls).toEqual([`create:${wanted}`, 'cancel:sa-x-C-3-a1', `create:${wanted}`])
+    await expect(ensureExecutorSession(transport, { sessionId: 'sa-x-C-3-a1', cwd: wanted, preset: 'superagent-executor' })).rejects.toThrow('belongs to')
+    expect(calls).toEqual([`create:${wanted}`])
   })
+})
+it('propagates a required HTTP model refusal after create and never prompts the default route', async () => {
+  const host = await serve({ refuseModel: true })
+  const transport = createHttpTransport({ config: { ...config, localBaseUrl: `http://127.0.0.1:${host.port}` } })
+  try {
+    await expect((async () => {
+      const session = await ensureExecutorSession(transport, { sessionId: 'refused', cwd: '/authorized', model: { provider: 'required', model: 'required' } })
+      await transport.prompt({ sessionId: session.sessionId, requestId: 'prompt', text: 'execute', mode: 'queue' })
+    })()).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' })
+    expect(host.calls.map(c => c.method)).toEqual(['session/create', 'session/selectModel'])
+  } finally { transport.dispose() }
+})
+
+it('dispose closes active HTTP sockets and rejects future watches without caller stop', async () => {
+  const host = await serve(), wss = new WebSocketServer({ server: host.server })
+  let ready!: () => void, socket!: WebSocket, stream = ''
+  const opened = new Promise<void>(resolve => { ready = resolve })
+  wss.on('connection', ws => { socket = ws; ws.on('message', raw => { stream = JSON.parse(raw.toString()).streamId; ready() }) })
+  const transport = createHttpTransport({ config: { ...config, localBaseUrl: `http://127.0.0.1:${host.port}` } })
+  const seen: number[] = [], stop = transport.watch('active', e => seen.push(e.seq))
+  try {
+    await opened
+    transport.dispose()
+    socket.send(JSON.stringify({ type: 'item', streamId: stream, value: { type: 'event', event: event('turn/end', 1) } }))
+    await expect.poll(() => wss.clients.size).toBe(0)
+    expect(seen).toEqual([])
+    expect(() => transport.watch('later', () => {})).toThrow('TRANSPORT_DISPOSED')
+  } finally { stop(); for (const ws of wss.clients) ws.terminate(); wss.close(); transport.dispose() }
+})
+
+it('dispose during an in-flight HTTP poll cannot deliver or schedule another poll', async () => {
+  let release!: () => void, ready!: () => void
+  const entered = new Promise<void>(resolve => { ready = resolve })
+  const host = await serve({ cursor: 1, events: [event('turn/end', 1)], holdProjection: done => { if (release) done(); else { release = done; ready() } } })
+  const transport = createHttpTransport({ config: { ...config, localBaseUrl: `http://127.0.0.1:${host.port}`, pollMs: 1 } })
+  const seen: number[] = [], stop = transport.watch('active', e => seen.push(e.seq))
+  try {
+    await entered; vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); transport.dispose(); release()
+    // A separate completed HTTP request is a barrier for the released response.
+    await transport.create({ sessionId: 'barrier', cwd: '/authorized' })
+    expect(seen).toEqual([])
+    expect(host.calls.filter(c => c.method === 'session/page')).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(() => transport.watch('later', () => {})).toThrow('TRANSPORT_DISPOSED')
+  } finally { stop(); transport.dispose() }
+})
+
+it.each(['MODEL_UNAVAILABLE', 'PRESET_UNAVAILABLE', 'HOST_PROTOCOL', 'SESSION_EXISTS'])('never reattaches a %s refusal based on an unattested snapshot cwd', async code => {
+  const failure = Object.assign(Error(code), { code })
+  const transport: ExecutorTransport = { kind: 'http', create: async () => { throw failure }, snapshot: async () => ({ exists: true, running: false, cursor: 0, events: [] }), cancel: async () => { throw Error('must not cancel') }, prompt: async () => { throw Error('must not prompt') }, watch: () => () => {}, dispose() {} }
+  await expect(ensureExecutorSession(transport, { sessionId: 'attempt', cwd: '/authorized' })).rejects.toBe(failure)
+})
+
+it.each(['MODEL_UNAVAILABLE', 'PRESET_UNAVAILABLE', 'HOST_PROTOCOL'])('preserves %s even when its message contains conflict-shaped text', async code => {
+  const failure = Object.assign(Error('session "attempt" belongs to "/stale", not "/authorized"'), { code })
+  const transport: ExecutorTransport = { kind: 'http', create: async () => { throw failure }, snapshot: async () => ({ exists: true, running: false, cursor: 0, events: [], cwd: '/authorized' }), cancel: async () => { throw Error('must not cancel setup refusal') }, prompt: async () => {}, watch: () => () => {}, dispose() {} }
+  await expect(ensureExecutorSession(transport, { sessionId: 'attempt', cwd: '/authorized' })).rejects.toBe(failure)
+})
+
+it('does not infer create-stage authority from an unmarked conflict-shaped exception', async () => {
+  const failure = Error('session "attempt" belongs to "/stale", not "/authorized"')
+  const transport: ExecutorTransport = { kind: 'http', create: async () => { throw failure }, snapshot: async () => ({ exists: true, running: false, cursor: 0, events: [] }), cancel: async () => { throw Error('must not cancel unmarked failure') }, prompt: async () => {}, watch: () => () => {}, dispose() {} }
+  await expect(ensureExecutorSession(transport, { sessionId: 'attempt', cwd: '/authorized' })).rejects.toBe(failure)
+})
+
+it('preserves an actual HTTP create-stage conflict without cancelling an ownership-unknown session', async () => {
+  const host = await serve({ duplicateCreate: true })
+  const transport = createHttpTransport({ config: { ...config, localBaseUrl: `http://127.0.0.1:${host.port}` } })
+  try {
+    await expect(ensureExecutorSession(transport, { sessionId: 'attempt', cwd: '/authorized', model: { provider: 'required', model: 'required' } })).rejects.toMatchObject({ code: 'SESSION_CWD_CONFLICT' })
+    expect(host.calls.map(c => c.method)).toEqual(['session/create'])
+  } finally { transport.dispose() }
 })

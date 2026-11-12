@@ -295,3 +295,45 @@ it('keeps a stopped task paused through a later amendment and reload until expli
   expect(d.calls.at(-1)?.text).toContain('Also support empty input')
   expect(port.read(f.request.requestId)).toMatchObject({ state: 'fulfilled-local', consumedInputs: ['stop', 'addition', 'resume'] })
 })
+
+it('never releases an early actual requirement as discussion before real runtime acceptance', async () => {
+  const { runtime } = runtimeFixture(); cleanup.push(() => runtime.dispose())
+  await expect(runtime.routeMessage('Also reject empty input', 'early')).rejects.toThrow('OWNER_MESSAGE_INTAKE_PENDING')
+})
+
+it('retries the same rejected durable message independently while delivery is active, without releasing unrelated holds', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+  const { OwnerInputGate } = await import('../src/host/services/superagent/kernel/owner-input.ts')
+  const gate = new OwnerInputGate(), f = fixture(), d = driver(), results: string[] = [], attempts: string[] = []
+  let allow = false
+  const runtime = { ...d.runtime, holdOwnerMessage: (id: string) => gate.hold(id),
+    routeMessage: (text: string, id?: string) => gate.classify(async () => { attempts.push(text); if (text === 'change' && !allow) throw Error('CLASSIFIER_FAILED'); return { kind: 'discussion' as const, answer: 'classified' } }, id),
+  }
+  const port = createManagedAdmission({ bootstrapFile: f.bootstrapFile }, (_r, r) => results.push(r.state), { runtime: () => runtime })
+  cleanup.push(() => port.dispose())
+  port.message(f.request); await vi.waitFor(() => expect(d.calls[0]?.kind).toBe('start'))
+  port.message({ ...f.request, requestId: 'failed', text: 'change' })
+  port.message({ ...f.request, requestId: 'other', text: 'question' })
+  await vi.waitFor(() => expect(attempts).toEqual(['change', 'question']))
+  await expect(gate.beforeDelivery()).rejects.toThrow('OWNER_INPUT_PENDING')
+  expect(port.read('initial').messages?.find(m => m.request.requestId === 'failed')?.state).toBe('routing')
+  allow = true
+  await vi.advanceTimersByTimeAsync(1000)
+  await vi.waitFor(() => expect(attempts).toEqual(['change', 'question', 'change']))
+  await expect(gate.beforeDelivery()).resolves.toBeUndefined()
+  expect(d.calls.map(c => c.kind)).toEqual(['start'])
+  expect(results).toEqual([])
+  d.finish(); await port.settle()
+})
+
+it('suppresses completion while durable routing failed even when the runtime reports a passing old delivery', async () => {
+  const f = fixture(), d = driver(), results: string[] = []
+  const port = createManagedAdmission({ bootstrapFile: f.bootstrapFile }, (_r, r) => results.push(r.state), { runtime: () => ({ ...d.runtime, routeMessage: async () => { throw Error('MALFORMED_CLASSIFICATION') }, deliveryEvaluation: () => ({ verdict: 'pass', reason: '', receipt: null }) }) })
+  cleanup.push(() => port.dispose()); port.message(f.request)
+  await vi.waitFor(() => expect(d.calls[0]?.kind).toBe('start'))
+  port.message({ ...f.request, requestId: 'unresolved', text: 'Additional condition' })
+  await vi.waitFor(() => expect(port.read('initial').messages?.[0]?.answer).toContain('MALFORMED_CLASSIFICATION'))
+  d.finish(); await port.settle()
+  expect(port.read('initial').state).toBe('waiting')
+  expect(results).toEqual([])
+})

@@ -135,6 +135,8 @@ export function createHttpTransport(deps: HttpTransportDeps): HttpTransport {
   const pageSize = config.maxEventPage ?? DEFAULT_PAGE
   const probeTtlMs = config.probeTtlMs ?? PROBE_TTL_MS
   const timers = new Set<NodeJS.Timeout>()
+  const watches = new Set<() => void>()
+  let disposed = false
   const presetCache = new Map<string, { at: number; presets: string[] }>()
 
   const callOptions: CallOptions = { timeoutMs, headers: {} }
@@ -213,6 +215,7 @@ export function createHttpTransport(deps: HttpTransportDeps): HttpTransport {
    * deliver through `deliver`, which deduplicates by seq, so a duplicate is harmless.
    */
   function watch(sessionId: string, onEvent: (event: ExecutorEventLike) => void): () => void {
+    if (disposed) throw new HttpTransportError('TRANSPORT_DISPOSED', 'TRANSPORT_DISPOSED')
     let stopped = false
     let lastSeq = -1
     let interval = pollMs
@@ -241,6 +244,7 @@ export function createHttpTransport(deps: HttpTransportDeps): HttpTransport {
       }
       socket = ws
       ws.on('open', () => {
+        if (stopped) { ws.close(); return }
         muxOpen = true
         ws.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow',
           payload: { args: { request: { address: { kind: 'session', sessionId }, maxMessages: pageSize } } } }))
@@ -278,7 +282,7 @@ export function createHttpTransport(deps: HttpTransportDeps): HttpTransport {
         muxOpen = false
         if (socket === ws) socket = undefined
         if (!stopped) {
-          reconnect = setTimeout(openMux, MUX_RECONNECT_MS)
+          reconnect = setTimeout(() => { if (reconnect) timers.delete(reconnect); reconnect = undefined; openMux() }, MUX_RECONNECT_MS)
           timers.add(reconnect)
         }
       })
@@ -288,6 +292,7 @@ export function createHttpTransport(deps: HttpTransportDeps): HttpTransport {
       if (stopped) return
       try {
         const { exists, cursor } = await cursorOf(sessionId)
+        if (stopped) return
         if (!exists) { failures += 1 } else {
           if (lastSeq < 0) lastSeq = Math.max(0, cursor - pageSize)
           if (cursor > lastSeq) {
@@ -310,18 +315,20 @@ export function createHttpTransport(deps: HttpTransportDeps): HttpTransport {
       if (failures >= 5) interval = MAX_POLL_MS
       if (stopped) return
       // With the push channel open, polling only repairs gaps: keep it slow.
-      timer = setTimeout(() => { void tick() }, muxOpen ? Math.max(pollMs * 5, 10_000) : interval)
+      timer = setTimeout(() => { if (timer) timers.delete(timer); timer = undefined; void tick() }, muxOpen ? Math.max(pollMs * 5, 10_000) : interval)
       timers.add(timer)
     }
 
     const stop = (): void => {
       stopped = true
+      watches.delete(stop)
       if (timer !== undefined) { clearTimeout(timer); timers.delete(timer); timer = undefined }
       if (reconnect !== undefined) { clearTimeout(reconnect); timers.delete(reconnect); reconnect = undefined }
       socket?.close()
       socket = undefined
     }
 
+    watches.add(stop)
     openMux()
     void tick()
     return stop
@@ -336,6 +343,8 @@ export function createHttpTransport(deps: HttpTransportDeps): HttpTransport {
     snapshot,
     watch,
     dispose() {
+      disposed = true
+      for (const stop of watches) stop()
       for (const timer of timers) clearTimeout(timer)
       timers.clear()
     },

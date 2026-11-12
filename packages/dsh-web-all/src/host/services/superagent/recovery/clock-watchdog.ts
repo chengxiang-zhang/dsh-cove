@@ -11,7 +11,7 @@
  * The check is deliberately narrow, in the spirit of the responder watchdog: it only
  * repairs when this process holds the lease (a process that lost the voice must not
  * fight to restart timers it no longer owns) and when the clock has gone two tick
- * windows without advancing. A single repair reruns the timer wiring; a cooldown
+ * windows without advancing. A single repair replaces the stalled clock; a cooldown
  * keeps a clock that cannot be restarted from looping on the repair every round.
  *
  * @module dsh-web-all/superagent/recovery/clock-watchdog
@@ -28,7 +28,7 @@ export interface ClockWatchdogDeps {
   leaseHeld(now: number): boolean
   /** The kernel clock's last tick time, or undefined before it has ticked once. */
   lastTickAt(): number | undefined
-  /** Rerun the timer wiring (clock + reconcile + keeper). */
+  /** Replace the stalled clock while retaining the other owned timers. */
   repair(): void
   log: { warn(message: string): void }
   /** The clock's tick period; the stall threshold is `CLOCK_STALL_FACTOR` of it. */

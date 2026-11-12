@@ -58,6 +58,17 @@ export const managedCoordinatorSchema: Json = {
     }
   } } }
 }
+/** Owner routing is a read-only protocol, separate from executable business proposals. */
+export const ownerClassificationSchema: Json = {
+  type: 'object', additionalProperties: false, required: ['proposals'], properties: { proposals: {
+    type: 'array', minItems: 1, maxItems: 1, items: { type: 'object', additionalProperties: false,
+      required: ['kind', 'role', 'answer', 'reason'], properties: {
+        kind: { type: 'string', enum: ['answer'] }, role: { type: 'string', enum: ['discussion', 'amendment'] },
+        answer: { type: 'string', minLength: 1 }, reason: { type: 'string' },
+      },
+    },
+  } },
+}
 export interface RuntimeProposal { kind: 'accept'|'dispatch'|'verify'|'answer'|'wait'|'look'; role: string; instruction: string; reason: string; questionId: string; answer: string; intake: null | { goal: string; results: string[]; constraints: string[]; criteria: string[]; deliveryCriteria?: string[]; assignments: { role: string; basis: string; deliverables: string[]; consumers: string[]; criteria: number[] }[] } }
 export const preserveManagedDeliveryCriteria = (previous: string[], added: string[] = []) => [...new Set([...previous, ...added])]
 export function intakeReadiness(value: any): 'pass' | 'inconclusive' {
@@ -155,6 +166,7 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   let originalText = '', qaResult: any, lastResult: Json = null
   let abort = new AbortController(), amending = false, amendmentSuspended = false
   const ownerInput = new OwnerInputGate()
+  const classificationAbort = new AbortController()
   let pendingAmendmentId: string | undefined
   const record = (event: string, payload: unknown, scopes: Ref[] = [project], evidence: string[] = []) => coordination.host.recordRuntimeEvent(event + ':' + randomUUID(), event, json(payload), scopes, evidence)
   const baselineEvent = ledger.eventEntries({ runtimeEvent: 'job_baseline', latest: true })[0]?.body as any
@@ -218,6 +230,28 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     native.set('coordinator', session); attach('coordinator', session)
     return session
   }
+  async function getOwnerClassifier() {
+    const role = 'owner-classifier', home = join(config.engine.stateRoot, role)
+    const worker = known('worker:' + role, () => coordination.host.registerWorker({ id: 'worker:' + role, host, profile, projects: [project], engineRef: 'codex', runtimeNamespace: home }))
+    const existing = liveRole(role); if (existing) return existing
+    const prior = ledger.eventEntries({ nativeKind: 'binding' }).map(({ body }: any) => body?.controlled?.command)
+      .filter(command => (ledger.get(command?.actionRef?.id)?.data.execution_spec as any)?.target?.id === worker.id).at(-1)
+    const identity = prior?.observation?.binding?.identity
+    if (identity && identity.runtime_namespace !== home) throw Error('CLASSIFIER_IDENTITY_MISMATCH')
+    for (const action of ledger.snapshot('action').filter(o => (o.data.execution_spec as any)?.kind === 'dispatch' && (o.data.execution_spec as any)?.target?.id === worker.id)) {
+      if ((action.data.receipt as any)?.stopped === true || ledger.retiredNativeDomain({ id: action.id, revision: action.revision })) continue
+      kernel.host.observeNativeDomainAbsence({ id: action.id, revision: action.revision })
+    }
+    const workspaceRoot = join(root, role)
+    const saved = (ledger.eventEntries({ workspaceRoot })[0]?.body as any)?.controlled.command.workspace
+    const workspace = saved ?? createManagedWorkspace(config.projectRoot, [], workspaceRoot, 'engineering').workspace
+    if (!saved) kernel.host.registerWorkspace(workspace)
+    const session = await launchManagedCodex(kernel, { ...config.engine, source, stateRoot: home }, worker, workspace, [worker, project],
+      'Classify authenticated owner messages only. No business tools or execution. Return exactly one discussion or amendment answer; never accept, dispatch, verify or resume work.', [], ownerClassificationSchema,
+      identity ? { home, nativeSessionId: identity.native_session_id } : undefined)
+    native.set(role, session)
+    return session
+  }
   const roleInstructions = 'You are a professional worker in a controlled managed team. Use only registered managed read/write/check/ask. Never use shell, exec, browser, delegation, MCP or any other builtin. The input is a managed_input envelope; execute its text. Read actual source before judgments. check is only text equality, not tests. Technical uncertainty must use ask, never ask the user. Never claim whole-project tests or delivery happened without evidence.'
   async function getRole(role: string, schema?: Json) {
     const existing = liveRole(role)
@@ -279,20 +313,21 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
     return { status: 'observed', role, evidence, answer: result.answer } as unknown as Json
     } finally { await closeRole(role, session) }
   }
-  async function askSecretary(text: string) {
+  async function askSecretary(text: string, signal: AbortSignal = abort.signal, classification = false) {
     return coordinatorTurns.run(async () => {
-    const session = await getCoordinator()
+    if (signal.aborted) throw Error('COORDINATOR_CANCELLED')
+    const session = classification ? await getOwnerClassifier() : await getCoordinator()
     try {
-    const context = contextFor('coordinator', text), requestId = 'coordination:'+randomUUID()
+    const context = classification ? undefined : contextFor('coordinator', text), requestId = 'coordination:'+randomUUID()
     coordinatorInputs.set(requestId, session)
     let batch: { proposals: RuntimeProposal[] }
-    try { batch = await ports.coordinator({ request_id: requestId, assignment_revision: assignment('coordinator').revision, text: context.envelope.text }, abort.signal) }
+    try { batch = await ports.coordinator({ request_id: requestId, assignment_revision: context ? assignment('coordinator').revision : 1, text: context?.envelope.text ?? text }, signal) }
     finally { coordinatorInputs.delete(requestId) }
-    const proof = consumed('coordinator', context, { request_id: requestId }, session)
-    record('coordinator_proposals', batch as unknown as Json, scope('coordinator'), [proof.id])
+    const proof = context && consumed('coordinator', context, { request_id: requestId }, session)
+    record(classification ? 'owner_message_classification' : 'coordinator_proposals', batch as unknown as Json, classification ? [project] : scope('coordinator'), proof ? [proof.id] : kernel.host.nativeFactRefs(session.io.stream))
     const nativeEvidenceRefs = kernel.host.nativeFactRefs(session.io.stream).slice(-4)
     return { ...batch, nativeEvidenceRefs }
-    } finally { await closeRole('coordinator', session) }
+    } finally { await closeRole(classification ? 'owner-classifier' : 'coordinator', session) }
     })
   }
   const assertVerificationReady = () => {
@@ -498,14 +533,16 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
   const api = {
     ledger, coordination, kernel, root, source, project, policy, workers, workspaces, native, reconcileOperations,
     amendmentPending: () => amending,
-    async routeMessage(text: string): Promise<{ kind: 'discussion' | 'amendment'; answer: string }> {
-      if (!work) return { kind: 'discussion', answer: '事项正在受理，尚未派发执行。' }
+    holdOwnerMessage: (id: string) => ownerInput.hold(id),
+    async routeMessage(text: string, id = 'anonymous'): Promise<{ kind: 'discussion' | 'amendment'; answer: string }> {
+      ownerInput.hold(id)
+      if (!work) throw Error('OWNER_MESSAGE_INTAKE_PENDING')
       return ownerInput.classify(async () => {
-        const batch = await askSecretary(JSON.stringify({ ownerMessage: text, task: work, instruction: 'Classify this authenticated owner message without executing it. Return exactly one answer proposal. Set role="discussion" for progress questions, explanations and discussion; answer it using current facts. Set role="amendment" only when the owner actually requests changes or explicitly resumes work; preserve their exact request in answer. Do not accept, dispatch, verify, or answer native technical questions in this classification turn. Ordinary conversation never changes the contract.' }))
+        const batch = await askSecretary(JSON.stringify({ ownerMessageId: id, ownerMessage: text, task: ledger.get(work!.id), contract: contract && ledger.get(contract.id), requirements: requirement && ledger.get(requirement.id), instruction: 'Classify this authenticated owner message without executing it. Return exactly one answer proposal. Set role="discussion" for progress questions, explanations and discussion; answer it using current facts. Set role="amendment" only when the owner actually requests changes or explicitly resumes work; preserve their exact request in answer. Do not accept, dispatch, verify, or answer native technical questions in this classification turn. Ordinary conversation never changes the contract.' }), classificationAbort.signal, true)
         const response = batch.proposals[0]
-        if (batch.proposals.length !== 1 || response?.kind !== 'answer' || !['discussion','amendment'].includes(response.role) || !response.answer.trim()) throw Error('OWNER_MESSAGE_CLASSIFICATION_REQUIRED')
+        if (batch.proposals.length !== 1 || response?.kind !== 'answer' || !['discussion','amendment'].includes(response.role) || typeof response.answer !== 'string' || !response.answer.trim()) throw Error('OWNER_MESSAGE_CLASSIFICATION_REQUIRED')
         return { kind: response.role as 'discussion' | 'amendment', answer: response.answer }
-      })
+      }, id)
     },
     async reconcile(): Promise<{ state: 'ready' | 'pending' | 'paused' | 'delivered' | 'unstarted'; reason?: string }> {
       if (work && ledger.get(work.id)!.data.control_state !== 'autonomous' && (!amending || amendmentSuspended)) return { state: 'paused' }
@@ -764,7 +801,8 @@ export function createManagedRuntime(config: ManagedRuntimeConfig) {
       for (const role of [...native.keys()]) { try { results.push({ role, receipt: await closeRole(role) }) } catch (error) { results.push({ role, error: String(error), stopped: false }) } }
       return results
     },
-    async dispose() { const results = await api.stopNative(); ledger.close(); return results }
+    stopClassification() { classificationAbort.abort() },
+    async dispose() { classificationAbort.abort(); const results = await api.stopNative(); ledger.close(); return results }
   }
   return api
 }
@@ -873,7 +911,7 @@ interface HostProjects {
 export type ManagedAdmissionRequest = AdmissionRequest
 export function managedAdmissionRuntime(runtime: ReturnType<typeof createManagedRuntime>, settings: Pick<ManagedRuntimeConfig, 'frameworkBaselineTransition'>): AdmissionRuntime {
   return {
-    routeMessage: runtime.routeMessage, amendmentPending: runtime.amendmentPending, reconcile: runtime.reconcile,
+    holdOwnerMessage: runtime.holdOwnerMessage, stopClassification: runtime.stopClassification, routeMessage: runtime.routeMessage, amendmentPending: runtime.amendmentPending, reconcile: runtime.reconcile,
     start: async text => runtime.advance(await runtime.bootstrap(text)),
     wake: async text => {
       const proof = await runtime.reconcile()

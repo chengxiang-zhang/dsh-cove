@@ -461,9 +461,14 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       stopClock: undefined, kernelClock }
   }
 
-  function startTimers(m: Machine): void {
+  function replaceClock(m: Machine): void {
+    m.stopClock?.()
     const tickSignal = createTickSignal(m.ledger.read)
     m.stopClock = m.kernelClock.start(deps.clock, tickSignal, r => { void m.presence.runTurn(r).catch(e => log.warn(`superagent turn: ${String(e)}`)) })
+  }
+
+  function startTimers(m: Machine): void {
+    replaceClock(m)
     // The lease heartbeat keeper rides with the clock: both are domain timers, so they
     // start and stop atomically and a startup that aborts leaves neither running (11).
     m.recovery.startLeaseKeeper()
@@ -473,7 +478,7 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       open: () => open,
       leaseHeld: now => machine?.recovery.leaseHeld(now) ?? false,
       lastTickAt: () => machine?.kernelClock.lastTickAt(),
-      repair: () => { const current = machine; if (current) startTimers(current) },
+      repair: () => { const current = machine; if (current) replaceClock(current) },
       log, tickMs: TICK_MS,
     })
     every(TICK_MS, () => {

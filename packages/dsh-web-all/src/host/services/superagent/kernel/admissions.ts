@@ -9,7 +9,9 @@ export interface AdmissionRequest {
   origin: { kind: 'feishu' | 'trusted-host'; chatId?: string; messageId?: string; eventId?: string; event?: InboundEvent }
 }
 export interface AdmissionRuntime {
-  routeMessage(text: string): Promise<{ kind: 'discussion' | 'amendment'; answer: string }>
+  holdOwnerMessage?(id: string): void
+  stopClassification?(): void
+  routeMessage(text: string, id?: string): Promise<{ kind: 'discussion' | 'amendment'; answer: string }>
   amendmentPending(): boolean
   reconcile(): Promise<{ state: 'ready' | 'pending' | 'paused' | 'delivered' | 'unstarted'; reason?: string }>
   start(text: string): Promise<unknown>
@@ -43,6 +45,10 @@ export function createAdmissions(options: AdmissionOptions) {
   mkdirSync(requestsRoot, { recursive: true, mode: 0o700 })
   const runtimes = new Map<string, AdmissionRuntime>(), scheduled = new Set<string>(), timers = new Map<string, ReturnType<typeof setTimeout>>()
   const routing = new Map<string, Promise<void>>()
+  const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const inFlightMessages = new Set<string>()
+  const unresolved = (record: AdmissionRecord) => (record.messages ?? []).some(m => m.state === 'routing')
+  const restoreHolds = (runtime: AdmissionRuntime, record: AdmissionRecord) => { for (const message of record.messages ?? []) if (message.state === 'routing') runtime.holdOwnerMessage?.(message.request.requestId) }
   let queue = Promise.resolve(), disposed = false
   const key = (id: string) => createHash('sha256').update(id).digest('hex')
   const pathOf = (id: string) => join(requestsRoot, key(id) + '.json')
@@ -78,6 +84,7 @@ export function createAdmissions(options: AdmissionOptions) {
       persist(record)
       try {
         if (!runtime) { runtime = options.runtime(record.request.project!, record.runtimeRoot!); runtimes.set(id, runtime) }
+        restoreHolds(runtime, read(id))
         if (recovering) {
           const proof = await runtime.reconcile()
           if (proof.state === 'paused') { persist({ ...read(id), state: 'paused', nextReviewAt: undefined }); return }
@@ -86,6 +93,7 @@ export function createAdmissions(options: AdmissionOptions) {
             const latest = read(id)
             if (latest.state === 'paused') return
             const pending = (latest.inputs ?? []).filter(i => !(latest.consumedInputs ?? []).includes(i.requestId))
+            if (unresolved(latest)) { persist({ ...latest, state: 'recovering', nextReviewAt: Date.now() + 60000 }); return }
             const evaluation = runtime.deliveryEvaluation()
             if (evaluation.verdict !== 'pass') throw Error('RECOVERED_DELIVERY_NOT_VERIFIED')
             persist({ ...read(id), state: pending.length ? 'needs-attention' : 'fulfilled-local', report: runtime.resultReport() ?? null, nextReviewAt: undefined, endedAt: Date.now(), ...(pending.length ? { error: 'Original delivery reconciled; additional input requires a new linked responsibility.' } : {}) })
@@ -100,7 +108,7 @@ export function createAdmissions(options: AdmissionOptions) {
           : pending.length ? await runtime.amend(JSON.stringify({ originalRequest: record.request.text, additionalInputs: pending.map(i => i.text) })) : await runtime.wake('Scheduled review: inspect durable results and advance the original responsibility. Do not repeat unknown effects.')
         const current = read(id)
         if (current.state === 'paused' || (current.inputs ?? []).length !== (record.inputs ?? []).length) return
-        const amendmentPending = runtime.amendmentPending()
+        const amendmentPending = runtime.amendmentPending() || unresolved(current)
         const evaluation = runtime.deliveryEvaluation(), state = !amendmentPending && evaluation.verdict === 'pass' ? 'fulfilled-local' : 'waiting'
         const next = { ...current, state, result, report: runtime.resultReport() ?? null, consumedInputs: [...(record.consumedInputs ?? []), ...(amendmentPending ? [] : pending.map(i => i.requestId))], endedAt: Date.now(), ...(state === 'waiting' ? { nextReviewAt: Date.now() + 60000 } : {}) }
         persist(next)
@@ -125,19 +133,35 @@ export function createAdmissions(options: AdmissionOptions) {
     })
   }
   const routeMessage = (id: string, request: AdmissionRequest) => {
+    const messageKey = JSON.stringify([id, request.requestId])
+    if (disposed || inFlightMessages.has(messageKey)) return
+    inFlightMessages.add(messageKey)
+    clearTimeout(retryTimers.get(messageKey)); retryTimers.delete(messageKey)
+    // Install the publication hold synchronously, before queued classification begins.
+    runtimes.get(id)?.holdOwnerMessage?.(request.requestId)
     const task = (routing.get(id) ?? Promise.resolve()).then(async () => {
       if (disposed) return
       const current = read(id)
       let runtime = runtimes.get(id)
       if (!runtime) { runtime = options.runtime(current.request.project!, current.runtimeRoot ?? jobRoot(id)); runtimes.set(id, runtime) }
-      const result = await runtime.routeMessage(request.text)
+      restoreHolds(runtime, current)
+      if (!current.messages?.some(m => m.request.requestId === request.requestId && m.state === 'routing')) return
+      const result = await runtime.routeMessage(request.text, request.requestId)
+      if (!['discussion', 'amendment'].includes(result.kind) || typeof result.answer !== 'string' || !result.answer.trim()) throw Error('OWNER_MESSAGE_CLASSIFICATION_REQUIRED')
       const latest = read(id), messages = (latest.messages ?? []).map(m => m.request.requestId === request.requestId ? { ...m, state: result.kind, answer: result.answer } : m)
       if (result.kind === 'discussion') { persist({ ...latest, messages }); options.onNotice?.(request, result.answer); return }
       if (latest.state === 'paused') { persist({ ...latest, messages, inputs: [...(latest.inputs ?? []), request] }); options.onNotice?.(request, '事项已暂停，补充尚未执行；请明确继续后应用。'); return }
       persist({ ...latest, state: 'queued', messages, inputs: [...(latest.inputs ?? []), request], nextReviewAt: undefined })
       clearTimer(id); runtime.interrupt(request.text, 'amendment'); schedule(id)
       options.onNotice?.(request, '补充已归入原事项，将按新要求重新验收。')
-    }).catch(error => { options.onNotice?.(request, '本次消息尚未归位：' + String(error)); const current = read(id); persist({ ...current, messages: (current.messages ?? []).map(m => m.request.requestId === request.requestId ? { ...m, answer: String(error) } : m) }) }).finally(() => { if (routing.get(id) === task) routing.delete(id) })
+    }).catch(error => { options.onNotice?.(request, '本次消息尚未归位：' + String(error)); const current = read(id); persist({ ...current, messages: (current.messages ?? []).map(m => m.request.requestId === request.requestId ? { ...m, answer: String(error) } : m) }) }).finally(() => {
+      inFlightMessages.delete(messageKey)
+      if (routing.get(id) === task) routing.delete(id)
+      if (!disposed && read(id).messages?.some(m => m.request.requestId === request.requestId && m.state === 'routing')) {
+        const timer = setTimeout(() => { retryTimers.delete(messageKey); routeMessage(id, request) }, 1000)
+        timer.unref?.(); retryTimers.set(messageKey, timer)
+      }
+    })
     routing.set(id, task)
   }
   const api = {
@@ -205,6 +229,9 @@ export function createAdmissions(options: AdmissionOptions) {
     async dispose() {
       if (disposed) return
       disposed = true; for (const id of timers.keys()) clearTimer(id)
+      for (const timer of retryTimers.values()) clearTimeout(timer)
+      retryTimers.clear()
+      for (const runtime of runtimes.values()) runtime.stopClassification?.()
       for (const [id, runtime] of runtimes) if (read(id).state === 'running') runtime.interrupt('Host lifecycle disposal; preserve responsibility and reconcile before resuming.', 'lifecycle')
       await Promise.all([...routing.values()]); await queue
       for (const runtime of runtimes.values()) await runtime.dispose()
