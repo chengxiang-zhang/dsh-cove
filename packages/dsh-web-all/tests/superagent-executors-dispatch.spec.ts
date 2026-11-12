@@ -3,6 +3,8 @@
  * Fixtures: FX/ledger.ts, FX/fake-controller.ts, FX/manual-clock.ts, the real T15 world registry.
  */
 
+import { createServer } from 'node:http'
+import { createTransportFactory, type ExecutorTransportFactory } from '../src/host/services/superagent/executors/transport/index.ts'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -34,7 +36,7 @@ interface Rig {
   asked: unknown[]
 }
 
-function rig(profiles: readonly Profile[] = PROFILES): Rig {
+function rig(profiles: readonly Profile[] = PROFILES, transport?: ExecutorTransportFactory): Rig {
   const t = openTestLedger()
   const seatRoot = mkdtempSync(join(tmpdir(), 'sa-exec-'))
   dirs.push(seatRoot)
@@ -48,7 +50,7 @@ function rig(profiles: readonly Profile[] = PROFILES): Rig {
   const speech: SpeechProposal[] = []
   const asked: unknown[] = []
   const ex = createExecutors({
-    ledger: t.ledger, controller: () => controller, world, profiles: createProfileRegistry(profiles), clock: t.clock,
+    ledger: t.ledger, controller: () => controller, transport, world, profiles: createProfileRegistry(profiles), clock: t.clock,
     log: { info: () => undefined, warn: () => undefined, error: () => undefined }, seatRoot,
     speak: p => speech.push(p), askOwner: (...a) => asked.push(a), workspacePath: () => 'local/repo',
   })
@@ -292,29 +294,43 @@ describe('executors dispatch', () => {
     expect(r.ex.toolLog(a.attempt_id).at(-1)).toMatchObject({ name: 'report' })
   })
 
-  it('18. a stale session id at the wrong cwd is cancelled, then recreated once at the right cwd', async () => {
-    const r = rig()
-    const { c, a } = commit(r)
-    const rightCwd = durableDir(r.seatRoot, 'C-1')
-    // A previous life left sa-x-C-1-a1 seated at a different directory; a bare create would
-    // meet the engine's `belongs to` refusal and fail the dispatch.
-    r.controller.seedSession('sa-x-C-1-a1', join(r.seatRoot, 'work', 'STALE'))
-    const out = await r.ex.dispatch(c.commitment_id)
-    expect(out).toEqual({ attemptId: a.attempt_id, sessionId: 'sa-x-C-1-a1' })
-
-    // The heal is observable in the call order: create (refused) -> cancel -> create (at the right cwd).
-    const methods = r.controller.calls.map(x => x.method)
-    const firstCreate = methods.indexOf('create')
-    const cancelIdx = methods.indexOf('cancel')
-    const secondCreate = methods.indexOf('create', firstCreate + 1)
-    expect(firstCreate).toBeGreaterThanOrEqual(0)
-    expect(cancelIdx).toBeGreaterThan(firstCreate)
-    expect(secondCreate).toBeGreaterThan(cancelIdx)
-    const createCalls = r.controller.calls.filter(x => x.method === 'create') as Array<Extract<FakeController['calls'][number], { method: 'create' }>>
-    expect(createCalls.at(-1)?.req).toMatchObject({ sessionId: 'sa-x-C-1-a1', cwd: rightCwd })
-    // No new attempt was spent: the same a1 is now running at the right seat.
+  it('18. refuses a wrong-cwd session without cancelling it or prompting an alternate attempt', async () => {
+    const r = rig(), { c, a } = commit(r)
+    const stale = join(r.seatRoot, 'work', 'STALE')
+    r.controller.seedSession('sa-x-C-1-a1', stale)
+    expect(await r.ex.dispatch(c.commitment_id)).toMatchObject({ failed: expect.stringContaining('belongs to') })
+    expect(r.controller.calls.map(x => x.method)).toEqual(['create'])
     expect(attempts(r, c.commitment_id)).toHaveLength(1)
-    expect(attempts(r, c.commitment_id)[0]).toMatchObject({ state: 'running', session_id: 'sa-x-C-1-a1', cwd: rightCwd })
+    expect(attempts(r, c.commitment_id)[0]).toMatchObject({ attempt_id: a.attempt_id, state: 'ended', end_reason: 'dispatch_failed' })
+    expect(prompts(r)).toEqual([])
+  })
+
+  it.each(['MODEL_UNAVAILABLE', 'PRESET_UNAVAILABLE', 'HOST_PROTOCOL'])('preserves %s without silently upgrading the requested route', async code => {
+    const r = rig(), { c } = commit(r)
+    r.controller.failCreateTimes(1, Object.assign(Error('required setup refused'), { code }))
+    expect(await r.ex.dispatch(c.commitment_id)).toEqual({ failed: 'required setup refused' })
+    expect(attempts(r, c.commitment_id)).toHaveLength(1)
+    expect(prompts(r)).toEqual([])
+  })
+
+  it('real HTTP model-selection refusal cannot be retried under another dispatcher profile', async () => {
+    const calls: string[] = []
+    const server = createServer((req, res) => { if (req.method !== 'POST') { res.writeHead(404).end(); return }; let body = ''; req.on('data', chunk => { body += chunk }); req.on('end', () => {
+      const message = JSON.parse(body), method = message.method; calls.push(method)
+      const value = method === 'agentPresets/list' ? { presets: [{ id: 'superagent-executor' }] } : method === 'session/create' ? { sessionId: message.payload.args.request.sessionId } : null
+      const result = method === 'session/selectModel' ? { ok: false, error: { code: 'MODEL_UNAVAILABLE', message: 'required model refused' } } : { ok: true, value }
+      res.end(JSON.stringify({ result }))
+    }) })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const transport = createTransportFactory({ config: { transport: 'http', localBaseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}` }, controller: () => { throw Error('no inproc fallback') } })
+    const profiles = PROFILES.map(p => p.id === DURABLE_FULL.id ? { ...p, provider: 'required', model: 'required' } : p)
+    const r = rig(profiles, transport), { c } = commit(r, profiles.find(p => p.id === DURABLE_FULL.id)!)
+    try {
+      expect(await r.ex.dispatch(c.commitment_id)).toMatchObject({ failed: expect.stringContaining('required model refused') })
+      expect(calls).toEqual(['agentPresets/list', 'session/create', 'session/selectModel'])
+      expect(attempts(r, c.commitment_id)).toHaveLength(1)
+      expect(attempts(r, c.commitment_id)[0]).toMatchObject({ state: 'ended', end_reason: 'dispatch_failed', provider: 'required', model: 'required' })
+    } finally { transport.dispose(); await new Promise<void>(resolve => server.close(() => resolve())) }
   })
 
   it('14. executorGuard: read-only refuses writes; every profile refuses channel and worktree tools', () => {

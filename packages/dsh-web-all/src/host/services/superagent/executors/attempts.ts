@@ -264,6 +264,12 @@ export function createExecutors(deps: ExecutorDeps): Executors {
     releaseSlotIfIdle(a.commitment_id)
     if (a.session_id && a.lifetime === 'oneshot') rmSync(oneshotDir(deps.seatRoot, a.attempt_id), { recursive: true, force: true })
     log.warn(`executors: dispatch of ${a.attempt_id} failed: ${reason}`)
+    // Required setup and unknown session ownership are refusals, not capacity
+    // failures: a higher profile would silently change the requested route.
+    const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+    if (['MODEL_UNAVAILABLE', 'PRESET_UNAVAILABLE', 'HOST_PROTOCOL', 'SESSION_CWD_CONFLICT'].includes(code)
+      || /session\s+"[^"]+"\s+belongs to\s+"[^"]+",\s*not\s+"[^"]+"/iu.test(reason)) return { failed: reason }
+
     const failures = ledger.read.get<{ k: number }>(
       `SELECT count(*) AS k FROM ${A} WHERE commitment_id = ? AND end_reason = 'dispatch_failed'`, a.commitment_id)?.k ?? 0
 
