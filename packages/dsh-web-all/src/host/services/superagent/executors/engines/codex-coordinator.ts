@@ -21,15 +21,18 @@ export class CodexCoordinatorRuntime<Proposal> {
       payload_digest: createHash('sha256').update(input.text).digest('hex'),
       payload_ref: 'coordinator:' + input.request_id
     }
-    await this.engine.execute(record, signal)
+    let receipt = await this.engine.execute(record, signal)
+    let initialReceipt = true
     while (Date.now() < this.engine.io.launch.expiresAt) {
       if (signal.aborted) {
         await this.engine.cancel()
         throw new Error('COORDINATOR_CANCELLED')
       }
-      const receipt = await this.engine.receiptFor(record)
+      if (!initialReceipt) receipt = await this.engine.receiptFor(record)
+      initialReceipt = false
       if (receipt.status === 'consumed') {
-        const turn = this.engine.turns().find((t) => t.id === receipt.consumption.turn_id)
+        const turnId = receipt.consumption.turn_id
+        const turn = this.engine.turns().find((t) => t.id === turnId)
         if (turn?.status === 'completed') {
           const answer = turn.items.filter((item) => item.type === 'agentMessage').at(-1)?.text
           if (!answer) throw new Error('COORDINATOR_OUTPUT_MISSING')

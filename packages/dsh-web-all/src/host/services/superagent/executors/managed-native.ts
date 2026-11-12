@@ -35,12 +35,15 @@ export async function launchManagedCodex(kernel: ReturnType<typeof createControl
 }
 export async function runManagedTurn(native: Awaited<ReturnType<typeof launchManagedCodex>>, text: string, requestId: string, assignmentRevision: number, signal: AbortSignal) {
   const input = { request_id: requestId, assignment_revision: assignmentRevision, payload_digest: createHash('sha256').update(text).digest('hex'), payload_ref: requestId, text }
-  await native.engine.execute(input, signal)
+  let receipt = await native.engine.execute(input, signal)
+  let initialReceipt = true
   while (Date.now() < native.launch.expiresAt) {
     if (signal.aborted) throw new Error('MANAGED_TURN_ABORTED')
-    const receipt = await native.engine.receiptFor(input)
+    if (!initialReceipt) receipt = await native.engine.receiptFor(input)
+    initialReceipt = false
     if (receipt.status === 'consumed') {
-      const turn = native.engine.turns().find(t => t.id === receipt.consumption.turn_id)
+      const turnId = receipt.consumption.turn_id
+      const turn = native.engine.turns().find(t => t.id === turnId)
       if (turn?.status === 'completed') return { input, receipt, turn, answer: turn.items.filter(i => i.type === 'agentMessage').at(-1)?.text ?? '' }
       if (turn && ['failed', 'interrupted'].includes(turn.status)) throw new Error('MANAGED_TURN_' + turn.status)
     }
