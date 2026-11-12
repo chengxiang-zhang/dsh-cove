@@ -175,10 +175,10 @@ describe('http executor transport', () => {
     const transport = createHttpTransport({ config: { ...config, localBaseUrl: `http://127.0.0.1:${host.port}`, pollMs: 15 } })
     const seen: number[] = []
     const stop = transport.watch('sa-x-C-1-a1', e => seen.push(e.seq))
-    await new Promise(resolve => setTimeout(resolve, 60))
+    await expect.poll(() => seen).toContain(1)
     host.state.events.push(event('tool/call', 2, { name: 'bash', callId: 'c1' }))
     host.state.cursor = 2
-    await new Promise(resolve => setTimeout(resolve, 120))
+    await expect.poll(() => seen).toContain(2)
     stop()
     const afterStop = seen.length
     host.state.events.push(event('turn/end', 3, { turn: 1, reason: { kind: 'completed' } }))
