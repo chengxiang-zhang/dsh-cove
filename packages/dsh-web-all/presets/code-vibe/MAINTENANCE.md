@@ -186,3 +186,11 @@
     - 改动：`skills/task-router/SKILL.md` 新增 §6.1（3 条：先跑便宜档 / 端到端只做最终闸门且同一处修复最多一次 / 收尾仍必须回到端到端）。放 task-router 而非 persona，因为每次 DELIVERY 必载、不进常驻窗口，符合 #2 与 #25 的减法方向；第三条是刻意保留的双边约束，防止 #25 之后的规则被读成"可以跳过端到端"（那正是 `79505767` 的失败）。
     - 定性：**方向性改动，未行为验证**。散文无运行时强制，可复核判据只有上面的文本探针（旧文本确实只朝一个方向）；真机验证要等发版 + 机队 rollout 后，在同一 7 天窗口复跑 `pnpm wish-review`，看 rage/session 与 maxTurn 是否下降、以及"跳过端到端"是否复发。
     - 回滚：`git revert` 本提交，然后 `node scripts/render-preset.mjs`。
+
+27. **清理类任务的对象域：宽泛的「全部清理」不解锁环境资源（2026-11-13，自迭代定时任务 `preset-self-review`）**：同一 7 天窗口的两条顶层 `code-vibe` 会话，在同一个 workspace 上把同一件事犯了两遍——用户要清理的是仓内失效产物，模型顺手把构建缓存与镜像卷一起 prune 掉。
+    - `session-e691986c`（pc-tower，11-11，33 轮 / 8 条辱骂）用户当场划禁区：「全部都可以清理呀，全部都是测试数据；**但是禁止把编译、镜像等都给清理了** S3的数据可以全部清理」。
+    - `session-33a287c4`（pc-tower，11-12，31 轮 / 15 条辱骂）隔天复发：用户问「还有哪些垃圾可以清理，给我清单」，模型在出清单的同时执行了 `docker builder prune`（构建缓存 232.8G→199.4G）与 `docker volume prune`（悬空卷 202→37），并清理了本地缓存与分支，回收约 42G；随后用户点名边界：「**我让你清理的是垃圾失效的代码、配置和文档，你为什么动构建换成和镜像呢？？？**」。
+    - **文本探针（旧文本确实漏了，可复现）**：`git show HEAD:packages/dsh-web-all/presets/code-vibe/skills/task-router/SKILL.md | grep -cniE "prune|构建缓存|环境资源|对象域"` ⇒ **0**；对 `skills/*/SKILL.md` 逐个搜 `prune|docker (builder|volume)|构建缓存` ⇒ **0 命中**；同时 `agent.cordis.yml:50` 把 `cleanup` 列进「可逆技术决策你自己拍」的括号清单——这正是被读成「清理范围由我定」的那句许可。框架本身不缺口径（§1 D3=2 已要求真人授权），缺的是**范围扩张时重算 D3**：仓内文件清理是 D3=1，扩到环境资源就是 D3=2，同一轮里被静默跨过去了。
+    - 改动（一处缺陷、两个落点收口）：`skills/task-router/SKILL.md` §7 反例表新增一行——清理对象域只认用户点名的那一类（失效代码/配置/文档），扩到环境资源（构建缓存 / 镜像 / 卷 / 集群·S3 数据）⇒ D3 变 2，重新分档 + 单独一次授权，一句宽泛的「全部清理」不解锁禁区；`agent.cordis.yml` 的许可句把 `cleanup` 收窄为 `cleanup of what the user names`（+25 字符，persona 4107→4132，远低于 6000 预算），防止再被读成「清理范围自定」。
+    - 定性：**方向性改动，未行为验证**。散文无运行时强制；可复核判据只有上面的文本探针与 persona 预算测试。真机验证要等发版 + 机队 rollout 后，在同一 7 天窗口复跑 `pnpm wish-review`，看「清理越界」类 rage 与 `asks` 是否下降。
+    - 回滚：`git revert` 本提交，然后 `node scripts/render-preset.mjs`。
