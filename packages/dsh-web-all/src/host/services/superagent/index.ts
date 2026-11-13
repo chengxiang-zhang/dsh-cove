@@ -18,7 +18,7 @@ import { renderWorkReport } from './surface/templates.ts'
  */
 
 import { registerDshNativeRoles, type DshNativeHostConfig } from './executors/engines/dsh.ts'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { hostname, homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
@@ -41,7 +41,8 @@ import { createPresence, type Presence } from './desk/presence.ts'
 import { createToolFace, hostToolOf, type AgentScopeLike, type ToolFacePort } from './desk/toolface.ts'
 import { idemKeyOf } from './desk/tools.ts'
 import { createExecutors } from './executors/attempts.ts'
-import { createClosure } from './executors/closure.ts'
+import { createClosure, expectedCommand, expectedExit, type CriterionOutcome } from './executors/closure.ts'
+import { createCriterionVerifier } from './executors/candidate-verify.ts'
 import { createEscalation, type EscalationReason } from './executors/escalate.ts'
 import type { ToolDefinitionLike } from './executors/report-tool.ts'
 import { createProfileRegistry } from './executors/profiles/index.ts'
@@ -204,6 +205,16 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
   }
 
   /** One hook for every session event, local bus or transport-delivered (T19 addendum). */
+  /** 13: the host re-runs the criterion itself; the executor's own log proves nothing. */
+  const criterion = createCriterionVerifier()
+  /** The delivery target of a commitment: the chat its desk row belongs to. */
+  const commitmentTarget = (commitmentId: string): { chatId: string } | undefined => {
+    const m = machine
+    if (!m) return undefined
+    const row = m.ledger.read.get<{ chat_id: string }>(
+      `SELECT d.chat_id AS chat_id FROM ${PHYSICAL.commitment} c JOIN ${PHYSICAL.desk} d ON d.desk_id = c.desk_id WHERE c.commitment_id = ?`, commitmentId)
+    return row === undefined ? undefined : { chatId: row.chat_id }
+  }
   const handleSessionEvent = (sessionId: string, event: unknown): void => {
       const m = machine
       if (!m) return
@@ -213,25 +224,102 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       if (e?.type !== 'turn/end') return
       const a = m.ledger.read.get<AttemptRow>(`SELECT * FROM ${PHYSICAL.attempt} WHERE session_id = ? AND state <> 'ended'`, sessionId)
       if (!a) return
-      try {
-        const reason = parseEndReason(e.data?.reason?.kind)
-        const report = m.executors.lastReport(a.attempt_id)
-        const result = m.closure.close(a.attempt_id, { reason }, report)
-        if (result.state === 'fulfilled' || result.state === 'unverified' || result.state === 'broken') {
-          // The host's report signal (10): one desk turn on the commitment says the delivery.
-          const requestId = `report:${a.attempt_id}`
-          const did = m.ledger.open(tx => tx.requestTurn({ trigger_kind: 'report', commitment_id: a.commitment_id, request_id: requestId }), { module: 'desk' })
-          if (did) void m.presence.runTurn({ deliberation_id: did, request_id: requestId, commitment_id: a.commitment_id, trigger_kind: 'report' })
-            .catch(err => log.warn(`superagent report turn: ${String(err)}`))
-        } else if (result.state === 'escalate') {
-          const why: EscalationReason = reason === 'completed' ? (report?.state === 'blocked' ? 'blocked_technical' : 'failed')
-            : reason === 'max-tokens' || reason === 'interrupted' || reason === 'error' ? reason : 'failed'
-          m.escalation.escalate(a.commitment_id, why)
+      const reason = parseEndReason(e.data?.reason?.kind)
+      const report = m.executors.lastReport(a.attempt_id)
+      const finish = (criterion?: CriterionOutcome): void => {
+        try {
+          const result = m.closure.close(a.attempt_id, { reason }, report, criterion)
+          // Every ending speaks in the executor's own words. A template or a status word
+          // tells the boss nothing about what was tried, and a delivery that waited for
+          // the model to remember `say` was simply lost.
+          const target = commitmentTarget(a.commitment_id)
+          const summary = (report?.summary ?? '').replace(/\s+/g, ' ').trim().slice(0, 240)
+          const brief = summary.split(' ').slice(0, 60).join(' ')
+          const speak = (moment: 'deliver' | 'cannot' | 'answer', text: string, key: string): void => {
+            if (target === undefined || hostSpeakToOwner === undefined) return
+            // No `event_id`: the ack already holds that reply slot, and the outlet refuses a
+            // second text reply for one event. The moment rules are satisfied by the
+            // terminal commitment and by the proposal coming from the host.
+            hostSpeakToOwner({ chat_id: target.chatId, moment, audience: 'owner', payload: 'text',
+              commitment_id: a.commitment_id, idem_key: key, text })
+          }
+          if (result.state === 'fulfilled') {
+            const note = criterion?.note ?? '宿主已核对判据'
+            speak('deliver', `${a.commitment_id} 已通过宿主验收（${note}）。执行体回执：${brief}`, `sa:deliver:${a.attempt_id}`)
+            return
+          }
+          if (result.state === 'unverified') {
+            // An `answer`/`observation` criterion has nothing the host can re-run, so the
+            // executor's own account IS the delivery (13). Refusing it here lost correct
+            // answers that the boss had already paid for; only a mechanical criterion that
+            // was actually re-run and failed is reported as "not accepted".
+            const kind = m.ledger.read.get<{ check_kind: string }>(`SELECT check_kind FROM ${PHYSICAL.commitment} WHERE commitment_id = ?`, a.commitment_id)?.check_kind
+            if (kind === 'answer' || kind === 'observation') {
+              speak('answer', `${a.commitment_id} 执行体回执（宿主无可复跑判据，按执行体原话交付）：${brief}`, `sa:answer:${a.attempt_id}`)
+              return
+            }
+            const note = criterion?.note ?? '没有可复跑的判据读数'
+            speak('cannot', `${a.commitment_id} 未通过宿主验收：${note}。执行体原话：${brief}`, `sa:cannot:${a.attempt_id}`)
+            return
+          }
+          if (result.state === 'broken') {
+            speak('cannot', `${a.commitment_id} 两次都没跑通。执行体原话：${brief}`, `sa:cannot:${a.attempt_id}`)
+            return
+          }
+          if (result.state === 'escalate') {
+            const why: EscalationReason = reason === 'completed' ? (report?.state === 'blocked' ? 'blocked_technical' : 'failed')
+              : reason === 'max-tokens' || reason === 'interrupted' || reason === 'error' ? reason : 'failed'
+            m.escalation.escalate(a.commitment_id, why, undefined, brief)
+          }
+        } catch (error) {
+          log.warn(`superagent closure ${a.attempt_id}: ${String(error)}`)
         }
-      } catch (error) {
-        log.warn(`superagent closure ${a.attempt_id}: ${String(error)}`)
       }
-  }
+      // 13 验收 / 10 验证执行隔离: a `ready` candidate fulfils only on the host's own
+      // reading of the criterion command, never on the executor's session log. Anything
+      // the host refuses to run closes as unverified with the reason recorded.
+      const commitment = m.ledger.read.get<CommitmentRow>(`SELECT * FROM ${PHYSICAL.commitment} WHERE commitment_id = ?`, a.commitment_id)
+      const wanted = report?.state === 'ready' && commitment !== undefined ? expectedCommand(commitment.done_when) : undefined
+      if (commitment === undefined || wanted === undefined) {
+        finish()
+        return
+      }
+      // 13: the criterion runs where the work is. A desk seat directory is empty by
+      // design today (no prepare checkout), so fall back to the repository this host
+      // serves; when neither exists there is nothing to check and the verdict says so
+      // instead of blaming the work.
+      const seat = a.cwd
+      const hostRoot = existsSync(`${process.cwd()}/.git`) ? process.cwd() : undefined
+      const criterionCwd = seat !== null && seat !== '' && existsSync(seat) && readdirSync(seat).length > 0 ? seat : hostRoot
+      if (commitment.check_kind === 'artifact') {
+        // An artifact criterion names a path; the host checks the path itself, in the
+        // seat directory and then in the repository root the desk writes reports to.
+        const roots = [seat, process.cwd()].filter((root): root is string => typeof root === 'string' && root !== '')
+        const found = roots.find(root => existsSync(join(root, wanted)))
+        finish(found === undefined
+          ? { verdict: 'fail', note: `artifact not found: ${wanted}`, run: { command: wanted, expectedExit: 0, actualExit: null } }
+          : { verdict: 'pass', note: `artifact present: ${join(found, wanted)}`, run: { command: wanted, expectedExit: 0, actualExit: 0 } })
+        return
+      }
+      if (commitment.check_kind !== 'command') {
+        // `answer` and `observation` have no mechanical criterion; the outlet delivers
+        // the executor's summary and refuses any completion claim until it is verified.
+        finish()
+        return
+      }
+      if (criterionCwd === undefined) {
+        finish({ verdict: 'inconclusive', note: 'no checkout to run the criterion in' })
+        return
+      }
+      const expected = expectedExit(commitment.done_when)
+      void criterion.verify(wanted, expected, criterionCwd)
+        .then(check => finish({
+          verdict: check.verdict,
+          note: check.note,
+          run: { command: wanted, expectedExit: expected, actualExit: check.run.actualExit, ...(check.run.refused === undefined ? {} : { refused: check.run.refused }) },
+        }))
+        .catch(error => finish({ verdict: 'inconclusive', note: `criterion check failed: ${String(error)}` }))
+    }
 
   function build(db: DatabaseSync): Machine {
     const ledger = createLedger(db, deps.clock)
@@ -243,7 +331,18 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
       if (row.payload !== 'text') return true
       // Recheck persisted rows too: a pre-upgrade or delayed free-form claim must
       // not bypass the current evidence boundary merely by already being queued.
-      if (row.moment === 'deliver') { const evidence = managedEvidence(row.idem_key); return evidence?.verdict === 'pass' && row.body === renderWorkReport('deliver', 'fulfilled', evidence) }
+      if (row.moment === 'deliver') {
+        const evidence = managedEvidence(row.idem_key)
+        if (evidence?.verdict === 'pass' && row.body === renderWorkReport('deliver', 'fulfilled', evidence)) return true
+        // Desk path (13): a fulfilment carrying the host's own criterion reading may
+        // deliver; without that reading nothing is delivered.
+        const work = row.commitment_id ? read.get<CommitmentRow>(`SELECT * FROM ${PHYSICAL.commitment} WHERE commitment_id = ?`, row.commitment_id) : undefined
+        if (work === undefined) return false
+        if (work.state === 'fulfilled' && work.evidence_json !== null) return true
+        // No mechanical criterion exists for `answer`/`observation`: the delivery is the
+        // summary itself, and the completion scan independently refuses "done" claims.
+        return work.check_kind === 'answer' || work.check_kind === 'observation'
+      }
       const proposal: SpeechProposal = { chat_id: row.chat_id, ...(row.commitment_id ? { commitment_id: row.commitment_id } : {}), moment: row.moment, payload: row.payload, audience: row.audience, text: row.body, idem_key: row.idem_key }
       const report = workReport(proposal)
       if (!report) return true
@@ -322,13 +421,42 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
     }
     // Provenance is host object identity, never a model-selectable idempotency prefix.
     const hostProposals = new WeakSet<object>()
+    /**
+     * 13: true when the host re-ran this commitment's own criterion and it passed. The
+     * moment rule needs this: a terminal state alone never proved a delivery, and the only
+     * other evidence it accepted was a git receipt.
+     */
+    /** 13: nothing mechanical exists for an answer/observation criterion; the account is the delivery. */
+    const accountDeliveryFor = (c: CommitmentRow | undefined): boolean =>
+      c !== undefined && (c.check_kind === 'answer' || c.check_kind === 'observation')
+      && (c.state === 'unverified' || c.state === 'fulfilled')
+    const criterionPassFor = (c: CommitmentRow | undefined): boolean => {
+      if (c === undefined || c.evidence_json === null) return false
+      try {
+        const parsed = JSON.parse(c.evidence_json) as { criterion?: { verdict?: string } }
+        return parsed.criterion?.verdict === 'pass'
+      } catch {
+        return false
+      }
+    }
     const workReport = (p: SpeechProposal) => {
+      // 09 时机与措辞: a work report speaks about work. Replacing a plain answer with a
+      // progress line hides the answer, and one commitment in a chat must not turn every
+      // later reply into it.
+      if (p.moment === 'answer' || p.moment === 'pushback' || p.moment === 'alert' || p.moment === 'ask' || p.moment === 'cannot') return undefined
       const delivery = managedEvidence(p.idem_key)
       if (delivery?.verdict === 'pass') return { state: 'fulfilled', delivery }
       const explicit = commitmentOf(p.commitment_id)
       const byChat = read.get<CommitmentRow>(`SELECT c.* FROM ${PHYSICAL.commitment} c JOIN ${PHYSICAL.desk} d ON d.desk_id = c.desk_id WHERE d.chat_id = ? ORDER BY c.created_at DESC LIMIT 1`, p.chat_id)
       const work = explicit ?? byChat
       if (!work) return undefined
+      // A fulfilment backed by the host's own criterion reading delivers the executor's
+      // own words (13); rendering a template here would throw the answer away.
+      if (p.moment === 'deliver' && work.state === 'fulfilled' && work.evidence_json !== null) return undefined
+      // `answer` and `observation` criteria have nothing mechanical to check, so their
+      // delivery is the executor's summary itself; the completion scan still refuses any
+      // "done" claim until the host has verified something.
+      if (p.moment === 'deliver' && (work.check_kind === 'answer' || work.check_kind === 'observation')) return undefined
       const question = read.get<{ ordinal: number; question: string }>(`SELECT ordinal,question FROM ${PHYSICAL.assumption} WHERE commitment_id=? AND mode='asked' AND status='open' ORDER BY ordinal LIMIT 1`, work.commitment_id)
       const progress = read.get<{ attempt_id: string; state: string; tool_calls: number }>(`SELECT attempt_id,state,tool_calls FROM ${PHYSICAL.attempt} WHERE commitment_id=? ORDER BY started_at DESC LIMIT 1`, work.commitment_id)
       return { state: work.state, commitmentId: work.commitment_id, facts: {
@@ -339,6 +467,12 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
     const outletPolicy = createOutletPolicy({
       attentionCtx,
       workReport,
+      // 13: a completion claim needs a commitment the host actually fulfilled.
+      completionAllowed: p => {
+        const explicit = commitmentOf(p.commitment_id)
+        const byChat = read.get<CommitmentRow>(`SELECT c.* FROM ${PHYSICAL.commitment} c JOIN ${PHYSICAL.desk} d ON d.desk_id = c.desk_id WHERE d.chat_id = ? ORDER BY c.created_at DESC LIMIT 1`, p.chat_id)
+        return (explicit ?? byChat)?.state === 'fulfilled'
+      },
       momentFacts: p => {
         const c = commitmentOf(p.commitment_id)
         // The formal row first; a shadow turn's disposition lives on shadow=1 (N18).
@@ -349,6 +483,8 @@ export function createSuperagent(deps: AssemblyDeps): Assembly {
           committedInThisTurn: !!c && c.created_at >= now - 120_000,
           commitmentTerminal: (!!c && c.closed_at !== null) || managedEvidence(p.idem_key)?.verdict === 'pass',
           deliveryEvidence: managedEvidence(p.idem_key),
+          criterionPass: criterionPassFor(c),
+          accountDelivery: accountDeliveryFor(c),
           dispositionAnswersInbound: intake?.disposition !== null && intake?.disposition !== undefined
             && ['answer', 'check', 'decline', 'acknowledge'].includes(intake.disposition),
           hasAskedAssumptionOrRoute: intake?.disposition === 'route' || intake?.disposition === 'ask'

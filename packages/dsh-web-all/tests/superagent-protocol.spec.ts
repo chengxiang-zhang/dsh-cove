@@ -90,7 +90,7 @@ describe('superagent protocol', () => {
       look: ['NOT_VISIBLE', 'MISSING'],
       remember: ['QUOTE_NOT_IN_TRIGGER', 'CONFLICTS', 'SUPERSEDE_FORBIDDEN'],
       propose: ['NOT_GOAL', 'PROPOSAL_OPEN'],
-      say: ['TOO_LONG', 'MOMENT_FORBIDDEN', 'REPLY_EXISTS', 'DISCLOSE_BLOCKED', 'PROMISE_BLOCKED', 'NO_LEASE'],
+      say: ['TOO_LONG', 'MOMENT_FORBIDDEN', 'REPLY_EXISTS', 'DISCLOSE_BLOCKED', 'PROMISE_BLOCKED', 'COMPLETION_UNVERIFIED', 'NO_LEASE'],
       report: ['QUESTION_REQUIRED'],
     }
     for (const [tool, codes] of Object.entries(expected)) {

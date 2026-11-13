@@ -103,8 +103,8 @@ export const DESK_TOOL_CONTRACTS: Record<DeskToolName, DeskToolContract> = {
       kind: req(oneOfEnum(COMMITMENT_KINDS, 'commitment kind')),
       what: req(str('the action, one line')),
       intent: req(str('the result wanted, not the action')),
-      check_kind: req(oneOfEnum(CHECK_KINDS, 'how completion is checked')),
-      done_when: req(str('the check; a command criterion names the command in backticks and its exit code')),
+      check_kind: req(oneOfEnum(CHECK_KINDS, 'how completion is checked: prefer command whenever one read-only command can produce the reading; observation only when no command can')),
+      done_when: req(str('the check; a command criterion names the command in backticks and its exit code. A reading a read-only command can print is a command criterion, not an observation')),
       boundary_extra: str('extra boundary beyond the defaults'),
       assumptions: {
         type: 'array', description: `open questions taken on an assumption, at most ${MAX_ASSUMPTIONS}`,
@@ -114,7 +114,7 @@ export const DESK_TOOL_CONTRACTS: Record<DeskToolName, DeskToolContract> = {
       executor: req(str('executor profile id; pick one of the candidates listed under 可派执行体 in the dossier')),
       executor_reason: req(str('why this executor')),
       eta_minutes: req({ type: 'number', description: 'minutes until done' }),
-      target: str('where the work lands: local/..., netbird/..., external/...'),
+      target: str('where the work lands: local/..., netbird/..., external/.... The executor runs IN this place, so name the project directory, not a file: local/<absolute path> makes that path its working directory'),
       budget_scale: { type: 'number', description: 'budget multiplier' },
     },
     success: {

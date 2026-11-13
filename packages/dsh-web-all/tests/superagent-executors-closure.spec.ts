@@ -251,7 +251,13 @@ describe('superagent executors closure', () => {
     expect(upgrade.action).toBe('upgrade')
     expect(attemptOf(r.t, String(upgrade.attemptId))).toMatchObject({ executor: 'durable-full-strong', n: 3 })
 
+    // R29: the top tier gets its own retry before the responsibility ends; the ladder is
+    // retry -> upgrade -> retry on the top tier -> broken, never a count of failures alone.
     r.t.ledger.open(tx => tx.updateAttempt(String(upgrade.attemptId), { state: 'ended', end_reason: 'interrupted' }))
+    const topRetry = r.escalation.escalate(c.commitment_id, 'stall')
+    expect(topRetry.action).toBe('retry')
+    expect(attemptOf(r.t, String(topRetry.attemptId))).toMatchObject({ executor: 'durable-full-strong', n: 4 })
+    r.t.ledger.open(tx => tx.updateAttempt(String(topRetry.attemptId), { state: 'ended', end_reason: 'interrupted' }))
     expect(r.escalation.escalate(c.commitment_id, 'stall')).toEqual({ action: 'broken' })
     expect(commitmentOf(r.t, c.commitment_id).state).toBe('broken')
 

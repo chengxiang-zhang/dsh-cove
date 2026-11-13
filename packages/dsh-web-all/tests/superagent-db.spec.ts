@@ -257,3 +257,33 @@ describe('superagent protocol DDL', () => {
     expect(() => insert(db, 'sa_attempt', attempt({ attempt_id: 'a2', n: 2 }))).toThrow(/UNIQUE/)
   })
 })
+
+describe('attempt ceiling migration (R29)', () => {
+  it('rebuilds a legacy three-attempt table and keeps its rows', () => {
+    const db = openTestLedgerDb()
+    insert(db, PHYSICAL.commitment, commitment())
+    insert(db, PHYSICAL.attempt, { attempt_id: 'A-1', commitment_id: 'C-1', n: 1, executor: 'durable-full', lifetime: 'durable', reason: 'first try', state: 'ended', created_at: 1 })
+
+    // A ledger written before R29 carries the ceiling inside the table definition; SQLite
+    // cannot alter a CHECK, so this is the legacy shape the migration has to meet.
+    db.exec('PRAGMA defer_foreign_keys = ON')
+    const legacy = (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(PHYSICAL.attempt) as { sql: string }).sql
+      .replace(/CREATE TABLE IF NOT EXISTS /, 'CREATE TABLE ')
+      .replace(`CREATE TABLE ${PHYSICAL.attempt} `, `CREATE TABLE ${PHYSICAL.attempt}__legacy `)
+      .replace('BETWEEN 1 AND 6', 'BETWEEN 1 AND 3')
+    db.exec(legacy)
+    db.exec(`INSERT INTO ${PHYSICAL.attempt}__legacy SELECT * FROM ${PHYSICAL.attempt}`)
+    db.exec(`DROP TABLE ${PHYSICAL.attempt}`)
+    db.exec(`ALTER TABLE ${PHYSICAL.attempt}__legacy RENAME TO ${PHYSICAL.attempt}`)
+
+    const migrated = migrate(db)
+    expect(migrated.added).toContain(`${PHYSICAL.attempt}.n-ceiling`)
+    const sql = (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(PHYSICAL.attempt) as { sql: string }).sql
+    expect(sql).toContain('BETWEEN 1 AND 6')
+    const rows = db.prepare(`SELECT attempt_id FROM ${PHYSICAL.attempt}`).all() as Array<{ attempt_id: string }>
+    expect(rows.map(r => r.attempt_id)).toEqual(['A-1'])
+    // Idempotent: a second pass finds nothing to rebuild.
+    expect(migrate(db).added).not.toContain(`${PHYSICAL.attempt}.n-ceiling`)
+    db.close()
+  })
+})

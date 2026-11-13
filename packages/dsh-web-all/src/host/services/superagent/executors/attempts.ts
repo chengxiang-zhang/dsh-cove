@@ -11,8 +11,8 @@
  * from events per the W0 spike readings (see ./events.ts).
  */
 
-import { mkdirSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, rmSync, statSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { HostClock, HostLog, SessionControllerFace } from '../host-ports.ts'
 import { createInprocTransport } from './transport/inproc.ts'
 import { ensureExecutorSession, realmOfTarget, scopePathOf, type ExecutorTransportFactory } from './transport/index.ts'
@@ -112,6 +112,29 @@ interface SessionState {
   lastText?: string
 }
 
+/**
+ * The directory a world scope path names on this filesystem, or undefined when it
+ * names none. The desk writes a target as `local/<absolute path>`, so the same value
+ * that authorizes the scope also says where the work physically lives.
+ */
+export function workspaceDirOf(scopePath: string): string | undefined {
+  const match = /^local(\/.*)$/.exec(scopePath.trim())
+  if (match === null) return undefined
+  const raw = (match[1] as string).replace(/\/+$/, '')
+  if (!raw.startsWith('/')) return undefined
+  try {
+    if (statSync(raw).isDirectory()) return raw
+  } catch {
+    return undefined
+  }
+  // A target may name one file; its directory is then the place to work in.
+  const parent = dirname(raw)
+  try {
+    return statSync(parent).isDirectory() ? parent : undefined
+  } catch {
+    return undefined
+  }
+}
 export function createExecutors(deps: ExecutorDeps): Executors {
   const { ledger, profiles, log } = deps
   const sessions = new Map<string, SessionState>()
@@ -197,13 +220,18 @@ export function createExecutors(deps: ExecutorDeps): Executors {
     write(tx => tx.patchCommitment(commitmentId, { slot: null }))
   }
 
-  /** Where an attempt lands: the working directory and, for a durable seat, the machine. */
+/** Where an attempt lands: the working directory and, for a durable seat, the machine. */
   function prepareCwd(c: CommitmentRow, a: AttemptRow, profile: Profile): { dir: string; host?: string } {
     if (profile.lifetime === 'oneshot') {
       // A one-shot seat is process-local by construction: its directory is created here.
       const dir = oneshotDir(deps.seatRoot, a.attempt_id)
       mkdirSync(dir, { recursive: true })
-      return { dir }
+      // The same rule as a durable seat: the authorized target says where the work lives,
+      // so a one-shot read still runs in the project it was asked about (C-23 counted lines
+      // of a repository it had never entered).
+      const scope = scopePathOf(c.target)
+      const workspace = scope === undefined ? undefined : workspaceDirOf(scope)
+      return { dir: workspace ?? dir }
     }
     // `04`: the target names the realm and machine; a bare commitment lands locally.
     const realm = realmOfTarget(c.target)
@@ -217,11 +245,15 @@ export function createExecutors(deps: ExecutorDeps): Executors {
     if ('denied' in placement) throw new DispatchFailure(`placement denied: ${placement.denied}`, true)
     const dir = durableDir(deps.seatRoot, c.commitment_id)
     mkdirSync(dir, { recursive: true })
+    // The seat holds reports and logs; the work itself happens in the workspace the
+    // authorized scope names. Leaving the session in an empty seat made every
+    // relative path in a brief fail (C-17: both attempts reported a missing file).
+    const workspaceDir = workspaceDirOf(placement.scopePath)
     if (placement.mandateId) {
       ledger.open(tx => deps.world.registerWorkspace(tx, { path: placement.scopePath, entity_id: placement.host ?? 'local',
         commitment_id: c.commitment_id, mandate_id: placement.mandateId as string, branch: branchOf(c.commitment_id) }), { module: 'world' })
     }
-    return { dir, ...(placement.host === undefined ? {} : { host: placement.host }) }
+    return { dir: workspaceDir ?? dir, ...(placement.host === undefined ? {} : { host: placement.host }) }
   }
 
   function cannotProposal(c: CommitmentRow, tried: string[]): void {

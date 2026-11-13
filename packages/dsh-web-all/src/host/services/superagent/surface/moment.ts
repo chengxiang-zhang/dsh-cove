@@ -25,6 +25,10 @@ export interface MomentFacts {
   commitmentTerminal: boolean
   /** Independently verified delivery supplied by the host; terminal state alone is insufficient. */
   deliveryEvidence?: import('../protocol/delivery.ts').DeliveryEvaluation
+  /** 13: the host re-ran the commitment's own criterion and it passed. */
+  criterionPass?: boolean
+  /** 13: an answer/observation criterion has nothing to re-run; the delivery is the executor's own account. */
+  accountDelivery?: boolean
   /**
    * The bath's disposition is one that answers the inbound message: `answer` or
    * `check` (work being asked about), but also `decline` (R4 identity notice) and
@@ -64,7 +68,9 @@ export function momentAllowed(moment: OutboxMoment, facts: MomentFacts): boolean
       // turn has not committed yet (`10`).
       return facts.committedInThisTurn || facts.byHost
     case 'deliver':
-      return facts.commitmentTerminal && facts.deliveryEvidence?.verdict === 'pass' && !!facts.deliveryEvidence.receipt
+      return facts.commitmentTerminal
+        && ((facts.deliveryEvidence?.verdict === 'pass' && !!facts.deliveryEvidence.receipt)
+          || facts.criterionPass === true || facts.accountDelivery === true)
     case 'answer':
       return facts.dispositionAnswersInbound
     case 'ask':

@@ -30,7 +30,12 @@ const A = PHYSICAL.attempt
 const C = PHYSICAL.commitment
 
 /** Three attempts is the ceiling (10 "尝试数 = 3"). */
-export const MAX_ATTEMPTS = 3
+/**
+ * 02:102 and R29: an attempt count alone never ends the responsibility. The hard
+ * ceiling below only bounds runaway loops; the signal that a commitment cannot be
+ * done is the same fault repeating on the same executor (a diagnosis), not a budget.
+ */
+export const MAX_ATTEMPTS = 6
 
 export type EscalationReason = 'stall' | 'loop' | 'failed' | 'max-tokens' | 'interrupted' | 'error' | 'budget' | 'blocked_technical'
 export type EscalationAction = 'retry' | 'upgrade' | 'broken' | 'ask'
@@ -58,7 +63,7 @@ export interface EscalationDeps {
 }
 
 export interface Escalation {
-  escalate(commitmentId: string, reason: EscalationReason, product?: ProductQuestion): EscalationResult
+  escalate(commitmentId: string, reason: EscalationReason, product?: ProductQuestion, detail?: string): EscalationResult
 }
 
 /** Transient faults retry in the same tier first. */
@@ -67,10 +72,13 @@ const TRANSIENT: ReadonlySet<EscalationReason> = new Set(['interrupted', 'error'
 const STRUCTURAL: ReadonlySet<EscalationReason> = new Set(['loop', 'max-tokens', 'failed'])
 
 /** Which of the three choices the reason and the attempt history point at. */
-export function nextEscalation(reason: EscalationReason, attemptsUsed: number, hasHigher: boolean): 'retry' | 'upgrade' | 'broken' {
+export function nextEscalation(reason: EscalationReason, attemptsUsed: number, hasHigher: boolean, sameTier = 0): 'retry' | 'upgrade' | 'broken' {
+  // No count of failures alone hands the work back (R29). The ceiling bounds runaway
+  // loops; the real signal is the same tier failing twice in a row — that is a
+  // diagnosis, and the answer to it is a different executor, not the boss.
   if (attemptsUsed >= MAX_ATTEMPTS) return 'broken'
   if (STRUCTURAL.has(reason)) return hasHigher ? 'upgrade' : 'broken'
-  if (TRANSIENT.has(reason)) return attemptsUsed < 2 ? 'retry' : (hasHigher ? 'upgrade' : 'broken')
+  if (TRANSIENT.has(reason)) return sameTier <= 1 ? 'retry' : (hasHigher ? 'upgrade' : 'broken')
   return 'broken'
 }
 
@@ -90,15 +98,20 @@ export function createEscalation(deps: EscalationDeps): Escalation {
     return attempts.map(a => `a${a.n} ${a.executor} ${a.end_reason ?? 'open'}${a.cancel_origin ? `/${a.cancel_origin}` : ''}`)
   }
 
-  function cannot(commitment: CommitmentRow, tried: readonly string[]): void {
+  /**
+   * The boss needs the executor's own words, not a status code: a refusal that says
+   * only "cannot be done" hides whether the path was wrong, the tool was missing or the
+   * scope was too wide. `detail` is that account, already shortened by the caller.
+   */
+  function cannot(commitment: CommitmentRow, tried: readonly string[], detail?: string): void {
+    const why = detail === undefined || detail === '' ? '' : `执行体原话：${detail}。`
     deps.speak?.({
       commitment_id: commitment.commitment_id,
       chat_id: chatOf(commitment),
       moment: 'cannot',
       audience: 'requester',
       payload: 'text',
-      text: `${commitment.commitment_id} cannot be done for now. Tried: ${tried.join('; ')}. `
-        + 'Two directions: narrow the scope to what already works, or wait for the next tier. Default: narrow the scope.',
+      text: `${commitment.commitment_id} 没能交付。${why}试过：${tried.join('；')}。下一步二选一：把范围缩到已能跑通的部分，或等更强的执行体；默认缩范围。`,
       idem_key: `cannot:${commitment.commitment_id}`,
     })
   }
@@ -110,7 +123,7 @@ export function createEscalation(deps: EscalationDeps): Escalation {
   }
 
   return {
-    escalate(commitmentId: string, reason: EscalationReason, product?: ProductQuestion): EscalationResult {
+    escalate(commitmentId: string, reason: EscalationReason, product?: ProductQuestion, detail?: string): EscalationResult {
       const commitment = ledger.read.get<CommitmentRow>(`SELECT * FROM ${C} WHERE commitment_id = ?`, commitmentId)
       if (commitment === undefined) throw new Error(`escalation: unknown commitment ${commitmentId}`)
       const attempts = attemptsOf(commitmentId)
@@ -118,7 +131,10 @@ export function createEscalation(deps: EscalationDeps): Escalation {
       const current = last?.executor ?? ''
       const higher = profiles.higher(current)
 
-      const choice = nextEscalation(reason, attempts.length, higher !== undefined)
+      // How many times this executor has already ended without finishing: two means the
+      // tier itself is the problem, so the answer is a different executor.
+      const sameTier = attempts.filter(a => a.executor === current && a.state === 'ended').length
+      const choice = nextEscalation(reason, attempts.length, higher !== undefined, sameTier)
 
       if (choice === 'broken') {
         const tried = triedSoFar(attempts)
@@ -128,7 +144,7 @@ export function createEscalation(deps: EscalationDeps): Escalation {
         })
         // 10: after broken, a genuine product question may still go to the owner.
         if (product !== undefined) deps.ask?.(commitmentId, product.question, product.fallback)
-        cannot(commitment, tried)
+        cannot(commitment, tried, detail)
         return { action: 'broken' }
       }
 

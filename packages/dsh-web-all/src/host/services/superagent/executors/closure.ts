@@ -1,6 +1,11 @@
-/** Legacy turn closure retains ready claims for canonical candidate collection.
- * Independent verification and delivery own fulfillment; a report, path, tool
- * exit or timeout can never promote this legacy observation into acceptance.
+/**
+ * Turn closure for the desk chain.
+ *
+ * `ready` is a candidate claim and closure never promotes it on its own words: the
+ * caller passes the host's own criterion reading (13 验收: a command re-run in an
+ * isolated child, not the executor's session log), and only a `pass` reading fulfils.
+ * `fail` and `inconclusive` stay `unverified` with the reason recorded, so an
+ * uncheckable criterion can never look like acceptance.
  */
 
 import type { KernelTx, Ledger } from '../kernel/ledger.ts'
@@ -21,6 +26,20 @@ export type ClosureState = CommitmentState | 'pending_close' | 'escalate'
 export interface ClosureResult {
   state: ClosureState
   evidenceOk: boolean
+}
+
+/**
+ * The host's own reading of the criterion (13 验收, 10 验证执行隔离): `pass` means the
+ * host re-ran the command `done_when` names in an isolated child and saw the expected
+ * exit. That host observation, not the executor's own log, is what may fulfil a
+ * `ready` candidate. `fail` and `inconclusive` both leave it unverified.
+ */
+export interface CriterionOutcome {
+  verdict: 'pass' | 'fail' | 'inconclusive'
+  /** One line for the journal: what the host observed, or why it could not check. */
+  note: string
+  /** Command and codes as the host saw them, kept as the delivery evidence. */
+  run?: { command: string; expectedExit: number; actualExit: number | null; refused?: string }
 }
 
 /** What the closure needs to know about one running executor; T19's `Executors` satisfies it. */
@@ -52,7 +71,7 @@ export interface ClosureDeps {
 }
 
 export interface Closure {
-  close(attemptId: string, turnEnd: { reason: EndReason }, report?: ReportInput): ClosureResult
+  close(attemptId: string, turnEnd: { reason: EndReason }, report?: ReportInput, criterion?: CriterionOutcome): ClosureResult
   /** A `ready` report arrived before its `turn/end`: record the wait, judge nothing yet. */
   noteReady(attemptId: string, report: ReportInput): ClosureResult
   /** Judges waiting `ready` reports older than `PENDING_CLOSE_MS`; returns how many. */
@@ -144,11 +163,19 @@ export function createClosure(deps: ClosureDeps): Closure {
     write(tx => tx.updateAttempt(attempt.attempt_id, { state: 'ended', end_reason: reason }))
   }
 
-  function readyOutcome(attempt: AttemptRow, commitment: CommitmentRow, report: ReportInput): Outcome {
-    // Ready is a candidate claim. P5 collects it into the canonical verification
-    // flow; legacy path/summary/tool observations cannot authorize fulfillment.
-    return outcome('unverified', 'candidate awaiting independent verification', {
-      evidence: { candidateClaim: report, attemptId: attempt.attempt_id, commitmentId: commitment.commitment_id },
+  function readyOutcome(attempt: AttemptRow, commitment: CommitmentRow, report: ReportInput, criterion?: CriterionOutcome): Outcome {
+    // Ready is a candidate claim. It fulfils only on the host's own criterion reading
+    // (13: the candidate's own green exit code proves nothing by itself); a report,
+    // path, tool exit or timeout never promotes an unchecked claim.
+    const evidence = { candidateClaim: report, attemptId: attempt.attempt_id, commitmentId: commitment.commitment_id }
+    if (criterion?.verdict === 'pass') {
+      return outcome('fulfilled', criterion.note, { evidence: { ...evidence, criterion: { verdict: 'pass', note: criterion.note, ...(criterion.run ? { run: criterion.run } : {}) } } })
+    }
+    if (criterion?.verdict === 'fail') {
+      return outcome('unverified', `criterion failed: ${criterion.note}`, { evidence: { ...evidence, criterion: { verdict: 'fail', note: criterion.note, ...(criterion.run ? { run: criterion.run } : {}) } } })
+    }
+    return outcome('unverified', criterion === undefined ? 'candidate awaiting independent verification' : `criterion not checkable: ${criterion.note}`, {
+      evidence: { ...evidence, ...(criterion === undefined ? {} : { criterion: { verdict: 'inconclusive', note: criterion.note, ...(criterion.run ? { run: criterion.run } : {}) } }) },
     })
   }
 
@@ -163,7 +190,7 @@ export function createClosure(deps: ClosureDeps): Closure {
   }
 
   /** The table of `10 "结案"`, one branch per row. */
-  function judge(attempt: AttemptRow, commitment: CommitmentRow, reason: EndReason, report: ReportInput | undefined): Outcome {
+  function judge(attempt: AttemptRow, commitment: CommitmentRow, reason: EndReason, report: ReportInput | undefined, criterion?: CriterionOutcome): Outcome {
     if (reason === 'completed' || reason === 'blocked') {
       if (reason === 'blocked' || report?.state === 'blocked') {
         if (report === undefined) return outcome('escalate', 'ended blocked without a report')
@@ -172,7 +199,7 @@ export function createClosure(deps: ClosureDeps): Closure {
       if (report?.state === 'failed' || report?.state === 'dropped') {
         return outcome('escalate', `ended ${reason} with a ${report.state} report`)
       }
-      if (report?.state === 'ready') return readyOutcome(attempt, commitment, report)
+      if (report?.state === 'ready') return readyOutcome(attempt, commitment, report, criterion)
       return outcome('unverified', report === undefined ? 'ended without a terminal report' : `ended with a ${report.state} report`)
     }
     if (reason === 'aborted') {
@@ -220,7 +247,7 @@ export function createClosure(deps: ClosureDeps): Closure {
   }
 
   return {
-    close(attemptId: string, turnEnd: { reason: EndReason }, report?: ReportInput): ClosureResult {
+    close(attemptId: string, turnEnd: { reason: EndReason }, report?: ReportInput, criterion?: CriterionOutcome): ClosureResult {
       const attempt = attemptById(attemptId)
       if (attempt === undefined) throw new Error(`closure: unknown attempt ${attemptId}`)
       const commitment = commitmentById(attempt.commitment_id)
@@ -234,7 +261,7 @@ export function createClosure(deps: ClosureDeps): Closure {
       }
 
       const resolved = report ?? facts.lastReport(attemptId)
-      return commitOutcome(attempt, commitment, turnEnd.reason, judge(attempt, commitment, turnEnd.reason, resolved))
+      return commitOutcome(attempt, commitment, turnEnd.reason, judge(attempt, commitment, turnEnd.reason, resolved, criterion))
     },
 
     noteReady(attemptId: string, report: ReportInput): ClosureResult {

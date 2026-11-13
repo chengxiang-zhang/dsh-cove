@@ -260,11 +260,20 @@ describe('timing and wording', () => {
       expect(first.text.startsWith(identityPrefix('张老板'))).toBe(true)
       expect(first.words).toBe(countWords(first.text))
     }
-    // 99 words plus the five-word identity sentence is 104: refused, never cut.
+    // 09:36 and R5: an answer is not a notification, so 99 words plus the five-word
+    // identity sentence (104) still goes out whole. The ceiling is on the answer budget.
     const body = Array.from({ length: 99 }, (_, index) => `w${String(index)}`).join(' ')
-    const over = policy({ identityNeeded: () => true }).check(proposal({ text: body }), NOW)
+    const long = policy({ identityNeeded: () => true }).check(proposal({ text: body }), NOW)
+    expect(long.ok).toBe(true)
+    // Past the answer budget it is refused, never cut.
+    const huge = Array.from({ length: 420 }, (_, index) => `w${String(index)}`).join(' ')
+    const over = policy({ identityNeeded: () => true }).check(proposal({ text: huge }), NOW)
     expect(over.ok).toBe(false)
     if (!over.ok) expect(over.code).toBe('TOO_LONG')
+    // A notification keeps the 100-word ceiling, so 120 words of ack is refused.
+    const many = Array.from({ length: 120 }, (_, index) => `w${String(index)}`).join(' ')
+    const ack = policy({ identityNeeded: () => false }).check(proposal({ text: many, moment: 'ack' }), NOW)
+    expect(ack.ok).toBe(false)
   })
 
   it('15. judge(answer) allows moment answer', () => {

@@ -29,8 +29,9 @@ import { tier } from './attention.ts'
 import type { MomentFacts } from '../surface/moment.ts'
 import { momentAllowed } from '../surface/moment.ts'
 import { promiseHits } from '../surface/promise-scan.ts'
+import { completionHits } from '../surface/completion-scan.ts'
 import { renderWorkReport } from '../surface/templates.ts'
-import { MAX_WORDS, countWords } from '../surface/words.ts'
+import { countWords, wordLimitFor } from '../surface/words.ts'
 
 /** The facts and lookups the policy needs, injected by the composition root. */
 export interface OutletPolicyDeps {
@@ -44,6 +45,12 @@ export interface OutletPolicyDeps {
   disclosures(text: string, chatId: string): string[]
   /** Whether this conversation is authorized to hear a promise (R15). */
   mayPromise(chatId: string): boolean
+  /**
+   * Whether the work this sentence is about has been verified (13). A completion claim
+   * is only allowed here when the host has actually fulfilled the commitment; without
+   * this the model could report success the host never checked.
+   */
+  completionAllowed?(proposal: SpeechProposal): boolean
   /** Whether this conversation still owes the identity sentence (R16). */
   identityNeeded(chatId: string): boolean
   /** The owner's form of address, as this conversation knows it. */
@@ -73,13 +80,21 @@ export function createOutletPolicy(deps: OutletPolicyDeps): OutletPolicy {
       if (!momentAllowed(proposal.moment, deps.momentFacts(input))) {
         return { ok: false, code: 'MOMENT_FORBIDDEN', message: `moment ${proposal.moment} does not match this turn` }
       }
+      // 09:36: the ceiling is a notification budget, not a cap on what an answer may say.
+      const limit = wordLimitFor(proposal.moment)
       const words = countWords(proposal.text)
-      if (words > MAX_WORDS) {
-        return { ok: false, code: 'TOO_LONG', message: `${String(words)} words, over ${String(MAX_WORDS)}` }
+      if (words > limit) {
+        return { ok: false, code: 'TOO_LONG', message: `${String(words)} words, over ${String(limit)}` }
       }
       const promises = promiseHits(proposal.text)
       if (promises.length > 0 && !deps.mayPromise(proposal.chat_id)) {
         return { ok: false, code: 'PROMISE_BLOCKED', message: `promise words: ${promises.join(', ')}` }
+      }
+      // 13: a completion claim needs a verified commitment behind it. This replaces the
+      // old habit of rendering every reply as a progress template, which hid real answers.
+      const claims = input.payload === 'text' ? completionHits(proposal.text) : []
+      if (claims.length > 0 && deps.completionAllowed?.(proposal) !== true) {
+        return { ok: false, code: 'COMPLETION_UNVERIFIED', message: `completion claim without a verified commitment: ${claims.join(', ')}` }
       }
       const leaks = deps.disclosures(proposal.text, proposal.chat_id)
       if (leaks.length > 0) {
@@ -92,11 +107,11 @@ export function createOutletPolicy(deps: OutletPolicyDeps): OutletPolicy {
         // here is deliberate: shortening a delivery would drop the evidence.
         text = `${identityPrefix(deps.ownerLabel(proposal.chat_id))}${text}`
         total = countWords(text)
-        if (total > MAX_WORDS) {
+        if (total > limit) {
           return {
             ok: false,
             code: 'TOO_LONG',
-            message: `identity sentence pushed the message to ${String(total)} words, over ${String(MAX_WORDS)}`,
+            message: `identity sentence pushed the message to ${String(total)} words, over ${String(limit)}`,
           }
         }
       }

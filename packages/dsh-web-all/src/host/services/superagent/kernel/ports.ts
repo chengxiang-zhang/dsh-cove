@@ -52,7 +52,7 @@ export interface SpeechProposal {
 
 export type OutletVerdict =
   | { ok: true; tier: Tier; text: string; words: number }
-  | { ok: false; code: 'TOO_LONG' | 'MOMENT_FORBIDDEN' | 'DISCLOSE_BLOCKED' | 'PROMISE_BLOCKED'; message: string }
+  | { ok: false; code: 'TOO_LONG' | 'MOMENT_FORBIDDEN' | 'DISCLOSE_BLOCKED' | 'PROMISE_BLOCKED' | 'COMPLETION_UNVERIFIED'; message: string }
 
 export interface OutletPolicy { check(proposal: SpeechProposal, now: number): OutletVerdict }
 

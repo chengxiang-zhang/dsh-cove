@@ -15,7 +15,7 @@ import { holds, type Lease } from './lease.ts'
 import type { OutletPolicy, SenderPort, SpeechProposal } from './ports.ts'
 
 export type OutletMode = 'responder' | 'shadow' | 'superagent'
-export type SubmitCode = 'NO_LEASE' | 'REPLY_EXISTS' | 'SHADOW_NO_WRITE' | 'TOO_LONG' | 'MOMENT_FORBIDDEN' | 'DISCLOSE_BLOCKED' | 'PROMISE_BLOCKED'
+export type SubmitCode = 'NO_LEASE' | 'REPLY_EXISTS' | 'SHADOW_NO_WRITE' | 'TOO_LONG' | 'MOMENT_FORBIDDEN' | 'DISCLOSE_BLOCKED' | 'PROMISE_BLOCKED' | 'COMPLETION_UNVERIFIED'
 export type SubmitResult = { ok: true; outboxId: string; tier: Tier; words: number } | { ok: false; code: SubmitCode; message: string }
 export interface FlushResult { sent: number; failed: number; suppressed: number; retried: number }
 
@@ -50,7 +50,9 @@ export function createOutlet(ledger: Ledger, lease: Lease, holder: string, reval
     const verdict = policy.check(p, now)
     if (!verdict.ok) return fail(verdict.code, verdict.message)
     const words = p.payload === 'react' ? 0 : verdict.words
-    if (words > MAX_WORDS) return fail('TOO_LONG', `${words} words > ${MAX_WORDS}`)
+    const limit = p.moment === 'answer' || p.moment === 'deliver' || p.moment === 'cannot' || p.moment === 'pushback'
+      ? MAX_WORDS * 4 : MAX_WORDS
+    if (words > limit) return fail('TOO_LONG', `${words} words > ${limit}`)
     if (verdict.tier === 'reply' && p.payload === 'text' && p.event_id
       && ledger.read.get(`SELECT 1 FROM ${O} WHERE event_id = ? AND tier = 'reply' AND payload = 'text'`, p.event_id)) {
       return fail('REPLY_EXISTS', `event ${p.event_id} already has a reply`)

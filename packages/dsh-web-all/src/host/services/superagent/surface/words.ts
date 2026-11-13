@@ -15,6 +15,23 @@
 /** The word ceiling in `02`: a longer message is a template bug, not a long one. */
 export const MAX_WORDS = 100
 
+/**
+ * 09:36 and R5: an answer is not a notification. The 100-word ceiling belongs to
+ * interruption text (ack, alert, ask); an answer, a delivery or a refusal carries
+ * evidence and must not be cut to fit a notification budget.
+ */
+export function wordLimitFor(moment: string): number {
+  switch (moment) {
+    case 'answer':
+    case 'deliver':
+    case 'cannot':
+    case 'pushback':
+      return MAX_WORDS * 4
+    default:
+      return MAX_WORDS
+  }
+}
+
 const SEGMENTER = new Intl.Segmenter('zh', { granularity: 'word' })
 
 const DIGITS = /^\d+$/u

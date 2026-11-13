@@ -187,11 +187,16 @@ describe('superagent assembly', () => {
     const statusEvent = r.deliver('这项工作进展怎样')
     const statusSession = await runDesk(r)
     expect(await call(r, statusSession, 'judge', { event_id: statusEvent, disposition: 'answer', class: 'lookup', confidence: 0.9, reason: 'status requested' })).toEqual({ ok: true })
-    expect(await call(r, statusSession, 'say', { event_id: statusEvent, moment: 'answer', text: 'Everything completed; all tests passed.' })).toMatchObject({ ok: true })
+    // 13: a completion claim on an unfulfilled commitment is refused, not silently
+    // rewritten: the old template substituted a progress line for every reply, which hid
+    // real answers. The refusal keeps the claim out while a plain answer goes through.
+    expect(await call(r, statusSession, 'say', { event_id: statusEvent, moment: 'answer', text: 'Everything completed; all tests passed.' }))
+      .toMatchObject({ ok: false, code: 'COMPLETION_UNVERIFIED' })
+    expect(await call(r, statusSession, 'say', { event_id: statusEvent, moment: 'answer', text: 'X 的结论：42，出处见报告。' })).toMatchObject({ ok: true })
     await endTurn(r, statusSession)
     r.clock.advance(1000); await settle()
-    expect(r.sent.at(-1)?.text).not.toContain('Everything completed')
-    expect(r.sent.at(-1)?.text).toContain('尚无完整验收')
+    expect(r.sent.at(-1)?.text).toContain('42')
+    expect(r.sent.some(s => s.text.includes('Everything completed'))).toBe(false)
   })
 
   it('managed admission owns the existing Feishu message exactly once without a legacy desk execution', async () => {

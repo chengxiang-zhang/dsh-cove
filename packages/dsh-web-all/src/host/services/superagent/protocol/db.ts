@@ -234,7 +234,9 @@ const TABLE_SPECS: readonly TableSpec[] = [
   {
     logical: 'attempt', owner: 'executors', mutable: true, primaryKey: ['attempt_id'],
     columns: [
-      ['attempt_id', TEXT_NN], ['commitment_id', TEXT_NN], ['n', 'INTEGER NOT NULL CHECK ("n" BETWEEN 1 AND 3)'],
+      // 02:102 and R29: the ledger cannot encode a three-strike rule. The number is
+      // bounded only by the runaway ceiling the escalation policy enforces.
+      ['attempt_id', TEXT_NN], ['commitment_id', TEXT_NN], ['n', 'INTEGER NOT NULL CHECK ("n" BETWEEN 1 AND 6)'],
       ['executor', TEXT_NN], ['provider', TEXT], ['model', TEXT], ['effort', TEXT],
       ['reason', `TEXT NOT NULL CHECK (length(trim("reason")) > 0)`], ['lifetime', enumNN('lifetime', LIFETIMES)],
       ['session_id', TEXT], ['cwd', TEXT], ['host', TEXT], ['branch', TEXT], ['state', enumNN('state', ATTEMPT_STATES)],
@@ -511,6 +513,29 @@ function migrateBody(db: Db): string[] {
     for (const [name, body] of Object.entries(spec.triggers ?? {})) {
       db.exec(`CREATE TRIGGER IF NOT EXISTS ${name} ${body}`)
     }
+  }
+  // R29: a ledger written before this contract carries the three-attempt ceiling inside
+  // the table definition. SQLite cannot alter a CHECK in place, so the table is rebuilt
+  // once, keeping every row and recreating its indexes and triggers.
+  const attemptTable = T.attempt
+  const attemptSpec = TABLE_SPECS.find(spec => T[spec.logical] === attemptTable)
+  const attemptSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(attemptTable) as { sql?: string } | undefined
+  if (attemptSpec !== undefined && attemptSql?.sql !== undefined && /BETWEEN 1 AND 3/i.test(attemptSql.sql)) {
+    const columns = columnNames(db, attemptTable)
+    const list = [...columns].map(column => q(column)).join(', ')
+    db.exec('PRAGMA defer_foreign_keys = ON')
+    db.exec(createTableSql(attemptSpec).replace(`IF NOT EXISTS ${q(attemptTable)}`, `${q(`${attemptTable}__rebuild`)}`)
+      .replace(`IF NOT EXISTS ${attemptTable}`, `${attemptTable}__rebuild`))
+    db.exec(`INSERT INTO ${q(`${attemptTable}__rebuild`)} (${list}) SELECT ${list} FROM ${q(attemptTable)}`)
+    db.exec(`DROP TABLE ${q(attemptTable)}`)
+    db.exec(`ALTER TABLE ${q(`${attemptTable}__rebuild`)} RENAME TO ${q(attemptTable)}`)
+    for (const [name, body] of Object.entries(attemptSpec.unique ?? {})) {
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ${name} ON ${attemptTable}${body}`)
+    }
+    for (const [name, body] of Object.entries(attemptSpec.triggers ?? {})) {
+      db.exec(`CREATE TRIGGER IF NOT EXISTS ${name} ${body}`)
+    }
+    added.push(`${attemptTable}.n-ceiling`)
   }
   // inbox_events belongs to the channel; only the owner column and its CAS trigger are ours.
   if (!columnNames(db, T.inbox_event).has('owner')) {
